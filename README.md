@@ -103,15 +103,24 @@ python -m pretix migrate
 python -m pretix rebuild
 ```
 
-If you run pretix in Docker, build an image with the plugin in it:
+If you run pretix in Docker or Kubernetes, [`deploy/Dockerfile`](deploy/Dockerfile)
+bakes the plugin into the official image:
 
-```dockerfile
-FROM pretix/standalone:stable
-USER root
-RUN pip3 install pretix-openpos
-USER pretixuser
-RUN cd /pretix/src && python3 -m pretix rebuild
+```bash
+cd frontend && npm run build && cd ..
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.1.0 .
 ```
+
+Two things that bite:
+
+- **Build the frontend first.** The PWA bundle is generated, not committed. An
+  image built without it starts fine and then 500s on the till's own JavaScript.
+- **`--platform linux/amd64` on an Apple Silicon Mac.** An arm64 image builds,
+  pushes and passes every manifest check, then gets refused by the kubelet at
+  pull time on an amd64 node.
+
+Pin the base image to the same immutable patch tag your cluster already runs
+rather than to a rolling minor.
 
 ## Setting it up
 

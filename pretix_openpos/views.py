@@ -44,7 +44,10 @@ class PricesView(EventPermissionRequiredMixin, TemplateView):
     """
 
     template_name = "pretix_openpos/prices.html"
-    permission = "can_change_items"
+    # Namespaced permission names, not the legacy can_* attributes: an unknown
+    # string is simply never in the permission set, so it locks out every team
+    # that is not all-powerful while looking like it works to an admin.
+    permission = "event.items:write"
 
     def _rows(self):
         """Every sellable line of the event, with its current override."""
@@ -155,7 +158,7 @@ class SalesView(EventPermissionRequiredMixin, ListView):
     """Journal of till sales, with the takings broken down per device."""
 
     template_name = "pretix_openpos/sales.html"
-    permission = "can_view_orders"
+    permission = "event.orders:read"
     context_object_name = "sales"
     paginate_by = 100
 
