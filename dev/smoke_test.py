@@ -9,14 +9,18 @@ Pairs a device, reads the catalogue, sells something for cash, replays the exact
 same request to prove idempotency, and prints the takings. Standard library only.
 """
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
 import uuid
 
-BASE = "http://localhost:8000/api/v1"
-ORG = "demo"
-EVENT = "festival"
+# Override to point at another instance, e.g. the production image running on
+# PostgreSQL rather than the SQLite dev stack:
+#   OPENPOS_BASE=http://localhost:8001 python3 dev/smoke_test.py <token>
+BASE = os.environ.get("OPENPOS_BASE", "http://localhost:8000").rstrip("/") + "/api/v1"
+ORG = os.environ.get("OPENPOS_ORG", "demo")
+EVENT = os.environ.get("OPENPOS_EVENT", "festival")
 
 failures = []
 
