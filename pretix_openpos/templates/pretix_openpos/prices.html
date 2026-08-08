@@ -1,0 +1,50 @@
+{% extends "pretixcontrol/event/base.html" %}
+{% load i18n %}
+{% load money %}
+{% block title %}{% trans "On-site prices" %}{% endblock %}
+{% block content %}
+    <h1>{% trans "On-site prices" %}</h1>
+
+    <p>
+        {% blocktrans trimmed %}
+            pretix has no notion of a price per sales channel, so the tariff charged at the till
+            is stored here. Leave a field empty to charge the same price as the online shop.
+        {% endblocktrans %}
+    </p>
+
+    <form action="" method="post">
+        {% csrf_token %}
+        <div class="table-responsive">
+            <table class="table table-condensed table-hover">
+                <thead>
+                <tr>
+                    <th>{% trans "Product" %}</th>
+                    <th class="text-right">{% trans "Online price" %}</th>
+                    <th class="text-right">{% trans "On-site price" %}</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for row in rows %}
+                    <tr>
+                        <td>{{ row.label }}</td>
+                        <td class="text-right text-muted">{{ row.online_price|money:currency }}</td>
+                        <td class="text-right">
+                            <input type="text" inputmode="decimal" class="form-control text-right"
+                                   name="price_{{ row.key }}"
+                                   value="{% if row.pos_price != None %}{{ row.pos_price }}{% endif %}"
+                                   placeholder="{{ row.online_price }}">
+                        </td>
+                    </tr>
+                {% empty %}
+                    <tr>
+                        <td colspan="3">{% trans "This event has no products yet." %}</td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <div class="form-group submit-group">
+            <button type="submit" class="btn btn-primary btn-save">{% trans "Save" %}</button>
+        </div>
+    </form>
+{% endblock %}

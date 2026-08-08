@@ -1,0 +1,54 @@
+import { useEffect } from "react";
+
+import { t } from "../i18n";
+import { formatMoney, toCents } from "../money";
+import type { SaleResult } from "../types";
+
+interface Props {
+  sale: SaleResult;
+  currency: string;
+  onDismiss: () => void;
+}
+
+export default function DoneScreen({ sale, currency, onDismiss }: Props) {
+  const changeCents = sale.cash_change === null ? 0 : toCents(sale.cash_change);
+  const admitted = (sale.checked_in ?? 0) > 0;
+  const checkinFailed = sale.checkin_errors.length > 0;
+
+  // Hold the screen whenever the operator still has something to do — handing
+  // back change, or dealing with a check-in that did not go through. Otherwise
+  // get out of the way so the queue keeps moving.
+  const needsAttention = changeCents > 0 || checkinFailed;
+
+  useEffect(() => {
+    if (needsAttention) return;
+    const timer = setTimeout(onDismiss, 2500);
+    return () => clearTimeout(timer);
+  }, [needsAttention, onDismiss]);
+
+  const tone = checkinFailed ? " warn" : admitted ? "" : " no-checkin";
+
+  return (
+    <div className={`done${tone}`} onClick={needsAttention ? undefined : onDismiss}>
+      <div className="headline">
+        {checkinFailed ? t("done.checkinFailed") : admitted ? t("done.admitted") : t("done.sold")}
+      </div>
+
+      {changeCents > 0 && (
+        <div className="change-box">
+          <div>{t("done.change")}</div>
+          <div className="value">{formatMoney(changeCents, currency)}</div>
+        </div>
+      )}
+
+      <div className="meta">
+        {t("done.order")} {sale.order.code} · #{sale.journal_seq} ·{" "}
+        {formatMoney(toCents(sale.order.total), currency)}
+      </div>
+
+      <button className="btn" onClick={onDismiss}>
+        {t("done.next")}
+      </button>
+    </div>
+  );
+}

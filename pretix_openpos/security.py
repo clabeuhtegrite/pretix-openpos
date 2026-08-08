@@ -1,0 +1,36 @@
+from django.utils.translation import gettext_lazy as _
+from pretix.api.auth.devicesecurity import AllowListSecurityProfile
+
+
+class OpenPosSecurityProfile(AllowListSecurityProfile):
+    """
+    Restricts a paired till to exactly the endpoints the PWA needs.
+
+    A device token is stored in the browser of a tablet that lives on a counter,
+    so it should be assumed to leak eventually. Devices already cannot touch
+    events, products or vouchers, but the default profile still grants blanket
+    read/write on every order of every event the device can see. This profile
+    narrows that down to the POS endpoints plus the device lifecycle calls the
+    app needs to pair, refresh and revoke itself.
+    """
+
+    identifier = "openpos"
+    verbose_name = _("Open POS")
+
+    allowlist = (
+        # Device lifecycle, mirroring what pretixSCAN is allowed to do.
+        ("GET", "api-v1:version"),
+        ("GET", "api-v1:device.info"),
+        ("POST", "api-v1:device.update"),
+        ("POST", "api-v1:device.roll"),
+        ("POST", "api-v1:device.revoke"),
+        ("GET", "api-v1:device.eventselection"),
+        # Event context, needed to display the event name and currency.
+        ("GET", "api-v1:event-list"),
+        ("GET", "api-v1:event-detail"),
+        # The POS endpoints themselves.
+        ("GET", "api-v1:openpos-config"),
+        ("GET", "api-v1:openpos-catalog"),
+        ("POST", "api-v1:openpos-checkout"),
+        ("GET", "api-v1:openpos-summary"),
+    )

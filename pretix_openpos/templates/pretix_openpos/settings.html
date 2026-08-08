@@ -1,0 +1,35 @@
+{% extends "pretixcontrol/event/settings_base.html" %}
+{% load i18n %}
+{% load bootstrap3 %}
+{% block title %}{% trans "Open POS" %}{% endblock %}
+{% block inside %}
+    <h1>{% trans "Open POS" %}</h1>
+
+    <div class="alert alert-info">
+        <p>
+            {% blocktrans trimmed %}
+                Products are not sold at the till until you enable them for the
+                <strong>Open POS</strong> sales channel on the product itself. This keeps the
+                on-site catalogue separate from your online shop.
+            {% endblocktrans %}
+        </p>
+        <p>
+            {% blocktrans trimmed %}
+                Each till is paired as a pretix <strong>device</strong>, under the organizer settings.
+                Give the device access to this event, choose the <strong>Open POS</strong> security
+                profile, and scan the pairing QR code from the app.
+            {% endblocktrans %}
+        </p>
+    </div>
+
+    <form action="" method="post" class="form-horizontal">
+        {% csrf_token %}
+        {% bootstrap_form_errors form %}
+        {% bootstrap_field form.openpos_checkin_list layout="horizontal" %}
+        <div class="form-group submit-group">
+            <button type="submit" class="btn btn-primary btn-save">
+                {% trans "Save" %}
+            </button>
+        </div>
+    </form>
+{% endblock %}

@@ -1,0 +1,640 @@
+/*
+ * Styling for a till, not a website.
+ *
+ * Assumptions baked in: a tablet held in landscape, used at arm's length by
+ * someone who is being talked at while they tap. So: dark surfaces that do not
+ * glare in a dim venue, targets no smaller than 56px, prices set large enough to
+ * read without leaning in, and absolutely no hover-only affordances.
+ */
+
+:root {
+  --bg: #12161f;
+  --surface: #1b2130;
+  --surface-2: #232b3d;
+  --border: #2f3849;
+  --text: #eef2f8;
+  --text-dim: #9aa7bd;
+  --accent: #3b82f6;
+  --accent-strong: #2563eb;
+  --success: #22c55e;
+  --success-strong: #16a34a;
+  --danger: #ef4444;
+  --warning: #f59e0b;
+  --radius: 12px;
+
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-size: 16px;
+  /* A cashier drags across a product grid all night; text selection and the
+     iOS rubber-band scroll both just get in the way. */
+  -webkit-user-select: none;
+  user-select: none;
+  overscroll-behavior: none;
+}
+
+input,
+textarea {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  border: none;
+  background: none;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+/* ---------- layout ---------- */
+
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.topbar h1 {
+  font-size: 17px;
+  font-weight: 600;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.topbar .spacer {
+  flex: 1;
+}
+
+.badge {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: var(--warning);
+  color: #1a1a1a;
+}
+
+.badge.muted {
+  background: var(--surface-2);
+  color: var(--text-dim);
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.icon-button {
+  min-width: 44px;
+  min-height: 44px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  font-size: 18px;
+}
+
+.workspace {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.catalog {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.tabs {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px 0;
+  overflow-x: auto;
+  flex: 0 0 auto;
+}
+
+.tab {
+  padding: 12px 18px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text-dim);
+  font-weight: 600;
+  white-space: nowrap;
+  min-height: 48px;
+}
+
+.tab[aria-selected="true"] {
+  background: var(--accent);
+  color: #fff;
+}
+
+.grid {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 12px;
+  padding: 16px;
+  align-content: start;
+}
+
+.product {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 104px;
+  padding: 14px;
+  border-radius: var(--radius);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  text-align: left;
+  transition: transform 0.06s ease;
+}
+
+.product:active {
+  transform: scale(0.97);
+  background: var(--surface-2);
+}
+
+.product:disabled {
+  opacity: 0.4;
+}
+
+.product .name {
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+.product .price {
+  font-size: 20px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.product .stock {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.product .stock.low {
+  color: var(--warning);
+}
+
+.section-title {
+  grid-column: 1 / -1;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  margin: 4px 0 0;
+}
+
+/* ---------- cart ---------- */
+
+.cart {
+  flex: 0 0 340px;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  min-height: 0;
+}
+
+.cart-header {
+  display: flex;
+  align-items: center;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+
+.cart-lines {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  padding: 8px;
+}
+
+.cart-empty {
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--text-dim);
+}
+
+.line {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px;
+  border-radius: 10px;
+}
+
+.line + .line {
+  margin-top: 4px;
+}
+
+.line .label {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.line .label small {
+  display: block;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.line .amount {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  min-width: 72px;
+  text-align: right;
+}
+
+.stepper {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.stepper button {
+  width: 40px;
+  height: 40px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.stepper .count {
+  min-width: 32px;
+  text-align: center;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.cart-footer {
+  border-top: 1px solid var(--border);
+  padding: 14px 16px calc(14px + env(safe-area-inset-bottom));
+}
+
+.total-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-bottom: 12px;
+}
+
+.total-row .amount {
+  font-size: 30px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- buttons ---------- */
+
+.btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 60px;
+  padding: 0 20px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.btn:active {
+  filter: brightness(0.9);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+}
+
+.btn.primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.btn.success {
+  background: var(--success);
+  color: #06240f;
+}
+
+.btn.ghost {
+  background: transparent;
+  border: 1px solid var(--border);
+  min-height: 48px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-dim);
+}
+
+.btn.danger {
+  background: transparent;
+  border: 1px solid var(--danger);
+  color: var(--danger);
+}
+
+/* ---------- overlays ---------- */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 11, 17, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 20;
+}
+
+.panel {
+  width: min(560px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 24px;
+}
+
+.panel h2 {
+  margin: 0 0 16px;
+  font-size: 22px;
+}
+
+.pay-toggle {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.pay-toggle .btn {
+  flex: 1;
+}
+
+.pay-toggle .btn[aria-pressed="true"] {
+  background: var(--accent);
+  color: #fff;
+}
+
+.amount-display {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 12px 0;
+  font-size: 18px;
+}
+
+.amount-display .value {
+  font-size: 28px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.amount-display.change .value {
+  color: var(--success);
+}
+
+.amount-display.short .value {
+  color: var(--danger);
+}
+
+.keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.keypad button {
+  min-height: 64px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: 24px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.quick-tender {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(88px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.quick-tender button {
+  min-height: 52px;
+  border-radius: 10px;
+  background: var(--surface-2);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- done screen ---------- */
+
+.done {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  padding: 32px;
+  text-align: center;
+  background: var(--success-strong);
+  color: #fff;
+  z-index: 30;
+}
+
+.done.no-checkin {
+  background: var(--accent-strong);
+}
+
+.done.warn {
+  background: var(--warning);
+  color: #241a00;
+}
+
+.done .headline {
+  font-size: clamp(32px, 7vw, 64px);
+  font-weight: 900;
+  line-height: 1.05;
+}
+
+.done .change-box {
+  background: rgba(0, 0, 0, 0.22);
+  border-radius: 16px;
+  padding: 16px 28px;
+}
+
+.done .change-box .value {
+  font-size: clamp(30px, 6vw, 52px);
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+}
+
+.done .meta {
+  opacity: 0.85;
+  font-variant-numeric: tabular-nums;
+}
+
+.done .btn {
+  max-width: 420px;
+  background: rgba(255, 255, 255, 0.16);
+  color: inherit;
+}
+
+/* ---------- forms & misc ---------- */
+
+.field {
+  margin-bottom: 16px;
+}
+
+.field label {
+  display: block;
+  margin-bottom: 6px;
+  font-weight: 600;
+}
+
+.field .help {
+  margin-top: 6px;
+  color: var(--text-dim);
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.field input {
+  width: 100%;
+  min-height: 56px;
+  padding: 0 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 17px;
+}
+
+.field input:focus {
+  outline: 2px solid var(--accent);
+  outline-offset: -1px;
+}
+
+/* Used as a full-page root (pairing, fatal error), so it has to establish its
+   own height rather than rely on a flex parent that is not there. */
+.centered {
+  min-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.error-banner {
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid var(--danger);
+  color: #fecaca;
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin-bottom: 16px;
+  line-height: 1.4;
+}
+
+.event-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.event-list button {
+  text-align: left;
+  padding: 16px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  min-height: 64px;
+}
+
+.event-list .slug {
+  display: block;
+  color: var(--text-dim);
+  font-size: 14px;
+}
+
+table.takings {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+table.takings th,
+table.takings td {
+  padding: 10px 8px;
+  text-align: right;
+  border-bottom: 1px solid var(--border);
+}
+
+table.takings th:first-child,
+table.takings td:first-child {
+  text-align: left;
+}
+
+table.takings thead th {
+  color: var(--text-dim);
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Portrait phones: the basket moves below the grid rather than squeezing it. */
+@media (max-width: 720px) {
+  .workspace {
+    flex-direction: column;
+  }
+
+  .cart {
+    flex: 0 0 auto;
+    max-height: 45%;
+    border-left: none;
+    border-top: 1px solid var(--border);
+  }
+}

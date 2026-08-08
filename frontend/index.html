@@ -1,0 +1,23 @@
+<!doctype html>
+<!--
+  Used by `vite dev` only. The production shell is rendered by Django from
+  pretix_openpos/templates/pretix_openpos/pwa.html; keep the two in sync when
+  changing meta tags.
+-->
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover"
+    />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="theme-color" content="#12161f" />
+    <title>Open POS</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

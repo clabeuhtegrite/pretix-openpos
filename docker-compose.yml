@@ -1,0 +1,27 @@
+# Local development stack for pretix-openpos.
+#
+#   docker compose up --build      -> pretix on http://localhost:8000
+#   docker compose run --rm pretix createsuperuser
+#
+# The plugin directory is bind-mounted, so editing Python files reloads the
+# server automatically. The frontend is served separately by Vite during
+# development; see frontend/README.md.
+services:
+  pretix:
+    build:
+      context: .
+      dockerfile: dev/Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/plugin
+      - pretix-data:/data
+      # Mounted rather than baked in, so tweaking either takes effect with a
+      # restart instead of an image rebuild.
+      - ./dev/pretix.cfg:/etc/pretix/pretix.cfg:ro
+      - ./dev/entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
+    stdin_open: true
+    tty: true
+
+volumes:
+  pretix-data:

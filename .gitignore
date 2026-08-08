@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+.venv/
+venv/
+
+# Django / pretix
+*.sqlite3
+*.log
+local_settings.py
+/data/
+/dev/data/
+
+# Frontend
+node_modules/
+frontend/dist/
+frontend/tsconfig.tsbuildinfo
+.vite/
+
+# Built PWA bundle is generated from frontend/ by `npm run build`
+pretix_openpos/static/pretix_openpos/pwa/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.DS_Store
+.idea/
+.vscode/

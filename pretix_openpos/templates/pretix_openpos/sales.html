@@ -1,0 +1,100 @@
+{% extends "pretixcontrol/event/base.html" %}
+{% load i18n %}
+{% load money %}
+{% block title %}{% trans "Till sales" %}{% endblock %}
+{% block content %}
+    <h1>{% trans "Till sales" %}</h1>
+
+    {% if tampered_with %}
+        <div class="alert alert-danger">
+            <strong>{% trans "The journal does not add up." %}</strong>
+            {% blocktrans trimmed with seq=tampered_with.seq %}
+                Entry #{{ seq }} does not match the hash of the entry before it. Sales are meant to
+                be append-only, so this means rows were changed or removed directly in the database.
+            {% endblocktrans %}
+        </div>
+    {% endif %}
+
+    <div class="row">
+        <div class="col-md-12">
+            <h3>{% trans "Takings" %}</h3>
+            <table class="table table-condensed">
+                <thead>
+                <tr>
+                    <th>{% trans "Till" %}</th>
+                    <th class="text-right">{% trans "Sales" %}</th>
+                    <th class="text-right">{% trans "Cash" %}</th>
+                    <th class="text-right">{% trans "Card" %}</th>
+                    <th class="text-right">{% trans "Total" %}</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for bucket in by_device %}
+                    <tr>
+                        <td><code>{{ bucket.label }}</code></td>
+                        <td class="text-right">{{ bucket.count }}</td>
+                        <td class="text-right">{{ bucket.cash|money:currency }}</td>
+                        <td class="text-right">{{ bucket.card|money:currency }}</td>
+                        <td class="text-right"><strong>{{ bucket.total|money:currency }}</strong></td>
+                    </tr>
+                {% empty %}
+                    <tr><td colspan="5">{% trans "Nothing has been sold at a till yet." %}</td></tr>
+                {% endfor %}
+                </tbody>
+                {% if by_device %}
+                    <tfoot>
+                    <tr>
+                        <th>{% trans "All tills" %}</th>
+                        <th class="text-right">{{ totals.count }}</th>
+                        <th class="text-right">{{ totals.cash|money:currency }}</th>
+                        <th class="text-right">{{ totals.card|money:currency }}</th>
+                        <th class="text-right">{{ totals.total|money:currency }}</th>
+                    </tr>
+                    </tfoot>
+                {% endif %}
+            </table>
+        </div>
+    </div>
+
+    <h3>{% trans "Journal" %}</h3>
+    <div class="table-responsive">
+        <table class="table table-condensed table-hover">
+            <thead>
+            <tr>
+                <th>#</th>
+                <th>{% trans "Date" %}</th>
+                <th>{% trans "Order" %}</th>
+                <th>{% trans "Till" %}</th>
+                <th>{% trans "Cashier" %}</th>
+                <th>{% trans "Payment" %}</th>
+                <th class="text-right">{% trans "Total" %}</th>
+            </tr>
+            </thead>
+            <tbody>
+            {% for sale in sales %}
+                <tr>
+                    <td>{{ sale.seq }}</td>
+                    <td>{{ sale.datetime|date:"SHORT_DATETIME_FORMAT" }}</td>
+                    <td>
+                        {% if sale.order %}
+                            <a href="{% url "control:event.order" organizer=request.event.organizer.slug event=request.event.slug code=sale.order_code %}">
+                                {{ sale.order_code }}
+                            </a>
+                        {% else %}
+                            {{ sale.order_code }}
+                        {% endif %}
+                    </td>
+                    <td><code>{{ sale.device_serial|default:"—" }}</code></td>
+                    <td>{{ sale.cashier|default:"—" }}</td>
+                    <td>{{ sale.get_payment_type_display }}</td>
+                    <td class="text-right">{{ sale.total|money:currency }}</td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="7">{% trans "No sales recorded." %}</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {% include "pretixcontrol/pagination.html" %}
+{% endblock %}

@@ -1,0 +1,22 @@
+{% load i18n %}
+{% load money %}
+<dl class="dl-horizontal">
+    {% if info.cashier %}
+        <dt>{% trans "Cashier" %}</dt>
+        <dd>{{ info.cashier }}</dd>
+    {% endif %}
+    {% if info.device %}
+        <dt>{% trans "Till" %}</dt>
+        <dd><code>{{ info.device }}</code></dd>
+    {% endif %}
+    {% if info.cash_given %}
+        <dt>{% trans "Cash received" %}</dt>
+        <dd>{{ info.cash_given|money:payment.order.event.currency }}</dd>
+        <dt>{% trans "Change given" %}</dt>
+        <dd>{{ info.cash_change|money:payment.order.event.currency }}</dd>
+    {% endif %}
+    {% if info.journal_seq %}
+        <dt>{% trans "Journal entry" %}</dt>
+        <dd>#{{ info.journal_seq }}</dd>
+    {% endif %}
+</dl>

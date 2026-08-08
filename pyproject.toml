@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pretix-openpos"
+dynamic = ["version"]
+description = "Open-source point of sale for pretix, driven by a PWA cash register"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.11"
+keywords = ["pretix", "pos", "point-of-sale", "ticketing", "pwa"]
+authors = [
+    { name = "clabeuhtegrite", email = "82087430+clabeuhtegrite@users.noreply.github.com" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: Django",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+    "Programming Language :: Python :: 3",
+    "Topic :: Office/Business",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "flake8",
+    "isort",
+    "pytest",
+    "pytest-django",
+]
+
+[project.urls]
+Homepage = "https://github.com/clabeuhtegrite/pretix-openpos"
+Issues = "https://github.com/clabeuhtegrite/pretix-openpos/issues"
+
+# pretix discovers plugins through this entry point group. It only reads the
+# module part of the value and appends it to INSTALLED_APPS; Django then picks
+# up the AppConfig in pretix_openpos/apps.py.
+[project.entry-points."pretix.plugin"]
+pretix_openpos = "pretix_openpos:PretixPluginMeta"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.dynamic]
+version = { attr = "pretix_openpos.__version__" }
+
+[tool.setuptools.packages.find]
+include = ["pretix_openpos*"]
+namespaces = false
+
+[tool.isort]
+profile = "pretix"
+known_first_party = ["pretix_openpos"]
+multi_line_output = 5
+line_length = 118
+
+[tool.flake8]
+max-line-length = 160

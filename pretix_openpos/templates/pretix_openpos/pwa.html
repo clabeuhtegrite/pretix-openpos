@@ -1,0 +1,28 @@
+{% load static %}<!doctype html>
+<html lang="{{ LANGUAGE_CODE|default:'en' }}">
+<head>
+    <meta charset="utf-8">
+    {# maximum-scale + user-scalable=no: a pinch-zoom mid-queue is always an accident. #}
+    <meta name="viewport"
+          content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+    <meta name="theme-color" content="#12161f">
+    <meta name="robots" content="noindex, nofollow">
+
+    {# Standalone launch from the iOS home screen. #}
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Open POS">
+    <meta name="mobile-web-app-capable" content="yes">
+
+    <title>Open POS</title>
+
+    <link rel="manifest" href="{% url 'plugins:pretix_openpos:pwa.manifest' %}">
+    <link rel="apple-touch-icon" href="{% static 'pretix_openpos/icons/apple-touch-icon.png' %}">
+    <link rel="icon" type="image/png" sizes="192x192" href="{% static 'pretix_openpos/icons/icon-192.png' %}">
+    <link rel="stylesheet" href="{% static 'pretix_openpos/pwa/app.css' %}">
+</head>
+<body>
+<div id="root"></div>
+<script type="module" src="{% static 'pretix_openpos/pwa/app.js' %}"></script>
+</body>
+</html>
