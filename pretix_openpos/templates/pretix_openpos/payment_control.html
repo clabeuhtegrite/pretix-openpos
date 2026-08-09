@@ -1,5 +1,8 @@
 {% load i18n %}
 {% load money %}
+{# cash_given / cash_change arrive as Decimals from payment_control_render, not as
+   the raw strings held in payment.info: the money filter raises TypeError on a
+   string, which 500s the whole backend order page. #}
 <dl class="dl-horizontal">
     {% if info.cashier %}
         <dt>{% trans "Cashier" %}</dt>
@@ -9,11 +12,13 @@
         <dt>{% trans "Till" %}</dt>
         <dd><code>{{ info.device }}</code></dd>
     {% endif %}
-    {% if info.cash_given %}
+    {% if cash_given != None %}
         <dt>{% trans "Cash received" %}</dt>
-        <dd>{{ info.cash_given|money:payment.order.event.currency }}</dd>
+        <dd>{{ cash_given|money:payment.order.event.currency }}</dd>
+    {% endif %}
+    {% if cash_change != None %}
         <dt>{% trans "Change given" %}</dt>
-        <dd>{{ info.cash_change|money:payment.order.event.currency }}</dd>
+        <dd>{{ cash_change|money:payment.order.event.currency }}</dd>
     {% endif %}
     {% if info.journal_seq %}
         <dt>{% trans "Journal entry" %}</dt>

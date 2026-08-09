@@ -1,3 +1,5 @@
+from decimal import Decimal, InvalidOperation
+
 from django.template.loader import get_template
 from django.utils.translation import gettext_lazy as _
 from pretix.base.payment import BasePaymentProvider
@@ -50,14 +52,32 @@ class OpenPosPaymentProvider(BasePaymentProvider):
         payment.confirm()
 
     def payment_control_render(self, request, payment) -> str:
+        info = payment.info_data or {}
         template = get_template("pretix_openpos/payment_control.html")
         return template.render(
             {
                 "payment": payment,
-                "info": payment.info_data or {},
+                "info": info,
+                # Amounts live in the payment info as strings, because that is
+                # what belongs in JSON. pretix' `money` filter raises TypeError
+                # on anything but a Decimal, and that exception happens while
+                # rendering the backend order page — so a string here does not
+                # produce a cosmetic glitch, it turns the whole order page into
+                # a 500 for every cash sale.
+                "cash_given": _decimal_or_none(info.get("cash_given")),
+                "cash_change": _decimal_or_none(info.get("cash_change")),
                 "provider": self,
             }
         )
+
+
+def _decimal_or_none(value):
+    if value is None or value == "":
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
 
 
 class OpenPosCashProvider(OpenPosPaymentProvider):

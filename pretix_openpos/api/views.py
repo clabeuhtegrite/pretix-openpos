@@ -541,9 +541,18 @@ class OpenPosViewSet(viewsets.ViewSet):
         if not clist:
             return None, []
 
+        # Only admission products. A check-in list with all_products=True happily
+        # accepts a keyring or a T-shirt, and pretix will dutifully record it —
+        # but "checked in" means the holder walked through the door, and a merch
+        # line has no door. Left unfiltered it also made the till announce
+        # "let them in" after a pure shop sale.
+        positions = [p for p in order.positions.select_related("item") if p.item.admission]
+        if not positions:
+            return 0, []
+
         checked_in = 0
         errors = []
-        for position in order.positions.all():
+        for position in positions:
             try:
                 perform_checkin(
                     op=position,

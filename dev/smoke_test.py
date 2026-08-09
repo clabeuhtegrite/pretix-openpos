@@ -124,9 +124,27 @@ def main():
           f"got {sale['order']['total']}, expected {expected_total:.2f}")
     check("change correct", float(sale["cash_change"]) == 50.00 - expected_total,
           f"got {sale['cash_change']}")
-    check("checked in immediately", sale.get("checked_in") == 5,
-          f"checked_in={sale.get('checked_in')} errors={sale.get('checkin_errors')}")
+    # Two admission tickets and three beers: only the tickets are an entry.
+    # Checking in the beers would put merch on the door list and make the till
+    # announce "let them in" after a pure shop sale.
+    check("only admission products checked in", sale.get("checked_in") == 2,
+          f"checked_in={sale.get('checked_in')} (expected 2) errors={sale.get('checkin_errors')}")
     print(f"        order {sale['order']['code']}, journal #{sale['journal_seq']}")
+
+    print("\n-- shop-only sale is not an entry ----------------------------")
+    soft = names.get("Soft")
+    status, merch = call("POST", f"/organizers/{ORG}/events/{EVENT}/openpos/checkout/", {
+        "idempotency_key": str(uuid.uuid4()),
+        "positions": [{"item": soft["id"], "count": 2}],
+        "payment_type": "cash",
+        "cash_given": "10.00",
+    }, token)
+    check("merch checkout accepted", status == 201, f"HTTP {status}: {merch}")
+    merch_total = 0.0
+    if status == 201:
+        check("nobody admitted", merch.get("checked_in") == 0,
+              f"checked_in={merch.get('checked_in')}")
+        merch_total = 2 * float(soft["price"])
 
     print("\n-- idempotency ---------------------------------------------")
     status, replay = call("POST", f"/organizers/{ORG}/events/{EVENT}/openpos/checkout/", payload, token)
@@ -150,8 +168,9 @@ def main():
     if status == 200:
         print(f"        this till : {summary['device']}")
         print(f"        all tills : {summary['event']}")
-        check("cash total recorded", float(summary["device"]["cash"]) == expected_total,
-              str(summary["device"]))
+        check("cash total recorded",
+              abs(float(summary["device"]["cash"]) - (expected_total + merch_total)) < 0.005,
+              f"got {summary['device']['cash']}, expected {expected_total + merch_total:.2f}")
 
     return report()
 
