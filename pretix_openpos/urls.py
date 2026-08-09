@@ -1,8 +1,8 @@
 from django.urls import re_path
-from pretix.api.urls import event_router
+from pretix.api.urls import event_router, orga_router
 
 from . import pwa, views
-from .api.views import OpenPosViewSet
+from .api.views import OpenPosOrganizerViewSet, OpenPosViewSet
 
 urlpatterns = [
     # The till app itself. Public: the bundle carries no secrets, and the device
@@ -34,3 +34,7 @@ urlpatterns = [
 # API endpoints. Routes land under
 # /api/v1/organizers/<org>/events/<event>/openpos/<action>/
 event_router.register(r"openpos", OpenPosViewSet, basename="openpos")
+
+# Organizer level: which events may this till sell for? Answering that needs to
+# happen before an event is picked, so it cannot live on the event router.
+orga_router.register(r"openpos", OpenPosOrganizerViewSet, basename="openpos-orga")

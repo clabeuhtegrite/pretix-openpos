@@ -18,12 +18,11 @@ export interface InitializeResponse {
   security_profile: string;
 }
 
-export interface EventSummary {
-  slug: string;
-  name: I18nString;
-  live: boolean;
-  testmode: boolean;
-  date_from: string | null;
+export interface CheckinListInfo {
+  id: number;
+  name: string;
+  all_products: boolean;
+  include_pending: boolean;
 }
 
 export interface PosConfig {
@@ -36,8 +35,39 @@ export interface PosConfig {
     timezone: string;
   };
   device: { serial: string | null; name: string | null };
-  checkin: { enabled: boolean; list_id: number | null; list_name: string | null };
+  checkin: {
+    enabled: boolean;
+    list_id: number | null;
+    list_name: string | null;
+    lists: CheckinListInfo[];
+  };
   cash_denominations: string[];
+}
+
+/** An event this till is allowed to sell for, i.e. Open POS is enabled on it. */
+export interface PosEvent {
+  slug: string;
+  organizer: string;
+  name: string;
+  currency: string;
+  testmode: boolean;
+  date_from: string | null;
+}
+
+/** Response of pretix' own check-in RPC. */
+export interface RedeemResult {
+  status: "ok" | "error" | "incomplete" | "exchange";
+  reason?: string;
+  reason_explanation?: string | null;
+  require_attention?: boolean;
+  checkin_texts?: string[];
+  position?: {
+    order?: string;
+    item?: number;
+    attendee_name?: string | null;
+    seat?: { name?: string } | null;
+  };
+  list?: { id: number; name: string };
 }
 
 export interface CatalogVariation {

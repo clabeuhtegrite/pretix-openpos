@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { t } from "../i18n";
 import { formatMoney, toCents } from "../money";
-import type { Pairing, SummaryResponse, Takings } from "../types";
+import type { Pairing, PosEvent, SummaryResponse, Takings } from "../types";
 
 interface Props {
   pairing: Pairing;
@@ -13,6 +13,7 @@ interface Props {
   onRefresh: () => void;
   onUnpair: () => void;
   onClose: () => void;
+  onEventChange: (slug: string) => void;
 }
 
 function TakingsRow({ label, takings, currency }: { label: string; takings: Takings; currency: string }) {
@@ -30,9 +31,26 @@ function TakingsRow({ label, takings, currency }: { label: string; takings: Taki
 }
 
 export default function SettingsPanel({
-  pairing, currency, cashier, onCashierChange, onRefresh, onUnpair, onClose,
+  pairing, currency, cashier, onCashierChange, onRefresh, onUnpair, onClose, onEventChange,
 }: Props) {
   const [summary, setSummary] = useState<SummaryResponse | null>(null);
+  const [events, setEvents] = useState<PosEvent[] | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .posEvents(pairing.organizer, pairing.token)
+      .then((data) => {
+        if (!cancelled) setEvents(data.results);
+      })
+      .catch(() => {
+        // The switcher is a convenience; failing to list events must not stop
+        // the operator from reaching the rest of the panel.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pairing]);
 
   useEffect(() => {
     let cancelled = false;
@@ -54,6 +72,26 @@ export default function SettingsPanel({
     <div className="overlay" onClick={onClose}>
       <div className="panel" onClick={(e) => e.stopPropagation()}>
         <h2>{t("settings.title")}</h2>
+
+        {events && events.length > 1 && (
+          <div className="field">
+            <label htmlFor="event">{t("settings.event")}</label>
+            <select
+              id="event"
+              className="select"
+              value={pairing.event}
+              onChange={(e) => onEventChange(e.target.value)}
+            >
+              {events.map((event) => (
+                <option key={event.slug} value={event.slug}>
+                  {event.name}
+                  {event.testmode ? " · " + t("testmode") : ""}
+                </option>
+              ))}
+            </select>
+            <div className="help">{t("settings.eventHelp")}</div>
+          </div>
+        )}
 
         <div className="field">
           <label htmlFor="cashier">{t("settings.cashier")}</label>

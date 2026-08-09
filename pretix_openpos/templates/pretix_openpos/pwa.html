@@ -11,10 +11,11 @@
     {# Standalone launch from the iOS home screen. #}
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="Open POS">
+    {# Label shown under the home-screen icon on iOS. #}
+    <meta name="apple-mobile-web-app-title" content="{{ app_name }}">
     <meta name="mobile-web-app-capable" content="yes">
 
-    <title>Open POS</title>
+    <title>{{ app_name }}</title>
 
     <link rel="manifest" href="{% url 'plugins:pretix_openpos:pwa.manifest' %}">
     <link rel="apple-touch-icon" href="{% static 'pretix_openpos/icons/apple-touch-icon.png' %}">

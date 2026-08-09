@@ -1,6 +1,6 @@
 import type {
-  Catalog, EventSummary, InitializeResponse, Pairing, PosConfig, SaleResult,
-  SummaryResponse,
+  Catalog, InitializeResponse, Pairing, PosConfig, PosEvent,
+  RedeemResult, SaleResult, SummaryResponse,
 } from "./types";
 
 const BASE = "/api/v1";
@@ -99,10 +99,6 @@ export const api = {
     });
   },
 
-  listEvents(organizer: string, token: string): Promise<{ results: EventSummary[] }> {
-    return request(`/organizers/${organizer}/events/?live=true`, { token });
-  },
-
   config(p: Pairing): Promise<PosConfig> {
     return request(`/organizers/${p.organizer}/events/${p.event}/openpos/config/`, {
       token: p.token,
@@ -137,5 +133,56 @@ export const api = {
     return request(`/organizers/${p.organizer}/events/${p.event}/openpos/summary/`, {
       token: p.token,
     });
+  },
+
+  /** Events this till may sell for: it has access AND Open POS is enabled. */
+  posEvents(organizer: string, token: string): Promise<{ results: PosEvent[] }> {
+    return request(`/organizers/${organizer}/openpos/`, { token });
+  },
+
+  /**
+   * Check a ticket in through pretix' own RPC.
+   *
+   * Deliberately not wrapped in a POS-specific endpoint: this is the same call
+   * pretixSCAN makes, so the rules engine, revoked and blocked secrets, and the
+   * exact refusal reasons all come from pretix rather than from a reimplementation
+   * that would drift.
+   *
+   * Resolves for a refusal too — a refused ticket is an answer, not a failure —
+   * and only rejects on transport or authentication problems.
+   */
+  async redeem(
+    p: Pairing,
+    { secret, lists, nonce, force = false }: {
+      secret: string;
+      lists: number[];
+      nonce: string;
+      force?: boolean;
+    },
+  ): Promise<RedeemResult> {
+    try {
+      return await request<RedeemResult>(`/organizers/${p.organizer}/checkinrpc/redeem/`, {
+        method: "POST",
+        token: p.token,
+        body: {
+          lists,
+          secret,
+          source_type: "barcode",
+          type: "entry",
+          force,
+          // The till has no UI for check-in questions; pretix then refuses with
+          // an explicit reason instead of returning an "incomplete" we could not act on.
+          questions_supported: false,
+          nonce,
+        },
+      });
+    } catch (e) {
+      // 400/404 carry the verdict in the body; anything else is a real error.
+      if (e instanceof ApiError && (e.status === 400 || e.status === 404)) {
+        const body = e.body as RedeemResult | undefined;
+        if (body && typeof body === "object" && "status" in body) return body;
+      }
+      throw e;
+    }
   },
 };

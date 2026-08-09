@@ -29,8 +29,13 @@ class OpenPosSecurityProfile(AllowListSecurityProfile):
         ("GET", "api-v1:event-list"),
         ("GET", "api-v1:event-detail"),
         # The POS endpoints themselves.
+        ("GET", "api-v1:openpos-orga-list"),
         ("GET", "api-v1:openpos-config"),
         ("GET", "api-v1:openpos-catalog"),
         ("POST", "api-v1:openpos-checkout"),
         ("GET", "api-v1:openpos-summary"),
+        # Scanning tickets at the door. pretix' own check-in RPC is used rather
+        # than a POS-specific endpoint: it already carries the rules engine,
+        # revoked/blocked secrets, and the exact semantics pretixSCAN relies on.
+        ("POST", "api-v1:checkinrpc.redeem"),
     )

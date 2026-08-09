@@ -14,7 +14,7 @@ from pretix.base.services.invoices import generate_invoice, invoice_qualified
 from pretix.base.signals import order_paid, order_placed
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 
 from ..channels import POS_CHANNEL, PosSalesChannelType
@@ -93,6 +93,44 @@ def checkin_list_for(event):
     return event.checkin_lists.filter(pk=pk).first()
 
 
+def plugin_enabled(event) -> bool:
+    return "pretix_openpos" in event.get_plugins()
+
+
+class OpenPosOrganizerViewSet(viewsets.ViewSet):
+    """
+    Organizer-level endpoint, so a till can find out which events it may sell for.
+
+    Needed because the device token grants access to events, not to the POS:
+    an organizer can perfectly well run Open POS on one event and not another.
+    Listing them server-side keeps the app from offering an event whose
+    endpoints would then refuse it.
+    """
+
+    def list(self, request, **kwargs):
+        device = request.auth if isinstance(request.auth, Device) else None
+        if device is not None:
+            events = device.get_events_with_any_permission()
+        else:
+            events = request.organizer.events.all()
+
+        results = []
+        for event in events.filter(live=True).order_by("date_from"):
+            if not plugin_enabled(event):
+                continue
+            results.append(
+                {
+                    "slug": event.slug,
+                    "organizer": event.organizer.slug,
+                    "name": str(event.name),
+                    "currency": event.currency,
+                    "testmode": event.testmode,
+                    "date_from": event.date_from.isoformat() if event.date_from else None,
+                }
+            )
+        return Response({"results": results})
+
+
 class OpenPosViewSet(viewsets.ViewSet):
     """
     Everything the till needs, and nothing else.
@@ -104,6 +142,18 @@ class OpenPosViewSet(viewsets.ViewSet):
 
     permission = "event.orders:read"
     write_permission = "event.orders:write"
+
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        # A device may well have access to events that do not run the POS.
+        # Refusing here is what keeps a stale app from selling on an event the
+        # organizer never opened a till for.
+        if not plugin_enabled(request.event):
+            raise PermissionDenied(
+                _("Open POS is not enabled for the event {slug}.").format(
+                    slug=request.event.slug
+                )
+            )
 
     # -- config ------------------------------------------------------------
 
@@ -127,9 +177,21 @@ class OpenPosViewSet(viewsets.ViewSet):
                     "name": device.name if device else None,
                 },
                 "checkin": {
+                    # The list tickets are checked in on when they are sold.
                     "enabled": clist is not None,
                     "list_id": clist.pk if clist else None,
                     "list_name": str(clist.name) if clist else None,
+                    # Every list of the event, so the door-scanning mode can
+                    # offer a choice when there is more than one.
+                    "lists": [
+                        {
+                            "id": cl.pk,
+                            "name": str(cl.name),
+                            "all_products": cl.all_products,
+                            "include_pending": cl.include_pending,
+                        }
+                        for cl in event.checkin_lists.order_by("name", "pk")
+                    ],
                 },
                 # Quick-tender buttons on the cash keypad.
                 "cash_denominations": ["5.00", "10.00", "20.00", "50.00"],

@@ -15,8 +15,15 @@ before deciding it fits.
 
 ## What it does
 
-- A touch-friendly till that runs in Safari or Chrome, installable to the home
-  screen.
+- A touch-friendly till that runs in Safari or Chrome, installed to the home
+  screen. Opened in a plain browser tab it shows install instructions instead —
+  append `?browser=1` once to override that on a device.
+- **Pairing by scanning** the QR code pretix shows for a device, or by typing
+  the code.
+- **Scanning tickets at the door**: continuous camera scanning, a verdict
+  readable at arm's length, and a keyboard-wedge/manual fallback. It calls
+  pretix' own check-in RPC, so the rules engine and every refusal reason come
+  from pretix rather than a reimplementation.
 - A dedicated **`openpos` sales channel**, so you pick product by product what
   is sellable at the door — including products that exist *only* on site.
 - **On-site pricing**: a separate tariff per product, because pretix itself has
@@ -39,6 +46,12 @@ Being clear about this up front will save you an evaluation:
   unreliable, this is the wrong tool today.
 - **No refunds or cancellations** from the till. Do those in the pretix backend.
 - **No receipt printing** and no ticket printing.
+- **No check-in questions.** Scanning sends `questions_supported: false`, so a
+  product that requires answers at the door is refused with a clear reason
+  rather than half-checked-in. Use pretixSCAN for those.
+- **QR codes only** when scanning. jsQR does not read Code128 or PDF417; tickets
+  printed with a non-QR barcode have to be typed or read with a
+  keyboard-wedge scanner.
 - **No Tap to Pay.** Stripe only exposes Tap to Pay through its native iOS and
   Android SDKs, so it is impossible from a web app. Integrated card payments
   would mean a server-driven Stripe Terminal reader; see the roadmap.
@@ -134,8 +147,24 @@ rather than to a rolling minor.
 5. **Create a device** under the organizer's *Devices*: give it access to the
    event and pick the **Open POS** security profile. pretix shows a pairing QR
    code.
-6. **Open `https://your-pretix/openpos/`** on the tablet, paste the pairing code,
-   and add the page to the home screen.
+6. **Open `https://your-pretix/openpos/`** on the tablet, add it to the home
+   screen, then launch it from the icon and scan the pairing QR code.
+
+One device can sell for several events: any event with the plugin enabled shows
+up in *Settings → Event*, and switching does not require re-pairing.
+
+### Naming the app
+
+The label under the home-screen icon defaults to “Open POS”. Set your own:
+
+```bash
+python -m pretix shell -c "
+from pretix.base.settings import GlobalSettingsObject
+GlobalSettingsObject().settings.set('openpos_app_name', 'Your venue')"
+```
+
+It is a global setting because the manifest is served from a single URL. Devices
+already installed keep the old name until re-added to the home screen.
 
 ## Development
 

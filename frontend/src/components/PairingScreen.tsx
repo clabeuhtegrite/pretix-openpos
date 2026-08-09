@@ -2,13 +2,8 @@ import { useState } from "react";
 
 import { api, ApiError } from "../api";
 import { t } from "../i18n";
-import type { EventSummary, I18nString, Pairing } from "../types";
-
-/** pretix returns display names either flat or as a locale map. */
-function localize(value: I18nString): string {
-  if (typeof value === "string") return value;
-  return value[navigator.language.slice(0, 2)] ?? Object.values(value)[0] ?? "";
-}
+import type { Pairing, PosEvent } from "../types";
+import QrScanner from "./QrScanner";
 
 /**
  * The pairing QR that pretix shows contains a JSON blob. Accept that verbatim
@@ -37,14 +32,15 @@ export default function PairingScreen({ onPaired }: Props) {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [events, setEvents] = useState<EventSummary[] | null>(null);
+  const [events, setEvents] = useState<PosEvent[] | null>(null);
   const [partial, setPartial] = useState<Omit<Pairing, "event"> | null>(null);
+  const [scanning, setScanning] = useState(false);
 
-  async function pair(e: React.FormEvent) {
-    e.preventDefault();
-    const token = extractToken(input);
+  async function pair(raw: string) {
+    const token = extractToken(raw);
     if (!token) return;
 
+    setScanning(false);
     setBusy(true);
     setError(null);
     try {
@@ -55,7 +51,11 @@ export default function PairingScreen({ onPaired }: Props) {
         serial: device.unique_serial,
         deviceName: device.name,
       };
-      const list = await api.listEvents(device.organizer, device.api_token);
+      // Only events that actually run Open POS: the device token grants access
+      // to events, which is not the same thing as the organizer having opened a
+      // till on them. Offering one would pair the device onto an event whose
+      // endpoints then refuse it.
+      const list = await api.posEvents(device.organizer, device.api_token);
       if (list.results.length === 1) {
         onPaired({ ...base, event: list.results[0].slug });
         return;
@@ -97,7 +97,7 @@ export default function PairingScreen({ onPaired }: Props) {
             <div className="event-list">
               {events.map((event) => (
                 <button key={event.slug} onClick={() => onPaired({ ...partial, event: event.slug })}>
-                  {localize(event.name)}
+                  {event.name}
                   <span className="slug">{event.slug}</span>
                 </button>
               ))}
@@ -108,14 +108,46 @@ export default function PairingScreen({ onPaired }: Props) {
     );
   }
 
+  if (scanning) {
+    return (
+      <QrScanner
+        title={t("pairing.scanTitle")}
+        hint={t("pairing.scanHint")}
+        onDecode={(text) => void pair(text)}
+        onClose={() => setScanning(false)}
+      />
+    );
+  }
+
   return (
     <div className="centered">
-      <form className="panel" onSubmit={pair}>
+      <form
+        className="panel"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void pair(input);
+        }}
+      >
         <h2>{t("pairing.title")}</h2>
         <p className="help" style={{ marginTop: 0, marginBottom: 20 }}>
           {t("pairing.intro")}
         </p>
         {error && <div className="error-banner">{error}</div>}
+
+        <button
+          type="button"
+          className="btn primary"
+          style={{ marginBottom: 18 }}
+          onClick={() => {
+            setError(null);
+            setScanning(true);
+          }}
+          disabled={busy}
+        >
+          📷 {t("scan.open")}
+        </button>
+        <div className="divider">{t("pairing.orType")}</div>
+
         <div className="field">
           <label htmlFor="token">{t("pairing.token")}</label>
           <input
@@ -130,7 +162,7 @@ export default function PairingScreen({ onPaired }: Props) {
           />
           <div className="help">{t("pairing.tokenHelp")}</div>
         </div>
-        <button className="btn primary" type="submit" disabled={busy || !input.trim()}>
+        <button className="btn" type="submit" disabled={busy || !input.trim()}>
           {busy ? t("pairing.pairing") : t("pairing.submit")}
         </button>
       </form>

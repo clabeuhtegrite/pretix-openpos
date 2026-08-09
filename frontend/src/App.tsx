@@ -1,23 +1,20 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { api, ApiError } from "./api";
+import CheckinScreen from "./components/CheckinScreen";
 import DoneScreen from "./components/DoneScreen";
+import InstallGate, { browserAllowed, isStandalone } from "./components/InstallGate";
 import PairingScreen from "./components/PairingScreen";
 import PaymentPanel from "./components/PaymentPanel";
 import SaleScreen, { type Sellable } from "./components/SaleScreen";
 import SettingsPanel from "./components/SettingsPanel";
 import { t } from "./i18n";
+import { newNonce } from "./nonce";
 import {
   clearPairing, loadCashier, loadPairing, saveCashier, savePairing,
 } from "./storage";
 import type { Catalog, CartLine, Pairing, PaymentType, PosConfig, SaleResult } from "./types";
 import { useWakeLock } from "./useWakeLock";
-
-/** crypto.randomUUID needs a secure context; fall back rather than crash. */
-function newIdempotencyKey(): string {
-  if (typeof crypto !== "undefined" && "randomUUID" in crypto) return crypto.randomUUID();
-  return `k-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
-}
 
 function describeError(err: unknown): string {
   if (err instanceof ApiError) return err.isNetwork ? t("error.offline") : err.message;
@@ -42,6 +39,11 @@ export default function App() {
 
   const [sale, setSale] = useState<SaleResult | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [checkinOpen, setCheckinOpen] = useState(false);
+
+  // Evaluated once: display-mode does not change without a reload, and a value
+  // that flickers would bounce the operator out of a sale.
+  const [gated] = useState(() => !isStandalone() && !browserAllowed());
 
   useWakeLock(pairing !== null);
 
@@ -144,6 +146,8 @@ export default function App() {
     }
   }
 
+  if (gated) return <InstallGate />;
+
   if (!pairing) return <PairingScreen onPaired={onPaired} />;
 
   if (loadError) {
@@ -180,6 +184,14 @@ export default function App() {
         {config.event.testmode && <span className="badge">{t("testmode")}</span>}
         <span className="spacer" />
         {cashier && <span className="badge muted">{cashier}</span>}
+        {config.checkin.lists.length > 0 && (
+          <button
+            className="btn ghost topbar-action"
+            onClick={() => setCheckinOpen(true)}
+          >
+            {t("checkin.open")}
+          </button>
+        )}
         <button className="icon-button" onClick={() => setSettingsOpen(true)} aria-label="settings">
           ⚙
         </button>
@@ -194,7 +206,7 @@ export default function App() {
         onClear={() => setCart([])}
         onCharge={() => {
           setPayError(null);
-          setPaying({ key: newIdempotencyKey() });
+          setPaying({ key: newNonce() });
         }}
       />
 
@@ -218,6 +230,15 @@ export default function App() {
         />
       )}
 
+      {checkinOpen && (
+        <CheckinScreen
+          pairing={pairing}
+          lists={config.checkin.lists}
+          defaultListId={config.checkin.list_id}
+          onClose={() => setCheckinOpen(false)}
+        />
+      )}
+
       {settingsOpen && (
         <SettingsPanel
           pairing={pairing}
@@ -233,6 +254,14 @@ export default function App() {
           }}
           onUnpair={unpair}
           onClose={() => setSettingsOpen(false)}
+          onEventChange={(slug) => {
+            // The basket belongs to the event it was built for.
+            const next = { ...pairing, event: slug };
+            savePairing(next);
+            setCart([]);
+            setPairing(next);
+            setSettingsOpen(false);
+          }}
         />
       )}
     </div>

@@ -16,8 +16,23 @@ from django.templatetags.static import static
 from django.utils.translation import gettext_lazy as _
 from django.views.decorators.cache import cache_control
 from django.views.generic import TemplateView
+from pretix.base.settings import GlobalSettingsObject
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "pretix_openpos")
+
+#: Fallback name of the installed app. Overridable per installation, because the
+#: label a volunteer sees on the home screen is the venue's, not the software's:
+#:
+#:     python -m pretix shell -c "
+#:     from pretix.base.settings import GlobalSettingsObject
+#:     GlobalSettingsObject().settings.set('openpos_app_name', 'Your name here')"
+#:
+#: The manifest is served from a single global URL, so this cannot be per-event.
+DEFAULT_APP_NAME = "Open POS"
+
+
+def app_name() -> str:
+    return GlobalSettingsObject().settings.get("openpos_app_name") or DEFAULT_APP_NAME
 
 
 class ShellView(TemplateView):
@@ -31,12 +46,18 @@ class ShellView(TemplateView):
 
     template_name = "pretix_openpos/pwa.html"
 
+    def get_context_data(self, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        ctx["app_name"] = app_name()
+        return ctx
+
 
 def manifest(request):
+    name = app_name()
     return JsonResponse(
         {
-            "name": str(_("Open POS")),
-            "short_name": "Open POS",
+            "name": name,
+            "short_name": name,
             "description": str(_("Point of sale for pretix")),
             "start_url": "/openpos/",
             "scope": "/openpos/",
