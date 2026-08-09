@@ -37,6 +37,15 @@ class CheckoutSerializer(serializers.Serializer):
     cashier = serializers.CharField(
         max_length=190, required=False, allow_blank=True, default=""
     )
+    #: What the till showed the customer.
+    #:
+    #: The server is the price authority, which means it can silently charge
+    #: something other than the amount the operator just read out — after a
+    #: price change in the backend, or a catalogue refreshed mid-basket. Sending
+    #: the expected figure turns that into a refusal before any money moves.
+    expected_total = serializers.DecimalField(
+        max_digits=13, decimal_places=2, required=False, allow_null=True, default=None
+    )
 
     def validate(self, data):
         cash_given = data.get("cash_given")

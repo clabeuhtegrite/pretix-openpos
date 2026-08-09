@@ -9,12 +9,44 @@ import PaymentPanel from "./components/PaymentPanel";
 import SaleScreen, { type Sellable } from "./components/SaleScreen";
 import SettingsPanel from "./components/SettingsPanel";
 import { t } from "./i18n";
+import { fromCents, toCents } from "./money";
 import { newNonce } from "./nonce";
 import {
   clearPairing, loadCashier, loadPairing, saveCashier, savePairing,
 } from "./storage";
 import type { Catalog, CartLine, Pairing, PaymentType, PosConfig, SaleResult } from "./types";
 import { useWakeLock } from "./useWakeLock";
+
+/**
+ * How often an idle till re-reads the catalogue.
+ *
+ * A price edited in the backend has to reach the door without anyone
+ * relaunching the app. Only ever while idle: reloading prices under a basket
+ * that is already being read out to a customer is how you end up announcing one
+ * figure and charging another.
+ */
+const CATALOG_REFRESH_MS = 60_000;
+
+/** Re-price an open basket against a freshly loaded catalogue. */
+function repriceCart(lines: CartLine[], catalog: Catalog): CartLine[] {
+  const prices = new Map<string, number>();
+  for (const category of catalog.categories) {
+    for (const item of category.items) {
+      if (item.variations.length) {
+        for (const variation of item.variations) {
+          prices.set(`${item.id}:${variation.id}`, toCents(variation.price));
+        }
+      } else {
+        prices.set(`${item.id}:`, toCents(item.price));
+      }
+    }
+  }
+  // A line whose product vanished from the catalogue keeps its price here; the
+  // server refuses it at checkout, which is the answer that matters.
+  return lines.map((line) =>
+    prices.has(line.key) ? { ...line, unitPrice: prices.get(line.key)! } : line,
+  );
+}
 
 function describeError(err: unknown): string {
   if (err instanceof ApiError) return err.isNetwork ? t("error.offline") : err.message;
@@ -70,6 +102,41 @@ export default function App() {
   useEffect(() => {
     if (pairing) void load(pairing);
   }, [pairing, load]);
+
+  // True whenever a customer is mid-transaction and the catalogue must hold still.
+  const servingCustomer =
+    cart.length > 0 || paying !== null || sale !== null || checkinOpen;
+
+  useEffect(() => {
+    if (!pairing || servingCustomer) return;
+    let cancelled = false;
+
+    const refresh = () => {
+      api
+        .catalog(pairing)
+        .then((next) => {
+          if (!cancelled) setCatalog(next);
+        })
+        .catch(() => {
+          // A missed refresh is harmless: the previous catalogue stays on
+          // screen and the server still prices the sale itself.
+        });
+    };
+
+    refresh();
+    const timer = window.setInterval(refresh, CATALOG_REFRESH_MS);
+    // Coming back to the app is the other moment prices may have moved.
+    const onVisible = () => {
+      if (document.visibilityState === "visible") refresh();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [pairing, servingCustomer]);
 
   function onPaired(next: Pairing) {
     savePairing(next);
@@ -132,14 +199,27 @@ export default function App() {
         payment_type: paymentType,
         cash_given: cashGiven,
         cashier,
+        // What the customer was just told. The server refuses rather than
+        // charge a different figure.
+        expected_total: fromCents(total),
       });
       setSale(result);
       setPaying(null);
       setCart([]);
-      // Refresh availability in the background; a stale sold-out badge is worth
-      // fixing but not worth making the next customer wait for.
-      void api.catalog(pairing).then(setCatalog).catch(() => {});
     } catch (err) {
+      if (err instanceof ApiError && (err.body as { code?: string } | undefined)?.code === "price_changed") {
+        // Prices moved under an open basket. Nothing was charged. Pull the new
+        // catalogue and re-price the basket in place, so the payment panel —
+        // which stays open with the message — shows the figure that will
+        // actually be taken.
+        void api
+          .catalog(pairing)
+          .then((next) => {
+            setCatalog(next);
+            setCart((lines) => repriceCart(lines, next));
+          })
+          .catch(() => {});
+      }
       setPayError(describeError(err));
     } finally {
       setBusy(false);

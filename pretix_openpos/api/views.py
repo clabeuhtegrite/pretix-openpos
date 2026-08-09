@@ -342,6 +342,23 @@ class OpenPosViewSet(viewsets.ViewSet):
                 }
             )
 
+        expected = data["expected_total"]
+        if expected is not None and expected != total:
+            # Refuse rather than charge a different amount than the one the
+            # customer was told. The app reloads its catalogue and shows the new
+            # basket; nothing has been taken at this point.
+            raise ValidationError(
+                {
+                    "expected_total": [
+                        _("Prices changed: this basket now comes to {total}, not {expected}.").format(
+                            total=total, expected=expected
+                        )
+                    ],
+                    "code": "price_changed",
+                    "total": str(total),
+                }
+            )
+
         cash_given = data["cash_given"]
         cash_change = None
         if data["payment_type"] == PosSale.PAYMENT_CASH and cash_given is not None:

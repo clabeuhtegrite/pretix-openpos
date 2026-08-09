@@ -120,6 +120,7 @@ export const api = {
       payment_type: string;
       cash_given?: string | null;
       cashier?: string;
+      expected_total?: string;
     },
   ): Promise<SaleResult> {
     return request(`/organizers/${p.organizer}/events/${p.event}/openpos/checkout/`, {
