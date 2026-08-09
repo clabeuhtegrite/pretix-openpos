@@ -173,14 +173,30 @@ class SalesView(EventPermissionRequiredMixin, ListView):
         ctx = super().get_context_data(**kwargs)
         all_sales = PosSale.objects.filter(event=self.request.event)
 
+        def empty():
+            return {"cash": Decimal("0.00"), "card": Decimal("0.00"), "count": 0}
+
         by_device = OrderedDict()
-        totals = {"cash": Decimal("0.00"), "card": Decimal("0.00"), "count": 0}
-        for sale in all_sales.only("device_serial", "cashier", "payment_type", "total"):
-            label = sale.device_serial or str(_("unknown till"))
+        totals = empty()
+        testmode_totals = empty()
+        fields = ("device_name", "device_serial", "cashier", "payment_type", "total", "testmode")
+
+        for sale in all_sales.only(*fields):
+            # Test-mode takings are kept out of the figures the drawer is
+            # reconciled against, and shown on their own line instead. The rows
+            # stay in the journal: it is append-only, and it outlives the orders
+            # themselves, which get purged when test mode is switched off.
+            if sale.testmode:
+                testmode_totals[sale.payment_type] += sale.total
+                testmode_totals["count"] += 1
+                continue
+
+            label = sale.device_name or sale.device_serial or str(_("unknown till"))
             if sale.cashier:
                 label = f"{label} · {sale.cashier}"
             bucket = by_device.setdefault(
-                label, {"label": label, "cash": Decimal("0.00"), "card": Decimal("0.00"), "count": 0}
+                label,
+                {"label": label, "serial": sale.device_serial, **empty()},
             )
             bucket[sale.payment_type] += sale.total
             bucket["count"] += 1
@@ -189,10 +205,12 @@ class SalesView(EventPermissionRequiredMixin, ListView):
 
         for bucket in by_device.values():
             bucket["total"] = bucket["cash"] + bucket["card"]
-        totals["total"] = totals["cash"] + totals["card"]
+        for bag in (totals, testmode_totals):
+            bag["total"] = bag["cash"] + bag["card"]
 
         ctx["by_device"] = list(by_device.values())
         ctx["totals"] = totals
+        ctx["testmode_totals"] = testmode_totals if testmode_totals["count"] else None
         ctx["currency"] = self.request.event.currency
         # Surfaced so a broken chain is visible rather than silently trusted.
         ctx["tampered_with"] = PosSale.verify_chain(self.request.event)

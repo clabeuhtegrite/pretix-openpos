@@ -107,15 +107,30 @@ def main():
     status, after = call("GET", f"/organizers/{ORG}/events/{EVENT}/openpos/summary/", token=token)
     print(f"after  : {after['event']}")
 
-    ok = (
-        not failed
+    # Two different things can go wrong, and conflating them makes the result
+    # useless. A refused request is a capacity problem — the SQLite dev stack
+    # serialises writers and answers "database is locked" under load, where
+    # PostgreSQL does not. A journal that does not add up is a correctness
+    # problem, and it is the only one this test exists to catch: what matters is
+    # that whatever DID commit left a gapless, unique, unbroken sequence.
+    integrity = (
+        bool(seqs)
         and len(set(seqs)) == len(created)
         and seqs == list(range(seqs[0], seqs[0] + len(seqs)))
         and len(set(orders)) == len(created)
     )
     print()
-    print("JOURNAL INTACT" if ok else "JOURNAL BROKEN")
-    sys.exit(0 if ok else 1)
+    if not integrity:
+        print("JOURNAL BROKEN — committed sales do not form a clean sequence")
+        sys.exit(1)
+    if failed:
+        print(f"JOURNAL INTACT for the {len(created)} sales that committed, "
+              f"but {len(failed)} request(s) were refused.")
+        print("On SQLite that is the writer lock, not a defect; re-run against "
+              "PostgreSQL to exercise real concurrency.")
+        sys.exit(2)
+    print("JOURNAL INTACT")
+    sys.exit(0)
 
 
 if __name__ == "__main__":

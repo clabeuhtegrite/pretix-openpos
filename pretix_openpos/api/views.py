@@ -401,6 +401,7 @@ class OpenPosViewSet(viewsets.ViewSet):
                 idempotency_key=idempotency_key,
                 cash_given=cash_given,
                 cash_change=cash_change,
+                testmode=event.testmode,
             )
 
             # Cross-reference the journal entry from the payment so the backend
@@ -454,11 +455,19 @@ class OpenPosViewSet(viewsets.ViewSet):
             result["total"] = str(grand)
             return result
 
+        # Test-mode money never existed, so it must not be in the figure a
+        # volunteer reconciles the drawer against. It stays in the journal —
+        # which is append-only and survives the orders being purged — and is
+        # reported separately rather than silently dropped.
+        real = sales.filter(testmode=False)
+        test = sales.filter(testmode=True)
+
         return Response(
             {
                 "since": start_of_day.isoformat(),
-                "device": totals(sales.filter(device=device)) if device else None,
-                "event": totals(sales),
+                "device": totals(real.filter(device=device)) if device else None,
+                "event": totals(real),
+                "testmode": totals(test) if test.exists() else None,
             }
         )
 

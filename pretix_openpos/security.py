@@ -38,4 +38,8 @@ class OpenPosSecurityProfile(AllowListSecurityProfile):
         # than a POS-specific endpoint: it already carries the rules engine,
         # revoked/blocked secrets, and the exact semantics pretixSCAN relies on.
         ("POST", "api-v1:checkinrpc.redeem"),
+        # Finding a ticket by name. Tickets carry a QR and nothing a human could
+        # retype, so when the code will not scan the only way through is to look
+        # the holder up.
+        ("GET", "api-v1:checkinrpc.search"),
     )

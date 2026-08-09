@@ -761,6 +761,73 @@ table.takings thead th {
   font-size: 17px;
 }
 
+/* Sits above the full-screen scanner, which is z-index 40. */
+.overlay-top {
+  z-index: 50;
+}
+
+.search-panel {
+  display: flex;
+  flex-direction: column;
+  max-height: min(80vh, 640px);
+}
+
+.search-results {
+  flex: 1;
+  min-height: 120px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  margin-bottom: 16px;
+}
+
+.search-note {
+  padding: 20px 4px;
+  color: var(--text-dim);
+  text-align: center;
+}
+
+.search-hit {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 14px;
+  min-height: 64px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.search-hit + .search-hit {
+  margin-top: 8px;
+}
+
+.search-hit:active {
+  filter: brightness(1.2);
+}
+
+.search-hit-name {
+  display: block;
+  font-weight: 700;
+  font-size: 17px;
+}
+
+.search-hit-meta {
+  display: block;
+  color: var(--text-dim);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.search-hit-badge {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--warning);
+  color: #241a00;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 /* ---------- check-in verdict ---------- */
 
 .verdict {

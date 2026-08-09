@@ -28,10 +28,12 @@ interface Props {
   /** Overlay rendered on top of the video, typically the last scan's verdict. */
   children?: React.ReactNode;
   footer?: React.ReactNode;
+  /** What to suggest when the camera cannot be opened. */
+  errorHint?: string;
 }
 
 export default function QrScanner({
-  onDecode, onClose, title, hint, paused = false, children, footer,
+  onDecode, onClose, title, hint, paused = false, children, footer, errorHint,
 }: Props) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -148,7 +150,7 @@ export default function QrScanner({
         {error && (
           <div className="scanner-status error">
             {error}
-            <div className="scanner-status-hint">{t("scan.manualFallback")}</div>
+            <div className="scanner-status-hint">{errorHint ?? t("scan.manualFallback")}</div>
           </div>
         )}
         {children}

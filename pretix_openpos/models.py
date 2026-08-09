@@ -88,6 +88,10 @@ class PosSale(models.Model):
     )
     #: Denormalised so the journal still names the till after the device is deleted.
     device_serial = models.CharField(max_length=190, blank=True)
+    #: The till's human name ("Caisse bar"), captured at the same time and for the
+    #: same reason. Not part of the hash: the serial is what identifies a till,
+    #: this is only what an operator reads in a report.
+    device_name = models.CharField(max_length=190, blank=True, default="")
     #: Free-text label the app sends so two volunteers sharing one tablet can be
     #: told apart in the takings report.
     cashier = models.CharField(max_length=190, blank=True)
@@ -97,6 +101,15 @@ class PosSale(models.Model):
     )
     #: Denormalised for the same reason: test-mode orders can be purged.
     order_code = models.CharField(max_length=16)
+
+    #: Whether the event was in test mode when the sale was made.
+    #:
+    #: Recorded at write time rather than read from the order, because the order
+    #: is exactly what goes away: disabling test mode offers to delete every
+    #: test order, which leaves this journal row orphaned. Inferring "orphan =
+    #: test" afterwards would mean a real order deleted by hand silently drops
+    #: out of the takings — the one thing an append-only journal exists to stop.
+    testmode = models.BooleanField(default=False)
 
     payment_type = models.CharField(max_length=16, choices=PAYMENT_CHOICES)
     total = models.DecimalField(max_digits=13, decimal_places=2)
@@ -111,6 +124,16 @@ class PosSale(models.Model):
 
     previous_hash = models.CharField(max_length=64)
     hash = models.CharField(max_length=64)
+
+    #: Which set of fields the hash covers.
+    #:
+    #: A hash chain cannot be extended in place: adding a field to the hashed
+    #: payload would invalidate every row written before it, and verify_chain()
+    #: would report tampering on an untouched journal. So the payload is
+    #: versioned, each row records the version it was written under, and
+    #: verification replays the shape that row was actually hashed with.
+    #: 1 = original fields. 2 = adds `testmode`.
+    hash_version = models.PositiveSmallIntegerField(default=1)
 
     class Meta:
         verbose_name = _("Till sale")
@@ -128,26 +151,29 @@ class PosSale(models.Model):
 
     # -- integrity ---------------------------------------------------------
 
+    #: Version used for rows written from now on.
+    CURRENT_HASH_VERSION = 2
+
     def _hash_payload(self) -> str:
-        """Canonical representation the hash is taken over."""
+        """Canonical representation the hash is taken over, for this row's version."""
+        payload = {
+            "seq": self.seq,
+            "event": self.event_id,
+            "datetime": self.datetime.isoformat(),
+            "device": self.device_serial,
+            "cashier": self.cashier,
+            "order": self.order_code,
+            "payment_type": self.payment_type,
+            "total": str(self.total),
+            "cash_given": None if self.cash_given is None else str(self.cash_given),
+            "cash_change": None if self.cash_change is None else str(self.cash_change),
+            "positions": self.positions,
+            "previous_hash": self.previous_hash,
+        }
+        if self.hash_version >= 2:
+            payload["testmode"] = self.testmode
         return json.dumps(
-            {
-                "seq": self.seq,
-                "event": self.event_id,
-                "datetime": self.datetime.isoformat(),
-                "device": self.device_serial,
-                "cashier": self.cashier,
-                "order": self.order_code,
-                "payment_type": self.payment_type,
-                "total": str(self.total),
-                "cash_given": None if self.cash_given is None else str(self.cash_given),
-                "cash_change": None if self.cash_change is None else str(self.cash_change),
-                "positions": self.positions,
-                "previous_hash": self.previous_hash,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-            ensure_ascii=False,
+            payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
         )
 
     def compute_hash(self) -> str:
@@ -186,7 +212,8 @@ class PosSale(models.Model):
 
     @classmethod
     def record(cls, *, event, order, device, cashier, payment_type, total, positions,
-               idempotency_key, cash_given=None, cash_change=None, attempts=5):
+               idempotency_key, cash_given=None, cash_change=None, testmode=False,
+               attempts=5):
         """
         Append a sale to the journal, chaining it onto the current tail.
 
@@ -203,6 +230,7 @@ class PosSale(models.Model):
                 datetime=now(),
                 device=device,
                 device_serial=device.unique_serial if device else "",
+                device_name=(device.name or "") if device else "",
                 cashier=cashier or "",
                 order=order,
                 order_code=order.code,
@@ -212,6 +240,8 @@ class PosSale(models.Model):
                 cash_change=cash_change,
                 positions=positions,
                 idempotency_key=idempotency_key,
+                testmode=testmode,
+                hash_version=cls.CURRENT_HASH_VERSION,
                 previous_hash=last.hash if last else GENESIS_HASH,
             )
             sale.hash = sale.compute_hash()

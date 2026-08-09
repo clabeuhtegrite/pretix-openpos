@@ -54,6 +54,18 @@ export interface PosEvent {
   date_from: string | null;
 }
 
+/** One hit of the attendee search, as pretix' check-in RPC returns it. */
+export interface AttendeeMatch {
+  id: number;
+  order: string;
+  secret: string;
+  attendee_name: string | null;
+  seat: { name?: string } | null;
+  checkins: { list: number; type?: string }[];
+  require_attention: boolean;
+  order__status: string;
+}
+
 /** Response of pretix' own check-in RPC. */
 export interface RedeemResult {
   status: "ok" | "error" | "incomplete" | "exchange";

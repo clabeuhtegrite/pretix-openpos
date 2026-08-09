@@ -4,6 +4,7 @@ import { api, ApiError } from "../api";
 import { t, type MessageKey } from "../i18n";
 import { newNonce } from "../nonce";
 import type { CheckinListInfo, Pairing, RedeemResult } from "../types";
+import AttendeeSearch from "./AttendeeSearch";
 import QrScanner from "./QrScanner";
 
 /** How long a verdict stays up before scanning resumes. */
@@ -36,7 +37,7 @@ export default function CheckinScreen({ pairing, lists, defaultListId, onClose }
   const [busy, setBusy] = useState(false);
   const [fatal, setFatal] = useState<string | null>(null);
   const [counts, setCounts] = useState({ ok: 0, ko: 0 });
-  const [manual, setManual] = useState("");
+  const [searchOpen, setSearchOpen] = useState(false);
 
   // Refs, not state: these gate the decode callback and must not re-render it.
   const lastCodeRef = useRef<{ code: string; at: number } | null>(null);
@@ -111,9 +112,13 @@ export default function CheckinScreen({ pairing, lists, defaultListId, onClose }
     <QrScanner
       title={t("checkin.title")}
       hint={t("checkin.hint")}
-      paused={busy || verdict !== null}
+      paused={busy || verdict !== null || searchOpen}
       onDecode={submit}
       onClose={onClose}
+      // Tickets carry a QR code and nothing a human could retype, so there is no
+      // manual entry to fall back on here — unlike pairing, where pretix prints
+      // the code as text next to the QR.
+      errorHint={t("scan.cameraRequired")}
       footer={
         <div className="scanner-footer">
           {lists.length > 1 && (
@@ -130,35 +135,31 @@ export default function CheckinScreen({ pairing, lists, defaultListId, onClose }
               ))}
             </select>
           )}
-          <form
-            className="scanner-manual"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void submit(manual);
-              setManual("");
-            }}
-          >
-            <input
-              value={manual}
-              onChange={(e) => setManual(e.target.value)}
-              placeholder={t("checkin.manualPlaceholder")}
-              autoCapitalize="off"
-              autoCorrect="off"
-              spellCheck={false}
-              // A keyboard-wedge barcode reader types here and presses Enter.
-              autoComplete="off"
-            />
-            <button className="btn" type="submit" disabled={busy || !manual.trim()}>
-              {busy ? t("checkin.busy") : t("checkin.submit")}
-            </button>
-          </form>
+          <button className="btn" onClick={() => setSearchOpen(true)} disabled={!listId}>
+            🔍 {t("search.open")}
+          </button>
           <div className="scanner-counter">
-            {t("checkin.counter", { ok: counts.ok, ko: counts.ko })}
+            {busy ? t("checkin.busy") : t("checkin.counter", { ok: counts.ok, ko: counts.ko })}
           </div>
           {fatal && <div className="error-banner">{fatal}</div>}
         </div>
       }
     >
+      {searchOpen && listId && (
+        <AttendeeSearch
+          pairing={pairing}
+          listId={listId}
+          onPick={(match) => {
+            setSearchOpen(false);
+            // The repeat guard is keyed on the code; a deliberate pick of the
+            // same person should not be swallowed as a duplicate frame.
+            lastCodeRef.current = null;
+            void submit(match.secret);
+          }}
+          onClose={() => setSearchOpen(false)}
+        />
+      )}
+
       {verdict && (
         <div className={`verdict ${tone}`} onClick={resume} role="status">
           <div className="verdict-headline">

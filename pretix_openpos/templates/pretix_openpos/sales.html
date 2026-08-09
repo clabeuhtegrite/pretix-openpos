@@ -31,7 +31,12 @@
                 <tbody>
                 {% for bucket in by_device %}
                     <tr>
-                        <td><code>{{ bucket.label }}</code></td>
+                        <td>
+                            {{ bucket.label }}
+                            {% if bucket.serial %}
+                                <br><small class="text-muted"><code>{{ bucket.serial }}</code></small>
+                            {% endif %}
+                        </td>
                         <td class="text-right">{{ bucket.count }}</td>
                         <td class="text-right">{{ bucket.cash|money:currency }}</td>
                         <td class="text-right">{{ bucket.card|money:currency }}</td>
@@ -41,15 +46,27 @@
                     <tr><td colspan="5">{% trans "Nothing has been sold at a till yet." %}</td></tr>
                 {% endfor %}
                 </tbody>
-                {% if by_device %}
+                {% if by_device or testmode_totals %}
                     <tfoot>
-                    <tr>
-                        <th>{% trans "All tills" %}</th>
-                        <th class="text-right">{{ totals.count }}</th>
-                        <th class="text-right">{{ totals.cash|money:currency }}</th>
-                        <th class="text-right">{{ totals.card|money:currency }}</th>
-                        <th class="text-right">{{ totals.total|money:currency }}</th>
-                    </tr>
+                    {% if by_device %}
+                        <tr>
+                            <th>{% trans "All tills" %}</th>
+                            <th class="text-right">{{ totals.count }}</th>
+                            <th class="text-right">{{ totals.cash|money:currency }}</th>
+                            <th class="text-right">{{ totals.card|money:currency }}</th>
+                            <th class="text-right">{{ totals.total|money:currency }}</th>
+                        </tr>
+                    {% endif %}
+                    {% if testmode_totals %}
+                        {# Kept out of the totals above: this money never existed. #}
+                        <tr class="text-muted">
+                            <td>{% trans "Test mode (not counted)" %}</td>
+                            <td class="text-right">{{ testmode_totals.count }}</td>
+                            <td class="text-right">{{ testmode_totals.cash|money:currency }}</td>
+                            <td class="text-right">{{ testmode_totals.card|money:currency }}</td>
+                            <td class="text-right">{{ testmode_totals.total|money:currency }}</td>
+                        </tr>
+                    {% endif %}
                     </tfoot>
                 {% endif %}
             </table>
@@ -84,7 +101,12 @@
                             {{ sale.order_code }}
                         {% endif %}
                     </td>
-                    <td><code>{{ sale.device_serial|default:"—" }}</code></td>
+                    <td>
+                        {{ sale.device_name|default:sale.device_serial|default:"—" }}
+                        {% if sale.testmode %}
+                            <span class="label label-warning">{% trans "test" %}</span>
+                        {% endif %}
+                    </td>
                     <td>{{ sale.cashier|default:"—" }}</td>
                     <td>{{ sale.get_payment_type_display }}</td>
                     <td class="text-right">{{ sale.total|money:currency }}</td>

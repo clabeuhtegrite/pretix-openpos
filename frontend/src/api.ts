@@ -1,5 +1,5 @@
 import type {
-  Catalog, InitializeResponse, Pairing, PosConfig, PosEvent,
+  AttendeeMatch, Catalog, InitializeResponse, Pairing, PosConfig, PosEvent,
   RedeemResult, SaleResult, SummaryResponse,
 } from "./types";
 
@@ -138,6 +138,24 @@ export const api = {
   /** Events this till may sell for: it has access AND Open POS is enabled. */
   posEvents(organizer: string, token: string): Promise<{ results: PosEvent[] }> {
     return request(`/organizers/${organizer}/openpos/`, { token });
+  },
+
+  /**
+   * Look a ticket up by name, e-mail or order code.
+   *
+   * The way through when a code will not scan — a crumpled printout, a dead
+   * phone screen, a ticket left at home. pretix' own search backs it, so a
+   * partial name, an e-mail or an order code all work through one field.
+   */
+  searchAttendees(
+    p: Pairing,
+    { listId, query, signal }: { listId: number; query: string; signal?: AbortSignal },
+  ): Promise<{ results: AttendeeMatch[] }> {
+    const params = new URLSearchParams({ list: String(listId), search: query });
+    return request(`/organizers/${p.organizer}/checkinrpc/search/?${params}`, {
+      token: p.token,
+      signal,
+    });
   },
 
   /**
