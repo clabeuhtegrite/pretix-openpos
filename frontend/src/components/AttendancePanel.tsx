@@ -88,8 +88,7 @@ function Fork({ from, to, top, bottom }: { from: number; to: number[]; top: numb
  * three-level chart whose bottom row reads "0 left" would be structure for the
  * sake of structure. As soon as one exit scan exists, the split appears.
  */
-function FlowChart({ data }: { data: Attendance }) {
-  const withExits = data.exited > 0;
+function FlowChart({ data, withExits }: { data: Attendance; withExits: boolean }) {
   const height = withExits ? 250 : 166;
 
   const expected: Box = {
@@ -167,6 +166,10 @@ function FlowChart({ data }: { data: Attendance }) {
 
 export default function AttendancePanel({ data, busy, error, onRefresh, onClose }: Props) {
   const percent = data && data.expected ? Math.round((data.entered * 100) / data.expected) : 0;
+  // One rule for the whole panel: the "who came in at all" dimension only earns
+  // its place once someone has been scanned back out. Without exit scans it is
+  // the same number as "on site", in the chart as in the table.
+  const withExits = !!data && data.exited > 0;
 
   return (
     <div className="overlay overlay-top" onClick={onClose}>
@@ -186,7 +189,7 @@ export default function AttendancePanel({ data, busy, error, onRefresh, onClose 
 
             {data.expected > 0 ? (
               <>
-                <FlowChart data={data} />
+                <FlowChart data={data} withExits={withExits} />
                 <div className="fill-bar" aria-hidden="true">
                   <span className="fill-bar-value" style={{ width: `${percent}%` }} />
                 </div>
@@ -210,7 +213,7 @@ export default function AttendancePanel({ data, busy, error, onRefresh, onClose 
                     <tr>
                       <th>{t("attendance.product")}</th>
                       <th>{t("attendance.onSite")}</th>
-                      <th>{t("attendance.entered")}</th>
+                      {withExits && <th>{t("attendance.entered")}</th>}
                       <th>{t("attendance.expectedShort")}</th>
                     </tr>
                   </thead>
@@ -221,7 +224,7 @@ export default function AttendancePanel({ data, busy, error, onRefresh, onClose 
                         <td>
                           <strong>{item.inside}</strong>
                         </td>
-                        <td>{item.entered}</td>
+                        {withExits && <td>{item.entered}</td>}
                         <td>{item.expected}</td>
                       </tr>
                     ))}
