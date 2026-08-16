@@ -162,9 +162,10 @@ rather than to a rolling minor.
    empty to charge the same as the online shop.
 4. **Choose the check-in list** under *Open POS → Settings*, so tickets are
    checked in as they are sold. Leave it empty to sell without checking in. The
-   same screen has **Issue invoices for till sales**: tick it if you want a
-   cancellation from the till to produce a credit note, which also requires
-   invoicing to be on for the event at all.
+   same screen has **Issue invoices for till sales**, on by default: it is what
+   lets a cancellation from the till issue a credit note. It covers the Open POS
+   channel only — your webshop keeps its own invoicing rules — and unticking it
+   hands the decision back to them.
 5. **Create a device** under the organizer's *Devices*: give it access to the
    event and pick the **Open POS** security profile. pretix shows a pairing QR
    code.

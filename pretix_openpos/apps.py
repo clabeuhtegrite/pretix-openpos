@@ -31,3 +31,17 @@ class PluginApp(PluginConfig):
 
     def ready(self):
         from . import signals  # noqa
+
+    def installed(self, event):
+        """
+        Called by pretix when the plugin is switched on for an event.
+
+        Till sales are invoiced from the start, because that is what makes a
+        cancellation from the till produce a credit note rather than just a
+        reversal. It only concerns the Open POS channel — the webshop keeps
+        whatever invoicing rules the organiser set for it — and the box that
+        controls it sits in the plugin's own settings, one click from off.
+        """
+        from .invoicing import enable_pos_invoices
+
+        enable_pos_invoices(event)

@@ -167,13 +167,25 @@ def main():
           f"{replay.get('order', {}).get('code')} vs {sale['order']['code']}")
 
     print("\n-- price is not client-controlled --------------------------")
+    # A price sent without declaring the sale offline is refused outright. It
+    # used to be silently ignored, which was safe but said nothing; a 400 tells
+    # whoever sent it that the server, and only the server, sets prices.
     status, spoof = call("POST", f"/organizers/{ORG}/events/{EVENT}/openpos/checkout/", {
         "idempotency_key": str(uuid.uuid4()),
         "positions": [{"item": full["id"], "count": 1, "price": "0.01"}],
         "payment_type": "card",
     }, token)
-    check("price field ignored", status == 201 and float(spoof["order"]["total"]) == float(full["price"]),
-          f"HTTP {status}: total {spoof.get('order', {}).get('total')} vs {full['price']}")
+    check("a price from the till is refused", status == 400, f"HTTP {status}: {spoof}")
+
+    # And the same basket, priced by the server, goes through for its real price.
+    status, card_sale = call("POST", f"/organizers/{ORG}/events/{EVENT}/openpos/checkout/", {
+        "idempotency_key": str(uuid.uuid4()),
+        "positions": [{"item": full["id"], "count": 1}],
+        "payment_type": "card",
+    }, token)
+    check("the server prices it itself",
+          status == 201 and float(card_sale["order"]["total"]) == float(full["price"]),
+          f"HTTP {status}: total {card_sale.get('order', {}).get('total')} vs {full['price']}")
 
     print("\n-- hors ligne : liste embarquée -----------------------------")
     status, snapshot = call("GET", f"/organizers/{ORG}/events/{EVENT}/openpos/offline/", token=token)
@@ -291,13 +303,16 @@ def main():
     if status == 200 and isinstance(before, dict) and "inside" in before:
         print(f"        {after['inside']} on site, {after['entered']} in, "
               f"{after['not_arrived']} still to come (of {after['expected']})")
-        # Three admission tickets were sold since the snapshot — two on the cash
-        # sale, one on the card sale — and each walked its holder in as it was
-        # sold. Nothing else in between checks anybody in: the merch sale admits
-        # nobody and the replay returns the original order without re-entering.
+        # Every admission ticket sold since the snapshot walked its holder in as
+        # it was sold: two on the cash sale, one on the offline sale replayed,
+        # one on the card sale. Nothing else in between admits anybody — the
+        # merch sale carries no admission product, the replay of an identical
+        # request returns the original order without re-entering, and cancelling
+        # the merch sale takes nobody out of the room.
+        admissions_sold = 2 + 1 + 1
         check("every ticket sold at the till walked in",
-              after["inside"] - before["inside"] == 3,
-              f"{before['inside']} -> {after['inside']}")
+              after["inside"] - before["inside"] == admissions_sold,
+              f"{before['inside']} -> {after['inside']}, attendu +{admissions_sold}")
         # The three beers and two softs went through the same tills, and a drink
         # admits nobody: they must not move any figure above.
         check("merch is not a person",
@@ -319,13 +334,18 @@ def main():
         print(f"        all tills : {summary['event']}")
         # The cancelled sale is netted off here, which is the whole point: the
         # drawer holds what the journal says it holds, cancellations included.
-        expected_cash = expected_total + merch_total - cancelled_cash
+        # Everything this run put in the drawer: the cash sale, the merch sale,
+        # the offline sale replayed at the price it was charged, less the one
+        # cancellation.
+        expected_cash = expected_total + merch_total + off_price - cancelled_cash
         check("cash total is net of the cancellation",
               abs(float(summary["device"]["cash"]) - expected_cash) < 0.005,
               f"got {summary['device']['cash']}, expected {expected_cash:.2f}")
+        # Four baskets went through this till: cash, merch, the offline one and
+        # the card one. The cancellation is not a fifth.
         check("the cancellation is counted apart from the sales",
               summary["device"]["cancellations"] == (1 if cancelled_cash else 0)
-              and summary["device"]["count"] == 3,
+              and summary["device"]["count"] == 4,
               str(summary["device"]))
 
     return report()

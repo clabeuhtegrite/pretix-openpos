@@ -1,6 +1,6 @@
 # Fonctionnement de pretix-openpos
 
-Documentation de fonctionnement du plugin, version 0.6.0. Elle couvre trois
+Documentation de fonctionnement du plugin, version 0.6.1. Elle couvre trois
 choses, dans cet ordre : ce que le plugin ajoute à pretix, comment le mettre en
 service, et ce qui se passe exactement quand un bénévole encaisse.
 
@@ -177,7 +177,7 @@ En Docker/Kubernetes, [`deploy/Dockerfile`](../deploy/Dockerfile) intègre le pl
 
 ```bash
 cd frontend && npm run build && cd ..
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.6.0 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.6.1 .
 ```
 
 Deux pièges :
@@ -523,15 +523,33 @@ comme ce qui s'est passé : un avoir imputé sur une vente neuve.
   articles au panier, en retirer un et réencaisser fait le même travail, avec
   une piste écrite en trois documents plutôt qu'une modification silencieuse.
 
-### Ce qu'il faut activer pour avoir des avoirs
+### Les factures des ventes au guichet
 
-pretix n'émet de facture que pour les canaux de vente qu'on lui désigne, et le
-défaut est `web` seul : sans réglage, une vente au guichet n'a **pas** de
-facture, donc son annulation n'a pas d'avoir — la contrepassation et le
-remboursement, eux, ont bien lieu. La case **« Émettre une facture pour les
-ventes au guichet »** (*Open POS → Réglages*) ajoute le canal `openpos` à la
-liste de pretix sans toucher aux autres. Il faut aussi que la facturation soit
-activée pour l'événement (*Réglages → Facturation*).
+**Activées par défaut**, et c'est le plugin qui s'en charge, pas les règles de
+l'événement. La raison tient en une phrase : sans facture, pas d'avoir — donc
+une annulation ne produirait qu'une contrepassation et un remboursement, ce qui
+est correct mais incomplet.
+
+Or les réglages de pretix ne pouvaient pas répondre à cette question. La
+facturation se règle par événement (`invoice_generate` : jamais, à la demande,
+**à la main depuis le back-office**, à la commande, au paiement) et par canal de
+vente (`invoice_generate_sales_channels`, dont le défaut ne liste que la
+boutique). « À la main » est un choix parfaitement sensé pour une billetterie en
+ligne et absurde pour un guichet : personne n'ouvre le back-office pour chaque
+bière vendue à une porte.
+
+Le plugin répond donc pour **son** canal et pour lui seul
+([invoicing.py](../pretix_openpos/invoicing.py)) : la case « Émettre une facture
+pour les ventes au guichet » (*Open POS → Réglages*) signifie « une vente au
+guichet est facturée », quoi que fasse l'événement par ailleurs. La boutique en
+ligne garde exactement les règles qu'on lui a données. Décocher rend la main aux
+réglages de pretix.
+
+La case est cochée à l'activation du plugin sur un événement (hook `installed`),
+et un événement où personne n'a jamais touché ce réglage est traité comme cochée
+— vérifié sur un événement en `invoice_generate = "admin"` avec le seul canal
+`web` : la vente produit sa facture et l'annulation son avoir, sans qu'aucun
+autre réglage n'ait bougé.
 
 ### Garde-fous
 

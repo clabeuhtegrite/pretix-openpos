@@ -21,6 +21,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 
 from ..channels import POS_CHANNEL, PosSalesChannelType
+from ..invoicing import pos_invoices_enabled
 from ..models import PosPrice, PosSale
 from ..payment import CARD, CASH
 
@@ -1025,14 +1026,26 @@ class OpenPosViewSet(viewsets.ViewSet):
             )
 
         settings = request.event.settings
-        wants_invoice = invoice_qualified(order) and (
-            settings.get("invoice_generate") == "True"
+        # The plugin answers for its own channel. An event set to invoice "by
+        # hand" — a reasonable webshop policy — would otherwise leave every till
+        # sale without an invoice, and a cancellation from the till without a
+        # credit note to issue. The event-wide modes still apply on top, so an
+        # organiser who invoices everything keeps invoicing everything.
+        wants_invoice = (
+            pos_invoices_enabled(request.event)
             or (
-                settings.get("invoice_generate") == "paid"
-                and order.status == Order.STATUS_PAID
+                invoice_qualified(order)
+                and (
+                    settings.get("invoice_generate") == "True"
+                    or (
+                        settings.get("invoice_generate") == "paid"
+                        and order.status == Order.STATUS_PAID
+                    )
+                )
             )
         )
-        if wants_invoice and not order.invoices.last():
+        # A zero-total order is not invoiceable anywhere, whatever the switch says.
+        if wants_invoice and order.total and not order.invoices.last():
             try:
                 generate_invoice(order, trigger_pdf=True)
             except Exception as e:

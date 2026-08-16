@@ -100,6 +100,9 @@ with scopes_disabled():
         event.settings.flush()
         after = event.settings.get("invoice_generate_sales_channels", as_type=list) or []
         check("ticking it adds the POS channel to the invoiced ones", "openpos" in after, str(after))
+        check("and records the plugin's own switch",
+              event.settings.get("openpos_invoices", as_type=bool) is True,
+              str(event.settings.get("openpos_invoices")))
         check("it leaves the other channels alone",
               all(c in after for c in before if c != "openpos"), f"{before} -> {after}")
 
@@ -110,9 +113,21 @@ with scopes_disabled():
         after_off = event.settings.get("invoice_generate_sales_channels", as_type=list) or []
         check("unticking it removes only that channel",
               "openpos" not in after_off and "web" in after_off, str(after_off))
+        check("and the switch says so",
+              event.settings.get("openpos_invoices", as_type=bool) is False,
+              str(event.settings.get("openpos_invoices")))
+
+        # An event nobody has configured invoices its till sales: that is the
+        # whole point of the default, and the reason a credit note exists to be
+        # issued when a sale is cancelled.
+        from pretix_openpos.invoicing import pos_invoices_enabled
+        event.settings.delete("openpos_invoices")
+        event.settings.flush()
+        check("an untouched event invoices till sales by default",
+              pos_invoices_enabled(event) is True, "default is off")
 
         # Leave the dev event exactly as it was found.
-        event.settings.set("invoice_generate_sales_channels", before or ["web", "openpos"])
+        event.settings.set("invoice_generate_sales_channels", before or ["web"])
         if before_list:
             event.settings.set("openpos_checkin_list", before_list)
 

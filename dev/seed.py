@@ -41,13 +41,9 @@ with scopes_disabled():
         event.plugins = ",".join(filter(None, [event.plugins, "pretix_openpos"]))
         event.save(update_fields=["plugins"])
     event.settings.set("timezone", "Europe/Paris")
-    # Invoices on paid orders, so the cancellation path can be exercised for
-    # real: cancelling an invoiced order is what makes pretix issue the credit
-    # note, and an unconfigured event would silently skip that half of it.
-    # Both halves are needed — pretix only invoices the sales channels it is
-    # told to, and "web" alone is the default.
-    event.settings.set("invoice_generate", "paid")
-    event.settings.set("invoice_generate_sales_channels", ["web", "openpos"])
+    # Deliberately left as an ordinary event would be — invoices by hand, web
+    # channel only. Till sales are invoiced anyway, by the plugin, and the smoke
+    # test proves it from here rather than from a fixture that helped it along.
 
     pos_channel = organizer.sales_channels.get(identifier="openpos")
     web_channel = organizer.sales_channels.get(identifier="web")
