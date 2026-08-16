@@ -122,6 +122,11 @@ button {
   font-size: 18px;
 }
 
+/* Lit, so the operator can tell at a glance in a dark doorway. */
+.icon-button.is-on {
+  background: var(--warning);
+}
+
 .workspace {
   flex: 1;
   display: flex;
@@ -441,6 +446,17 @@ button {
 
 .amount-display.change .value {
   color: var(--success);
+}
+
+/* The credit is money the customer has already been granted, so it reads like
+   what it is: a deduction, not a charge. */
+.amount-display.credit {
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+
+.amount-display.credit .value {
+  color: var(--warning);
 }
 
 .amount-display.short .value {
@@ -1128,6 +1144,13 @@ table.takings thead th {
 
 .verdict.ko {
   background: var(--danger);
+  color: #fff;
+}
+
+/* Accepted, but nobody walked in. The same blue the sale screen uses for a sale
+   that admitted no one, so the two screens say the same thing the same way. */
+.verdict.info {
+  background: var(--accent-strong);
   color: #fff;
 }
 

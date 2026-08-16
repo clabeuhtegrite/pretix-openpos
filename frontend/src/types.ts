@@ -41,6 +41,8 @@ export interface PosConfig {
     list_name: string | null;
     lists: CheckinListInfo[];
   };
+  /** Ids of the event's admission products — the ones that let a person in. */
+  admission_items: number[];
   cash_denominations: string[];
 }
 
@@ -198,8 +200,9 @@ export interface JournalLine {
 
 export interface History {
   device: string | null;
-  since: string | null;
   results: JournalLine[];
+  /** More entries exist than the till shows: the event ran longer than the cap. */
+  truncated: boolean;
 }
 
 export interface CancelResult {

@@ -56,6 +56,21 @@ function buzz(): void {
   }
 }
 
+/**
+ * Whether a scan let a person in, or merely recorded something.
+ *
+ * A check-in list set to "all products" accepts a T-shirt and pretix dutifully
+ * records the scan — but a merch line has no door, and answering it with the
+ * same green "let them in" as a ticket is how a door loses track of its own
+ * numbers. An unknown product counts as admission on purpose: telling somebody
+ * holding a valid ticket that it admits nobody is the failure that matters, and
+ * it must not happen because a product was created after the app loaded.
+ */
+function admits(result: RedeemResult, admissionItems: number[]): boolean {
+  const item = result.position?.item;
+  return item == null || admissionItems.includes(item);
+}
+
 function reasonLabel(result: RedeemResult): string {
   if (result.status === "incomplete") return t("reason.incomplete");
   const key = `reason.${result.reason ?? "unknown"}` as MessageKey;
@@ -69,17 +84,21 @@ interface Props {
   pairing: Pairing;
   lists: CheckinListInfo[];
   defaultListId: number | null;
+  /** Ids of the products that admit a person; everything else is merchandise. */
+  admissionItems: number[];
   onClose: () => void;
 }
 
-export default function CheckinScreen({ pairing, lists, defaultListId, onClose }: Props) {
+export default function CheckinScreen({
+  pairing, lists, defaultListId, admissionItems, onClose,
+}: Props) {
   const [listId, setListId] = useState<number | null>(
     defaultListId ?? (lists.length ? lists[0].id : null),
   );
   const [verdict, setVerdict] = useState<RedeemResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [fatal, setFatal] = useState<string | null>(null);
-  const [counts, setCounts] = useState({ ok: 0, ko: 0 });
+  const [counts, setCounts] = useState({ ok: 0, ko: 0, other: 0 });
   const [searchOpen, setSearchOpen] = useState(false);
   const [attendanceOpen, setAttendanceOpen] = useState(false);
   const [attendance, setAttendance] = useState<Attendance | null>(null);
@@ -165,14 +184,17 @@ export default function CheckinScreen({ pairing, lists, defaultListId, onClose }
           nonce: newNonce(),
         });
         setVerdict(result);
-        setCounts((c) =>
-          result.status === "ok" ? { ...c, ok: c.ok + 1 } : { ...c, ko: c.ko + 1 },
-        );
+        setCounts((c) => {
+          if (result.status !== "ok") return { ...c, ko: c.ko + 1 };
+          return admits(result, admissionItems)
+            ? { ...c, ok: c.ok + 1 }
+            : { ...c, other: c.other + 1 };
+        });
         if (result.status !== "ok") buzz();
         if (result.status === "ok") {
-          // The room just changed. Ask the server rather than adding one here:
-          // this screen has no way of knowing whether the product that was just
-          // scanned admits anybody, and a head count that drifts is worthless.
+          // The room may just have changed. Still asked of the server rather
+          // than added up here: the figure counts every door and every till,
+          // and one kept locally would drift from the first scan made elsewhere.
           window.clearTimeout(settleRef.current);
           settleRef.current = window.setTimeout(() => void loadAttendance(), ATTENDANCE_SETTLE_MS);
         }
@@ -190,7 +212,7 @@ export default function CheckinScreen({ pairing, lists, defaultListId, onClose }
         setBusy(false);
       }
     },
-    [listId, pairing, loadAttendance],
+    [listId, pairing, loadAttendance, admissionItems],
   );
 
   if (!lists.length) {
@@ -207,8 +229,15 @@ export default function CheckinScreen({ pairing, lists, defaultListId, onClose }
     );
   }
 
+  const admitted = verdict !== null && verdict.status === "ok" && admits(verdict, admissionItems);
   const tone =
-    verdict?.status === "ok" ? (verdict.require_attention ? "warn" : "ok") : "ko";
+    verdict?.status !== "ok"
+      ? "ko"
+      : !admitted
+        ? "info"
+        : verdict.require_attention
+          ? "warn"
+          : "ok";
 
   return (
     <QrScanner
@@ -260,7 +289,10 @@ export default function CheckinScreen({ pairing, lists, defaultListId, onClose }
             </button>
           </div>
           <div className="scanner-counter">
-            {busy ? t("checkin.busy") : t("checkin.counter", { ok: counts.ok, ko: counts.ko })}
+            {busy
+              ? t("checkin.busy")
+              : t("checkin.counter", { ok: counts.ok, ko: counts.ko }) +
+                (counts.other > 0 ? ` · ${t("checkin.counterOther", { n: counts.other })}` : "")}
           </div>
           {fatal && <div className="error-banner">{fatal}</div>}
         </div>
@@ -294,8 +326,15 @@ export default function CheckinScreen({ pairing, lists, defaultListId, onClose }
       {verdict && (
         <div className={`verdict ${tone}`} onClick={resume} role="status">
           <div className="verdict-headline">
-            {verdict.status === "ok" ? t("checkin.ok") : reasonLabel(verdict)}
+            {verdict.status !== "ok"
+              ? reasonLabel(verdict)
+              : admitted
+                ? t("checkin.ok")
+                : t("checkin.noEntry")}
           </div>
+          {verdict.status === "ok" && !admitted && (
+            <div className="verdict-note">{t("checkin.noEntryHint")}</div>
+          )}
           {verdict.status === "ok" && verdict.require_attention && (
             <div className="verdict-attention">{t("checkin.attention")}</div>
           )}

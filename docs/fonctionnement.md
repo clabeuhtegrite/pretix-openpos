@@ -1,6 +1,6 @@
 # Fonctionnement de pretix-openpos
 
-Documentation de fonctionnement du plugin, version 0.5.0. Elle couvre trois
+Documentation de fonctionnement du plugin, version 0.5.1. Elle couvre trois
 choses, dans cet ordre : ce que le plugin ajoute à pretix, comment le mettre en
 service, et ce qui se passe exactement quand un bénévole encaisse.
 
@@ -177,7 +177,7 @@ En Docker/Kubernetes, [`deploy/Dockerfile`](../deploy/Dockerfile) intègre le pl
 
 ```bash
 cd frontend && npm run build && cd ..
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.5.0 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.5.1 .
 ```
 
 Deux pièges :
@@ -248,8 +248,9 @@ proposent ni les mêmes API ni les mêmes gestes, et chaque écart est traité :
 | Détection du mode installé | `display-mode: standalone` | `navigator.standalone`, qu'Apple n'a jamais remplacé — les deux sont consultés |
 | Geste **retour** | Ferme le panneau ouvert, pas la caisse (chaque panneau empile une entrée d'historique) | N'existe pas |
 | Lecture des QR | jsQR, jamais `BarcodeDetector` | Idem — l'API est derrière un drapeau sur 17 et cassée depuis 18 |
-| Écran allumé | Wake Lock | Wake Lock depuis Safari 16.4 ; absent avant, on s'en passe sans rien dire |
+| Écran allumé | Wake Lock | Wake Lock depuis Safari 16.4 ; absent avant, on s'en passe sans rien dire. Le mode économie d'énergie le refuse — c'est un verrou de veille, pas un blocage du bouton latéral |
 | Vibration au refus | Oui | Non — l'API n'existe pas sur iOS ; le verdict rouge reste la réponse |
+| Lampe au scan | Bouton 🔦 quand la caméra en a une | Aucune API : pas de bouton |
 | Encoche / barre de gestes | `env(safe-area-inset-*)` sur toutes les couches plein écran | Idem, `viewport-fit=cover` dans le shell |
 | Clavier logiciel | Redimensionne la vue | La recouvre : les panneaux à saisie se calent en haut d'écran pour rester visibles dans les deux cas |
 
@@ -374,6 +375,23 @@ une liste. C'est [CheckinScreen.tsx](../frontend/src/components/CheckinScreen.ts
   plus longtemps que le verdict qu'il doit couvrir.
 - **Vibration sur refus** : Android vibre, iOS n'expose rien de tel et ne vibre
   pas. C'est un rappel, jamais la réponse — celle-ci reste l'écran rouge.
+- **Lampe** : bouton 🔦 dans la barre, affiché **uniquement si la caméra en a
+  une** (`track.getCapabilities().torch`). Android l'expose, Safari n'expose rien
+  de tel sur aucune version d'iOS : sur iPhone le bouton n'apparaît pas, ce qui
+  vaut mieux qu'un bouton inerte dans une entrée sombre. Si la capacité est
+  annoncée puis refusée, le bouton disparaît au lieu d'insister.
+- **Trois verdicts, pas deux.** Vert « Entrée autorisée » quand quelqu'un entre.
+  Rouge avec le motif quand c'est refusé. Et **bleu « Enregistré · pas une
+  entrée »** quand le scan est accepté pour un produit qui ne fait entrer
+  personne — ce qu'une liste en `all_products` autorise très bien pour un
+  t-shirt. Le compteur les sépare (« 3 admis · 1 refusé · 1 sans entrée ») et
+  l'effectif ne bouge pas : les mêmes règles que côté vente, où un panier de
+  boissons affiche « Vente enregistrée » et non « Laissez entrer ».
+  La liste des produits d'admission vient de `config/` (`admission_items`) et
+  couvre **tout l'événement**, pas seulement ce qui est vendable au guichet : un
+  billet vendu en ligne doit être reconnu comme une entrée. Un produit absent de
+  cette liste est traité comme une admission — annoncer « pas une entrée » à
+  quelqu'un qui tient un billet valable serait la pire des erreurs.
 - **L'appel est celui de pretix** (`checkinrpc/redeem`), pas un endpoint maison :
   le moteur de règles, les secrets révoqués ou bloqués et les motifs de refus
   exacts viennent de pretix plutôt que d'une réimplémentation qui dériverait.
@@ -444,7 +462,10 @@ Bouton 🧾 de la barre supérieure. C'est
 
 ### Ce que la caisse montre
 
-Les écritures du **jour**, **de cette caisse seule** — pas de la soirée entière.
+Les écritures de **tout l'événement**, **de cette caisse seule**. Pas du jour
+calendaire : une soirée passe minuit, et couper l'historique à 00:00 le viderait
+en plein service, précisément quand une correction devient probable. Au-delà de
+100 écritures, la caisse affiche les plus récentes et le dit (`truncated`).
 Une annulation se lit d'un coup d'œil : cadre pointillé, montant négatif en
 ambre, « annule la #13 » ; la vente contrepassée porte la mention « annulée ».
 Une caisse ne corrige donc que ses propres erreurs ; les autres se corrigent sur
@@ -465,8 +486,8 @@ documents**, là où un tableur aurait changé une ligne :
    l'argent est ressorti, sans quoi pretix continuerait d'afficher le paiement
    comme encaissé. Puis une **ligne neuve** au journal, de montant négatif,
    pointant sur le `seq` de la vente et portant le motif saisi.
-3. **La nouvelle vente**, si l'opérateur reprend les articles au panier : une
-   commande neuve, sa propre facture, sa propre ligne de journal.
+3. **La nouvelle vente**, si l'opérateur corrige : une commande neuve, sa propre
+   facture, sa propre ligne de journal.
 
 Conséquence directe : les recettes restent **la somme de la colonne**. Une
 annulation étant négative, le tiroir se réconcilie sans arithmétique — et le
@@ -474,10 +495,29 @@ relevé le dit explicitement (« 2 annulations sont déjà déduites de ces
 montants »), parce qu'une caisse qui semble manquer exactement le montant d'une
 vente annulée ne manque rien du tout.
 
+### L'argent ne bouge qu'une fois
+
+Après l'annulation, la caisse ne réclame **pas** de rendre la somme : elle
+propose deux issues, et l'argent ne circule que sur l'une d'elles.
+
+- **« Corriger la commande »** remet les articles au panier et garde l'avoir en
+  mémoire. À l'encaissement, le panneau affiche « À payer 15,00 € / Avoir HWMKJ
+  −18,00 € / **À rendre 3,00 €** » — ou « Reste à encaisser » dans l'autre sens.
+  Personne ne compte 18 € hors du tiroir pour en réencaisser 15 aussitôt.
+- **« Rendre 18,00 € et terminer »** clôt le dossier quand il n'y a rien à
+  corriger. Le montant est écrit sur le bouton, pas dans un avertissement à
+  côté : c'est le geste qui le porte.
+
+La commande neuve vaut son plein montant et est enregistrée comme telle —
+l'avoir est une affaire de tiroir, pas de commande. Le `cash_given` envoyé au
+serveur vaut donc avoir + espèces reçues, si bien que le rendu calculé par le
+serveur est exactement celui que l'opérateur compte, et que le journal se lit
+comme ce qui s'est passé : un avoir imputé sur une vente neuve.
+
 ### Ce que la caisse ne fait pas à votre place
 
-- **L'argent physique.** Espèces : « Rendez 52,50 € sur la caisse. » Carte :
-  « Remboursez le client sur le TPE » — le plugin ne pilote aucun terminal, et
+- **L'argent physique.** Espèces : « Rendez 3,00 € sur la caisse. » Carte :
+  « Remboursez 3,00 € sur le TPE » — le plugin ne pilote aucun terminal, et
   prétendre le contraire serait pire que se taire.
 - **Le remboursement partiel.** Une vente s'annule en entier. Reprendre les
   articles au panier, en retirer un et réencaisser fait le même travail, avec
@@ -499,7 +539,6 @@ activée pour l'événement (*Réglages → Facturation*).
 |---|---|
 | Vente d'une autre caisse | 400, « cette vente a été faite sur une autre caisse » |
 | Vente déjà annulée | 400, et le bouton n'est de toute façon plus proposé |
-| Vente d'un jour antérieur | 400 : passé minuit, c'est un travail de back-office |
 | Rejeu de la même requête | 200 avec `replayed: true`, la première annulation est renvoyée |
 | Commande purgée (mode test) | 400 : le journal survit à la commande, pas l'inverse |
 | pretix refuse l'annulation | 400 avec le motif de pretix, tel quel |
@@ -616,12 +655,12 @@ Base : `/api/v1`. Authentification : `Authorization: Device <token>`.
 |---|---|---|
 | `POST` | `/device/initialize` | Appairage (endpoint pretix natif) |
 | `GET` | `/organizers/<org>/openpos/` | Événements vendables par cette caisse |
-| `GET` | `/organizers/<org>/events/<ev>/openpos/config/` | Événement, device, listes de contrôle, coupures |
+| `GET` | `/organizers/<org>/events/<ev>/openpos/config/` | Événement, device, listes de contrôle, produits d'admission, coupures |
 | `GET` | `…/openpos/catalog/` | Catalogue par catégorie, prix sur place, stock restant |
 | `POST` | `…/openpos/checkout/` | Encaissement |
 | `GET` | `…/openpos/summary/` | Relevé du jour |
 | `GET` | `…/openpos/attendance/?list=<id>` | Présents sur place, sur une liste de contrôle |
-| `GET` | `…/openpos/history/` | Journal du jour, **de cette caisse seule** |
+| `GET` | `…/openpos/history/` | Journal de l'événement, **de cette caisse seule** (100 dernières, `truncated` si tronqué) |
 | `POST` | `…/openpos/cancel/` | Annule une vente de cette caisse (avoir + remboursement + contrepassation) |
 | `POST` | `/organizers/<org>/checkinrpc/redeem/` | Pointage (endpoint pretix natif) |
 | `GET` | `/organizers/<org>/checkinrpc/search/` | Recherche de participant (natif) |

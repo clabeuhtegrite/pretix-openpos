@@ -13,10 +13,20 @@ export function useWakeLock(enabled: boolean): void {
 
     let sentinel: WakeLockSentinel | null = null;
     let released = false;
+    // The system can hand the lock back at any time — low power mode, a call, a
+    // permission sheet. Taking it again is right, looping forever if it is
+    // being refused in substance is not.
+    let retakes = 0;
 
     const acquire = async () => {
       try {
         sentinel = await navigator.wakeLock.request("screen");
+        sentinel.addEventListener("release", () => {
+          if (released || retakes >= 20) return;
+          if (document.visibilityState !== "visible") return;
+          retakes += 1;
+          void acquire();
+        });
       } catch {
         // Denied, or the tab is in the background. Nothing useful to say.
       }

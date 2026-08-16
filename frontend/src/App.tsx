@@ -126,6 +126,14 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [checkinOpen, setCheckinOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  /**
+   * Money already taken off the customer by a cancellation they are correcting.
+   *
+   * Held here rather than in the panel that created it, because it has to
+   * outlive that panel: it is spent at the payment step, against a basket the
+   * operator may still be editing.
+   */
+  const [credit, setCredit] = useState<{ amountCents: number; order: string } | null>(null);
 
   // Evaluated once: display-mode does not change without a reload, and a value
   // that flickers would bounce the operator out of a sale.
@@ -238,6 +246,12 @@ export default function App() {
     });
   }
 
+  /** Emptying the basket abandons the correction, and the credit with it. */
+  function clearCart() {
+    setCart([]);
+    setCredit(null);
+  }
+
   function setCount(key: string, count: number) {
     setCart((current) =>
       count <= 0
@@ -268,6 +282,8 @@ export default function App() {
       setSale(result);
       setPaying(null);
       setCart([]);
+      // Spent: the corrected order has been settled against it.
+      setCredit(null);
     } catch (err) {
       if (err instanceof ApiError && (err.body as { code?: string } | undefined)?.code === "price_changed") {
         // Prices moved under an open basket. Nothing was charged. Pull the new
@@ -353,7 +369,7 @@ export default function App() {
         currency={config.event.currency}
         onAdd={addProduct}
         onSetCount={setCount}
-        onClear={() => setCart([])}
+        onClear={clearCart}
         onCharge={() => {
           setPayError(null);
           setPaying({ key: newNonce() });
@@ -367,6 +383,7 @@ export default function App() {
           denominations={config.cash_denominations}
           busy={busy}
           error={payError}
+          credit={credit}
           onConfirm={confirmPayment}
           onCancel={() => setPaying(null)}
         />
@@ -385,6 +402,7 @@ export default function App() {
           pairing={pairing}
           lists={config.checkin.lists}
           defaultListId={config.checkin.list_id}
+          admissionItems={config.admission_items}
           onClose={() => setCheckinOpen(false)}
         />
       )}
@@ -394,11 +412,12 @@ export default function App() {
           pairing={pairing}
           currency={config.event.currency}
           cashier={cashier}
-          onReuse={(positions) => {
+          onReuse={(positions, granted) => {
             // Straight into the basket, replacing whatever was there: this only
             // ever runs right after a cancellation, and the operator asked for
             // these exact lines to correct.
             setCart(basketFromJournal(positions, catalog));
+            setCredit(granted);
             setHistoryOpen(false);
           }}
           onClose={() => setHistoryOpen(false)}
@@ -425,6 +444,7 @@ export default function App() {
             const next = { ...pairing, event: slug };
             savePairing(next);
             setCart([]);
+            setCredit(null);
             setPairing(next);
             setSettingsOpen(false);
           }}

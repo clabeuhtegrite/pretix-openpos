@@ -79,6 +79,11 @@ def main():
     if status == 200:
         check("currency present", config.get("event", {}).get("currency") == "EUR", str(config))
         check("check-in configured", config.get("checkin", {}).get("enabled") is True, str(config.get("checkin")))
+        # The scanning screen needs these to tell an entry from a T-shirt, and
+        # they must cover the whole event, not just what the till may sell.
+        check("admission products listed",
+              isinstance(config.get("admission_items"), list) and len(config["admission_items"]) > 0,
+              str(config.get("admission_items")))
 
     print("\n-- catalogue -----------------------------------------------")
     status, catalog = call("GET", f"/organizers/{ORG}/events/{EVENT}/openpos/catalog/", token=token)
@@ -176,6 +181,9 @@ def main():
     check("this till's own sales are listed", sale["journal_seq"] in seqs, str(seqs))
     check("history is scoped to this device", history.get("device") == serial,
           f"{history.get('device')} vs {serial}")
+    # Not day-scoped: an evening crosses midnight and the history has to survive it.
+    check("history says whether it was truncated", isinstance(history.get("truncated"), bool),
+          str(history.get("truncated")))
     check("a fresh sale can be cancelled",
           all(line["can_cancel"] for line in history["results"] if line["seq"] == sale["journal_seq"]),
           str(history["results"][:2]))

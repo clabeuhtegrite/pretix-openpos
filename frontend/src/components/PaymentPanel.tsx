@@ -10,20 +10,36 @@ interface Props {
   denominations: string[];
   busy: boolean;
   error: string | null;
+  /** Money already taken back off the customer, from a sale cancelled to be corrected. */
+  credit?: { amountCents: number; order: string } | null;
   onConfirm: (paymentType: PaymentType, cashGiven: string | null) => void;
   onCancel: () => void;
 }
 
 export default function PaymentPanel({
-  totalCents, currency, denominations, busy, error, onConfirm, onCancel,
+  totalCents, currency, denominations, busy, error, credit, onConfirm, onCancel,
 }: Props) {
   const [method, setMethod] = useState<PaymentType>("cash");
   // Digits only, read as cents. This is how a real till behaves: typing 1-2-3-4
   // means 12.34, and there is no decimal point to fumble mid-queue.
   const [entry, setEntry] = useState("");
 
+  const creditCents = credit?.amountCents ?? 0;
+  /**
+   * What actually has to change hands.
+   *
+   * The order is still worth its full total and is recorded as such — the
+   * credit is a drawer matter, not an order one. But nobody hands 20 € back
+   * across the counter only to be given 17 € straight back: the operator wants
+   * the difference, in the direction it goes.
+   */
+  const netCents = totalCents - creditCents;
+  const dueCents = Math.max(netCents, 0);
+  /** Credit left over once the new order is covered: money going back out. */
+  const backCents = Math.max(-netCents, 0);
+
   const given = entry === "" ? null : parseInt(entry, 10);
-  const change = given === null ? null : given - totalCents;
+  const change = given === null ? null : given - dueCents;
   const short = change !== null && change < 0;
 
   const press = (digit: string) => setEntry((current) => (current + digit).replace(/^0+/, "").slice(0, 8));
@@ -59,15 +75,38 @@ export default function PaymentPanel({
           <span className="value">{formatMoney(totalCents, currency)}</span>
         </div>
 
+        {credit && (
+          <>
+            <div className="amount-display credit">
+              <span>{t("payment.credit", { order: credit.order })}</span>
+              <span className="value">−{formatMoney(creditCents, currency)}</span>
+            </div>
+            <div className={`amount-display${backCents > 0 ? " change" : ""}`}>
+              <span>{backCents > 0 ? t("payment.giveBack") : t("payment.stillDue")}</span>
+              <span className="value">
+                {formatMoney(backCents > 0 ? backCents : dueCents, currency)}
+              </span>
+            </div>
+          </>
+        )}
+
         {method === "cash" ? (
           <>
+            {/* Nothing left to take: the credit covers the corrected order, and
+                the keypad would only invite an entry that means nothing. */}
+            {dueCents === 0 ? (
+              <p style={{ lineHeight: 1.5, color: "var(--text-dim)" }}>
+                {t("payment.coveredByCredit")}
+              </p>
+            ) : (
+              <>
             <div className={`amount-display${short ? " short" : ""}`}>
               <span>{t("payment.received")}</span>
               <span className="value">{formatMoney(given ?? 0, currency)}</span>
             </div>
 
             <div className="quick-tender">
-              <button onClick={() => setEntry(String(totalCents))} disabled={busy}>
+              <button onClick={() => setEntry(String(dueCents))} disabled={busy}>
                 {t("payment.exact")}
               </button>
               {denominations.map((denomination) => (
@@ -104,9 +143,19 @@ export default function PaymentPanel({
                 <span className="value">{formatMoney(change, currency)}</span>
               </div>
             )}
+              </>
+            )}
           </>
         ) : (
-          <p style={{ lineHeight: 1.5 }}>{t("payment.cardPrompt")}</p>
+          <p style={{ lineHeight: 1.5 }}>
+            {credit
+              ? backCents > 0
+                ? t("payment.cardRefundPrompt", {
+                    amount: formatMoney(backCents, currency),
+                  })
+                : t("payment.cardChargePrompt", { amount: formatMoney(dueCents, currency) })
+              : t("payment.cardPrompt")}
+          </p>
         )}
 
         <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
@@ -117,9 +166,17 @@ export default function PaymentPanel({
             className="btn success"
             style={{ flex: 2 }}
             disabled={busy || (method === "cash" && short)}
-            onClick={() =>
-              onConfirm(method, method === "cash" && given !== null ? fromCents(given) : null)
-            }
+            onClick={() => {
+              if (method !== "cash") return onConfirm(method, null);
+              if (!credit) {
+                return onConfirm(method, given !== null ? fromCents(given) : null);
+              }
+              // The order is funded by the credit plus whatever was handed over,
+              // so that is what the server is told was received: it then works
+              // out the same change the operator is about to count out, and the
+              // journal reads as what happened — a refund applied to a new sale.
+              return onConfirm(method, fromCents(creditCents + (given ?? dueCents)));
+            }}
           >
             {busy
               ? t("payment.working")

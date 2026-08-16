@@ -89,8 +89,11 @@ def quota_availability(quotas, cache):
     return remaining
 
 
-#: Longest run of transactions a till shows itself. A night's work on one till
-#: is well inside this; the back office is where a whole event gets read.
+#: Longest run of transactions a till shows itself.
+#:
+#: The history covers the whole event, not the calendar day, so a till that has
+#: run a multi-day festival can have more than this — hence the ``truncated``
+#: flag rather than a silent cut. Reading a whole event is the back office's job.
 HISTORY_LIMIT = 100
 
 
@@ -214,6 +217,18 @@ class OpenPosViewSet(viewsets.ViewSet):
                         for cl in event.checkin_lists.order_by("name", "pk")
                     ],
                 },
+                # Which products actually admit somebody.
+                #
+                # Every item of the event, not just the ones sellable at the
+                # till: the app has to judge tickets sold online too, and a
+                # ticket missing from this list would be announced at the door
+                # as something that lets nobody in. A check-in list set to
+                # "all products" happily accepts a T-shirt, and pretix records
+                # it — but a merch line has no door, and the scanning screen
+                # should not answer it with a green "let them in".
+                "admission_items": list(
+                    event.items.filter(admission=True).values_list("pk", flat=True)
+                ),
                 # Quick-tender buttons on the cash keypad.
                 "cash_denominations": ["5.00", "10.00", "20.00", "50.00"],
             }
@@ -466,35 +481,41 @@ class OpenPosViewSet(viewsets.ViewSet):
     @action(detail=False, methods=["get"], url_path="history", url_name="history")
     def history(self, request, **kwargs):
         """
-        What this till has recorded today, newest first.
+        What this till has recorded for this event, newest first.
 
-        Scoped to the calling device on purpose. An operator correcting a
-        mistake is correcting *their* mistake, made a minute ago on the tablet
-        in their hand; handing every till the power to reverse every other
-        till's takings is a different feature with different consequences, and
-        the back office already covers it.
+        Scoped to the calling device, and to the whole event rather than to the
+        calendar day. A till serves an evening, and an evening crosses midnight:
+        cutting the history at 00:00 would empty the screen in the middle of
+        service, exactly when a correction is most likely to be needed.
+
+        Device-scoped on purpose, though. An operator correcting a mistake is
+        correcting *their* mistake, made minutes ago on the tablet in their
+        hand; handing every till the power to reverse every other till's
+        takings is a different feature with different consequences, and the back
+        office already covers it.
         """
         event = request.event
         device = request.auth if isinstance(request.auth, Device) else None
         if device is None:
             # No device, no till history: this is per-device by design, and
             # answering with the whole event's journal would quietly widen it.
-            return Response({"device": None, "since": None, "results": []})
+            return Response({"device": None, "results": [], "truncated": False})
 
-        sales = list(
-            PosSale.objects.filter(
-                event=event, device=device, datetime__gte=start_of_day(event)
-            )
+        window = list(
+            PosSale.objects.filter(event=event, device=device)
             .select_related("order")
-            .order_by("-seq")[:HISTORY_LIMIT]
+            .order_by("-seq")[: HISTORY_LIMIT + 1]
         )
+        sales = window[:HISTORY_LIMIT]
         cancelled = PosSale.cancelled_seqs(event, [s.seq for s in sales])
 
         return Response(
             {
                 "device": device.unique_serial,
-                "since": start_of_day(event).isoformat(),
                 "results": [self._journal_payload(s, cancelled) for s in sales],
+                # Said rather than implied: a till that has run a whole festival
+                # is not looking at everything it ever sold.
+                "truncated": len(window) > HISTORY_LIMIT,
             }
         )
 
@@ -547,10 +568,6 @@ class OpenPosViewSet(viewsets.ViewSet):
             )
         if sale.kind != PosSale.KIND_SALE:
             raise ValidationError({"seq": [_("This journal entry is not a sale.")]})
-        if sale.datetime < start_of_day(event):
-            raise ValidationError(
-                {"seq": [_("Sales from an earlier day are corrected in the back office.")]}
-            )
         if PosSale.cancelled_seqs(event, [sale.seq]):
             raise ValidationError({"seq": [_("This sale has already been cancelled.")]})
         if sale.order is None:

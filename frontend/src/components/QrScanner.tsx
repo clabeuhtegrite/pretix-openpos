@@ -37,8 +37,15 @@ export default function QrScanner({
 }: Props) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const trackRef = useRef<MediaStreamTrack | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(true);
+  // Offered only where the camera actually has a lamp to switch on. Android
+  // exposes it through the track's capabilities; Safari exposes nothing of the
+  // sort on any iOS version, so on an iPhone the button simply is not there —
+  // better than one that does nothing when the doorway is dark.
+  const [torchAvailable, setTorchAvailable] = useState(false);
+  const [torchOn, setTorchOn] = useState(false);
 
   // Read through a ref so the camera is not torn down and restarted every time
   // the parent re-renders with a new closure.
@@ -78,6 +85,13 @@ export default function QrScanner({
         stream.getTracks().forEach((track) => track.stop());
         return;
       }
+
+      const [track] = stream.getVideoTracks();
+      trackRef.current = track ?? null;
+      const capabilities = track?.getCapabilities?.() as
+        | (MediaTrackCapabilities & { torch?: boolean })
+        | undefined;
+      setTorchAvailable(Boolean(capabilities?.torch));
 
       const video = videoRef.current;
       if (!video) return;
@@ -127,15 +141,46 @@ export default function QrScanner({
     return () => {
       stopped = true;
       cancelAnimationFrame(frame);
+      trackRef.current = null;
+      // Stopping the track puts the lamp out with it; no separate switch-off is
+      // needed, and trying would race the teardown.
       stream?.getTracks().forEach((track) => track.stop());
     };
   }, []);
+
+  async function toggleTorch() {
+    const track = trackRef.current;
+    if (!track) return;
+    const next = !torchOn;
+    try {
+      await track.applyConstraints({
+        advanced: [{ torch: next } as MediaTrackConstraintSet & { torch: boolean }],
+      });
+      setTorchOn(next);
+    } catch {
+      // The capability was advertised and then refused. Stop offering a button
+      // that does nothing rather than leave the operator pressing it.
+      setTorchAvailable(false);
+      setTorchOn(false);
+    }
+  }
 
   return (
     <div className="scanner">
       <div className="scanner-bar">
         <span className="scanner-title">{title}</span>
         <span style={{ flex: 1 }} />
+        {torchAvailable && (
+          <button
+            className={`icon-button${torchOn ? " is-on" : ""}`}
+            onClick={() => void toggleTorch()}
+            aria-pressed={torchOn}
+            aria-label={t("scan.torch")}
+            title={t("scan.torch")}
+          >
+            🔦
+          </button>
+        )}
         <button className="icon-button" onClick={onClose} aria-label={t("scan.close")}>
           ✕
         </button>

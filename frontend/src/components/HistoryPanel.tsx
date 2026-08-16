@@ -20,8 +20,13 @@ interface Props {
   pairing: Pairing;
   currency: string;
   cashier: string;
-  /** Put the lines of a cancelled sale back in the basket, ready to be corrected. */
-  onReuse: (positions: JournalPosition[]) => void;
+  /**
+   * Put the lines of a cancelled sale back in the basket, ready to be corrected.
+   *
+   * The credited amount travels with them: the corrected order is settled
+   * against it rather than by handing the whole sale back across the counter.
+   */
+  onReuse: (positions: JournalPosition[], credit: { amountCents: number; order: string }) => void;
   onClose: () => void;
 }
 
@@ -37,6 +42,7 @@ function lineLabel(position: JournalPosition): string {
 
 export default function HistoryPanel({ pairing, currency, cashier, onReuse, onClose }: Props) {
   const [lines, setLines] = useState<JournalLine[] | null>(null);
+  const [truncated, setTruncated] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [openSeq, setOpenSeq] = useState<number | null>(null);
   const [reason, setReason] = useState("");
@@ -47,6 +53,7 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
     try {
       const data = await api.history(pairing);
       setLines(data.results);
+      setTruncated(data.truncated);
       setError(null);
     } catch (e) {
       setError(e instanceof ApiError && e.isNetwork ? t("error.offline") : String(e));
@@ -89,53 +96,59 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
         {error && <div className="error-banner">{error}</div>}
 
         {done ? (
-          <div className="history-done">
-            <div className="history-done-headline">{t("history.cancelled")}</div>
-            <div className="history-done-meta">
-              {t("history.cancelledMeta", {
-                order: done.sale?.order ?? "",
-                total: formatMoney(Math.abs(toCents(done.cancellation.total)), currency),
-              })}
-            </div>
-            {done.credit_note && (
-              <div className="history-done-meta">
-                {t("history.creditNote", { number: done.credit_note })}
-              </div>
-            )}
-            {done.cancellation.payment_type === "card" && (
-              <div className="history-warn">{t("history.refundCard")}</div>
-            )}
-            {done.cancellation.payment_type === "cash" && (
-              <div className="history-warn">
-                {t("history.refundCash", {
-                  total: formatMoney(Math.abs(toCents(done.cancellation.total)), currency),
-                })}
-              </div>
-            )}
+          (() => {
+            const amount = Math.abs(toCents(done.cancellation.total));
+            const card = done.cancellation.payment_type === "card";
+            return (
+              <div className="history-done">
+                <div className="history-done-headline">{t("history.cancelled")}</div>
+                <div className="history-done-meta">
+                  {t("history.cancelledMeta", {
+                    order: done.sale?.order ?? "",
+                    total: formatMoney(amount, currency),
+                  })}
+                </div>
+                {done.credit_note && (
+                  <div className="history-done-meta">
+                    {t("history.creditNote", { number: done.credit_note })}
+                  </div>
+                )}
 
-            <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 18 }}>
-              {done.sale && done.sale.positions.length > 0 && (
-                <button
-                  className="btn primary"
-                  onClick={() => {
-                    onReuse(done.sale!.positions);
-                    onClose();
-                  }}
-                >
-                  {t("history.reuse")}
-                </button>
-              )}
-              <button
-                className="btn ghost"
-                onClick={() => {
-                  setDone(null);
-                  setOpenSeq(null);
-                }}
-              >
-                {t("history.back")}
-              </button>
-            </div>
-          </div>
+                {/*
+                  Two ways out, and the money only moves on one of them. Telling
+                  the operator to hand back the full amount before they have said
+                  whether they are correcting the order is how you end up
+                  counting 20 € out of the drawer and 17 € straight back into it.
+                */}
+                <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 18 }}>
+                  {done.sale && done.sale.positions.length > 0 && (
+                    <button
+                      className="btn primary"
+                      onClick={() => {
+                        onReuse(done.sale!.positions, { amountCents: amount, order: done.sale!.order });
+                        onClose();
+                      }}
+                    >
+                      {t("history.correct")}
+                    </button>
+                  )}
+                  <button
+                    className="btn"
+                    onClick={() => {
+                      setDone(null);
+                      setOpenSeq(null);
+                      void load();
+                    }}
+                  >
+                    {t(card ? "history.refundCardAndFinish" : "history.refundCashAndFinish", {
+                      total: formatMoney(amount, currency),
+                    })}
+                  </button>
+                </div>
+                <div className="attendance-note">{t("history.correctHelp")}</div>
+              </div>
+            );
+          })()
         ) : selected ? (
           <>
             <div className="history-detail-head">
@@ -230,7 +243,10 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
                 );
               })}
             </div>
-            <div className="attendance-note">{t("history.scope")}</div>
+            <div className="attendance-note">
+              {t("history.scopeEvent")}
+              {truncated && <> {t("history.truncated", { n: lines?.length ?? 0 })}</>}
+            </div>
           </>
         )}
 
