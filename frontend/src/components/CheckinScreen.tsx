@@ -1,9 +1,13 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api, ApiError } from "../api";
+import { useConnectivity } from "../connectivity";
 import { t, type MessageKey } from "../i18n";
 import { newNonce } from "../nonce";
-import type { Attendance, CheckinListInfo, Pairing, RedeemResult } from "../types";
+import { enqueue, loadQueue, loadSnapshot, saveSnapshot } from "../storage";
+import type {
+  Attendance, CheckinListInfo, OfflineSnapshot, Pairing, RedeemResult,
+} from "../types";
 import { useBackClose } from "../useBackClose";
 import AttendancePanel from "./AttendancePanel";
 import AttendeeSearch from "./AttendeeSearch";
@@ -40,6 +44,38 @@ const ATTENDANCE_REFRESH_MS = 60_000;
  * that the count has moved by the time the operator looks up from the verdict.
  */
 const ATTENDANCE_SETTLE_MS = 1200;
+/**
+ * How often the guest list carried for a dropout is refreshed.
+ *
+ * Tickets are still being sold — online, and at the other tills — while this
+ * door scans. A snapshot an hour old would start refusing people who bought
+ * their ticket during the evening.
+ */
+const SNAPSHOT_REFRESH_MS = 300_000;
+
+/**
+ * Answer a scan from the guest list held on the device.
+ *
+ * Deliberately stricter than the server on one point and looser on another. An
+ * unknown secret is refused, because the alternative is admitting anything
+ * presented to a camera. A ticket the snapshot says is already used is refused
+ * too. But no rules engine runs here, and nothing later than the snapshot is
+ * known — which is why every scan is queued and settled against the server the
+ * moment there is one.
+ */
+function offlineVerdict(
+  snapshot: OfflineSnapshot | null,
+  secret: string,
+  scannedHere: Set<string>,
+): RedeemResult {
+  if (!snapshot) return { status: "error", reason: "offline_no_snapshot" };
+  const ticket = snapshot.tickets.find((entry) => entry.secret === secret);
+  if (!ticket) return { status: "error", reason: "invalid" };
+  if (ticket.used || scannedHere.has(secret)) {
+    return { status: "error", reason: "already_redeemed" };
+  }
+  return { status: "ok", position: { item: ticket.item, attendee_name: ticket.name } };
+}
 
 /**
  * Buzz on a refusal.
@@ -105,6 +141,14 @@ export default function CheckinScreen({
   const [attendanceBusy, setAttendanceBusy] = useState(false);
   const [attendanceError, setAttendanceError] = useState<string | null>(null);
 
+  const online = useConnectivity();
+  const [snapshot, setSnapshot] = useState<OfflineSnapshot | null>(() => loadSnapshot());
+  // Scanned on this device since the snapshot was taken, so a second scan of the
+  // same ticket is caught without waiting for the network to come back.
+  const scannedHereRef = useRef<Set<string>>(
+    new Set(loadQueue().filter((e) => e.kind === "checkin").map((e) => e.secret)),
+  );
+
   // Refs, not state: these gate the decode callback and must not re-render it.
   const lastCodeRef = useRef<{ code: string; at: number } | null>(null);
   const busyRef = useRef(false);
@@ -150,6 +194,31 @@ export default function CheckinScreen({
     return () => window.clearInterval(timer);
   }, [listId, loadAttendance]);
 
+  // Kept fresh while there is a network, because it is the only thing that will
+  // answer a scan once there is not.
+  useEffect(() => {
+    if (!listId || !online) return;
+    let cancelled = false;
+    const pull = () => {
+      api
+        .offlineSnapshot(pairing, listId)
+        .then((data) => {
+          if (cancelled) return;
+          saveSnapshot(data);
+          setSnapshot(data);
+        })
+        .catch(() => {
+          // A stale snapshot beats none; the previous one stays.
+        });
+    };
+    pull();
+    const timer = window.setInterval(pull, SNAPSHOT_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [listId, online, pairing]);
+
   useBackClose(searchOpen, () => setSearchOpen(false));
   useBackClose(attendanceOpen, () => setAttendanceOpen(false));
 
@@ -178,11 +247,30 @@ export default function CheckinScreen({
       setBusy(true);
       setFatal(null);
       try {
-        const result = await api.redeem(pairing, {
-          secret: code,
-          lists: [listId],
-          nonce: newNonce(),
-        });
+        let result: RedeemResult;
+        if (online) {
+          result = await api.redeem(pairing, {
+            secret: code,
+            lists: [listId],
+            nonce: newNonce(),
+          });
+        } else {
+          // No server to ask: answer from the snapshot, and queue what was
+          // admitted so pretix hears about it — with this timestamp — later.
+          result = offlineVerdict(snapshot, code, scannedHereRef.current);
+          if (result.status === "ok") {
+            scannedHereRef.current.add(code);
+            enqueue({
+              kind: "checkin",
+              id: newNonce(),
+              at: new Date().toISOString(),
+              event: pairing.event,
+              list: listId,
+              secret: code,
+              name: result.position?.attendee_name ?? "",
+            });
+          }
+        }
         setVerdict(result);
         setCounts((c) => {
           if (result.status !== "ok") return { ...c, ko: c.ko + 1 };
@@ -191,7 +279,7 @@ export default function CheckinScreen({
             : { ...c, other: c.other + 1 };
         });
         if (result.status !== "ok") buzz();
-        if (result.status === "ok") {
+        if (result.status === "ok" && online) {
           // The room may just have changed. Still asked of the server rather
           // than added up here: the figure counts every door and every till,
           // and one kept locally would drift from the first scan made elsewhere.
@@ -212,7 +300,7 @@ export default function CheckinScreen({
         setBusy(false);
       }
     },
-    [listId, pairing, loadAttendance, admissionItems],
+    [listId, pairing, loadAttendance, admissionItems, online, snapshot],
   );
 
   if (!lists.length) {
@@ -288,6 +376,13 @@ export default function CheckinScreen({
               👥 {attendance ? attendance.inside : "…"}
             </button>
           </div>
+          {!online && (
+            <div className="scanner-offline">
+              {snapshot
+                ? t("offline.scanning", { n: snapshot.tickets.length })
+                : t("offline.noSnapshot")}
+            </div>
+          )}
           <div className="scanner-counter">
             {busy
               ? t("checkin.busy")

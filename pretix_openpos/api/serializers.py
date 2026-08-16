@@ -1,5 +1,7 @@
+from datetime import timedelta
 from decimal import Decimal
 
+from django.utils.timezone import now
 from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
@@ -9,10 +11,46 @@ from ..models import PosSale
 MAX_LINES = 100
 
 
+#: How stale a queued sale may be before it looks like a mistake rather than a
+#: dropout. A night is hours; a week is somebody replaying an old backup.
+MAX_OFFLINE_AGE = timedelta(days=7)
+
+
 class CheckoutPositionSerializer(serializers.Serializer):
     item = serializers.IntegerField()
     variation = serializers.IntegerField(required=False, allow_null=True, default=None)
     count = serializers.IntegerField(min_value=1, max_value=999)
+    #: Only ever read for a sale that was recorded offline — see OfflineSerializer.
+    price = serializers.DecimalField(
+        max_digits=13, decimal_places=2, required=False, allow_null=True, default=None
+    )
+
+
+class OfflineSerializer(serializers.Serializer):
+    """
+    Marks a sale that was rung up on a till with no network.
+
+    Its presence is what unlocks client-sent prices, and it is the only thing
+    that ever does. The till had no way to ask the server what a product cost:
+    it charged the customer from the tariff it had cached, and that figure is
+    now a fact, not a proposal. The server records what was charged, compares it
+    with what it would have charged, and reports the difference rather than
+    quietly rewriting either one.
+    """
+
+    #: When the customer actually paid.
+    recorded_at = serializers.DateTimeField()
+    #: What the till took, as a checksum against a queue corrupted in storage.
+    charged_total = serializers.DecimalField(max_digits=13, decimal_places=2)
+
+    def validate_recorded_at(self, value):
+        if value > now() + timedelta(minutes=5):
+            raise serializers.ValidationError(_("This sale is dated in the future."))
+        if value < now() - MAX_OFFLINE_AGE:
+            raise serializers.ValidationError(
+                _("This sale is too old to be replayed automatically.")
+            )
+        return value
 
 
 class CheckoutSerializer(serializers.Serializer):
@@ -46,8 +84,36 @@ class CheckoutSerializer(serializers.Serializer):
     expected_total = serializers.DecimalField(
         max_digits=13, decimal_places=2, required=False, allow_null=True, default=None
     )
+    #: Present only for a sale replayed from a till that had no network.
+    offline = OfflineSerializer(required=False, allow_null=True, default=None)
 
     def validate(self, data):
+        offline = data.get("offline")
+        priced = [p for p in data["positions"] if p.get("price") is not None]
+        if offline:
+            # All or nothing: a partly priced basket means the queue is damaged,
+            # and guessing the missing half is the one thing not to do with money.
+            if len(priced) != len(data["positions"]):
+                raise serializers.ValidationError(
+                    {"positions": [_("Every line of an offline sale must carry the price charged.")]}
+                )
+            charged = sum(
+                (p["price"] * p["count"] for p in data["positions"]), Decimal("0.00")
+            )
+            if charged != offline["charged_total"]:
+                raise serializers.ValidationError(
+                    {"offline": [_("The lines do not add up to the total charged.")]}
+                )
+            if data.get("expected_total") is not None:
+                # It answers a question the till could not have asked offline.
+                raise serializers.ValidationError(
+                    {"expected_total": [_("An offline sale cannot carry an expected total.")]}
+                )
+        elif priced:
+            raise serializers.ValidationError(
+                {"positions": [_("Prices are decided by the server, not by the till.")]}
+            )
+
         cash_given = data.get("cash_given")
         if data["payment_type"] == PosSale.PAYMENT_CASH:
             if cash_given is not None and cash_given < Decimal("0.00"):

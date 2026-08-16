@@ -96,6 +96,13 @@ def quota_availability(quotas, cache):
 #: flag rather than a silent cut. Reading a whole event is the back office's job.
 HISTORY_LIMIT = 100
 
+#: Most tickets a till will carry for offline scanning.
+#:
+#: The whole point is to survive a dropout at a door, and the doors this runs at
+#: sell in the hundreds. Well past that the snapshot stops being something to
+#: hold in a browser, and saying so beats a silently partial guest list.
+OFFLINE_SNAPSHOT_LIMIT = 20000
+
 
 def start_of_day(event):
     """
@@ -327,9 +334,11 @@ class OpenPosViewSet(viewsets.ViewSet):
             .prefetch_related("variations")
         }
 
+        offline = data.get("offline")
         api_positions = []
         journal_positions = []
         total = Decimal("0.00")
+        off_tariff = []
 
         for line in data["positions"]:
             item = sellable.get(line["item"])
@@ -351,7 +360,22 @@ class OpenPosViewSet(viewsets.ViewSet):
                     {"positions": [_("Product {name} requires an option to be chosen.").format(name=str(item.name))]}
                 )
 
-            price = resolve_price(overrides, item, variation)
+            tariff = resolve_price(overrides, item, variation)
+            # A sale rung up offline was priced by the app from the tariff it had
+            # cached, and the customer has already paid that. The order is
+            # therefore created at what was charged — anything else would print
+            # an invoice for a sum nobody handed over — and the divergence is
+            # reported rather than smoothed away.
+            price = line["price"] if offline else tariff
+            if offline and price != tariff:
+                off_tariff.append(
+                    {
+                        "item": item.pk,
+                        "item_name": str(item.name),
+                        "charged": str(price),
+                        "tariff": str(tariff),
+                    }
+                )
             count = line["count"]
             total += price * count
 
@@ -366,17 +390,20 @@ class OpenPosViewSet(viewsets.ViewSet):
                     }
                 )
 
-            journal_positions.append(
-                {
-                    "item": item.pk,
-                    "item_name": str(item.name),
-                    "variation": variation.pk if variation else None,
-                    "variation_name": str(variation.value) if variation else None,
-                    "count": count,
-                    "unit_price": str(price),
-                    "line_total": str(price * count),
-                }
-            )
+            journal_line = {
+                "item": item.pk,
+                "item_name": str(item.name),
+                "variation": variation.pk if variation else None,
+                "variation_name": str(variation.value) if variation else None,
+                "count": count,
+                "unit_price": str(price),
+                "line_total": str(price * count),
+            }
+            if offline and price != tariff:
+                # Kept on the line itself, so the divergence survives in the
+                # journal even after the tariff has been edited again.
+                journal_line["tariff_price"] = str(tariff)
+            journal_positions.append(journal_line)
 
         expected = data["expected_total"]
         if expected is not None and expected != total:
@@ -415,7 +442,12 @@ class OpenPosViewSet(viewsets.ViewSet):
             "status": "p",
             "testmode": event.testmode,
             "payment_provider": CASH if data["payment_type"] == PosSale.PAYMENT_CASH else CARD,
-            "payment_date": now().isoformat(),
+            # When the money was taken. For a sale replayed from a till that was
+            # offline that is not now — the order is created late, but it was
+            # paid at the door, and the payment date is what reports read.
+            # (The order's own creation date stays honest: it really was created
+            # at replay time; the journal carries the moment of the sale.)
+            "payment_date": (offline["recorded_at"] if offline else now()).isoformat(),
             "payment_info": payment_info,
             "send_email": False,
             "sales_channel": channel.identifier,
@@ -455,6 +487,8 @@ class OpenPosViewSet(viewsets.ViewSet):
                 cash_given=cash_given,
                 cash_change=cash_change,
                 testmode=event.testmode,
+                offline=bool(offline),
+                recorded_at=offline["recorded_at"] if offline else None,
             )
 
             # Cross-reference the journal entry from the payment so the backend
@@ -474,7 +508,69 @@ class OpenPosViewSet(viewsets.ViewSet):
         body = self._sale_payload(sale, replayed=False)
         body["checked_in"] = checked_in
         body["checkin_errors"] = checkin_errors
+        # Empty on every online sale. When it is not, an operator has to be told:
+        # a price moved while the till could not hear about it.
+        body["off_tariff"] = off_tariff
         return Response(body, status=status.HTTP_201_CREATED)
+
+    # -- offline snapshot ---------------------------------------------------
+
+    @action(detail=False, methods=["get"], url_path="offline", url_name="offline")
+    def offline(self, request, **kwargs):
+        """
+        Everything a till needs to keep working with the network gone.
+
+        Two halves. The tariff is already in the catalogue the app caches, so
+        what is missing is the door: which secrets are valid on this list, what
+        they admit, and who they belong to. Downloaded while the connection is
+        there so that a dropout is survivable rather than merely detectable.
+
+        This is the guest list, and it leaves the server: the payload is
+        therefore the narrowest one that still answers a scan — no e-mail, no
+        order code, no price. A device token already reaches the same data one
+        scan at a time through pretix' own search endpoint; this only makes it
+        usable when there is nothing to ask.
+        """
+        clist = self._requested_checkin_list(request)
+        if clist is None:
+            raise ValidationError({"list": [_("Unknown check-in list.")]})
+
+        with scopes_disabled():
+            positions = (
+                clist.positions.select_related("item")
+                .only("secret", "item_id", "attendee_name_cached", "order_id")
+                .order_by("pk")[: OFFLINE_SNAPSHOT_LIMIT + 1]
+            )
+            rows = list(positions)
+            truncated = len(rows) > OFFLINE_SNAPSHOT_LIMIT
+            rows = rows[:OFFLINE_SNAPSHOT_LIMIT]
+            entered = set(
+                Checkin.objects.filter(
+                    list=clist, position__in=rows, type=Checkin.TYPE_ENTRY
+                ).values_list("position_id", flat=True)
+            )
+            tickets = [
+                {
+                    "secret": p.secret,
+                    "item": p.item_id,
+                    "name": p.attendee_name or "",
+                    # So a second scan of the same ticket is refused offline too,
+                    # rather than discovered hours later at reconciliation.
+                    "used": p.pk in entered,
+                }
+                for p in rows
+            ]
+
+        return Response(
+            {
+                "list": {"id": clist.pk, "name": str(clist.name)},
+                "generated": now().isoformat(),
+                "tickets": tickets,
+                # An event too big to carry offline says so, instead of letting a
+                # till believe it holds the whole guest list.
+                "truncated": truncated,
+            }
+        )
 
     # -- history and cancellation ------------------------------------------
 

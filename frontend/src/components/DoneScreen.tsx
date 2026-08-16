@@ -21,7 +21,7 @@ export default function DoneScreen({ sale, currency, onDismiss }: Props) {
   // Hold the screen whenever the operator still has something to do — handing
   // back change, or dealing with a check-in that did not go through. Otherwise
   // get out of the way so the queue keeps moving.
-  const needsAttention = changeCents > 0 || checkinFailed;
+  const needsAttention = changeCents > 0 || checkinFailed || Boolean(sale.offline);
 
   useEffect(() => {
     if (needsAttention) return;
@@ -48,8 +48,14 @@ export default function DoneScreen({ sale, currency, onDismiss }: Props) {
       )}
 
       <div className="meta">
-        {t("done.order")} {sale.order.code} · #{sale.journal_seq} ·{" "}
-        {formatMoney(toCents(sale.order.total), currency)}
+        {sale.offline
+          ? t("offline.saleQueued", {
+              total: formatMoney(toCents(sale.order.total), currency),
+            })
+          : `${t("done.order")} ${sale.order.code} · #${sale.journal_seq} · ${formatMoney(
+              toCents(sale.order.total),
+              currency,
+            )}`}
       </div>
 
       <button className="btn" onClick={onDismiss}>

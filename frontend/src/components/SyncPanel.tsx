@@ -1,0 +1,145 @@
+import { useState } from "react";
+
+import { locale, t } from "../i18n";
+import { loadFailures, loadQueue, saveFailures } from "../storage";
+import type { SyncReport } from "../types";
+
+/**
+ * What the till is still holding, and what happened when it last let go.
+ *
+ * The whole reason offline mode is safe to use is that nothing about it is
+ * implicit: how many sales are waiting, what the server made of them, and above
+ * all what it refused. A queue that drains silently and a queue that loses a
+ * sale look identical from behind the counter — so this screen exists to make
+ * them look different.
+ */
+
+interface Props {
+  online: boolean;
+  syncing: boolean;
+  report: SyncReport | null;
+  onSync: () => void;
+  onClose: () => void;
+}
+
+function time(iso: string): string {
+  return new Date(iso).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
+}
+
+export default function SyncPanel({ online, syncing, report, onSync, onClose }: Props) {
+  const [queue] = useState(() => loadQueue());
+  const [failures, setFailures] = useState(() => loadFailures());
+
+  const sales = queue.filter((entry) => entry.kind === "sale");
+  const checkins = queue.filter((entry) => entry.kind === "checkin");
+
+  return (
+    <div className="overlay overlay-top" onClick={onClose}>
+      <div className="panel history-panel" onClick={(e) => e.stopPropagation()}>
+        <h2>{t("offline.title")}</h2>
+
+        <div className={`sync-state${online ? " is-online" : ""}`}>
+          {online ? t("offline.online") : t("offline.offline")}
+        </div>
+
+        {queue.length === 0 ? (
+          <div className="attendance-note">{t("offline.nothingPending")}</div>
+        ) : (
+          <>
+            <div className="attendance-note">
+              {t("offline.pending", { sales: sales.length, checkins: checkins.length })}
+            </div>
+            <div className="history-list">
+              {queue.map((entry) => (
+                <div key={entry.id} className="history-row is-cancellation">
+                  <span className="history-row-main">
+                    <span className="history-row-order">
+                      {time(entry.at)} ·{" "}
+                      {entry.kind === "sale" ? t("offline.aSale") : t("offline.aCheckin")}
+                    </span>
+                    <span className="history-row-meta">
+                      {entry.kind === "sale" ? entry.label : entry.name || entry.secret.slice(0, 8)}
+                    </span>
+                  </span>
+                  <span className="history-row-total">
+                    {entry.kind === "sale" ? entry.chargedTotal : "→"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        {report && (
+          <div className="sync-report">
+            <div className="attendance-note">
+              {t("offline.lastRun", {
+                sales: report.sales,
+                checkins: report.checkins,
+                failed: report.failed,
+              })}
+            </div>
+            {report.offTariff.map((line, i) => (
+              // A price moved while this till could not be told: the customer
+              // paid one figure, the tariff says another. Nobody can put that
+              // right from here, but pretending it did not happen is worse.
+              <div className="history-warn" key={`t${i}`}>
+                {t("offline.offTariff", {
+                  order: line.order,
+                  item: line.item_name,
+                  charged: line.charged,
+                  tariff: line.tariff,
+                })}
+              </div>
+            ))}
+            {report.contested.map((line, i) => (
+              <div className="history-warn" key={`c${i}`}>
+                {t("offline.contested", { name: line.name, reason: line.reason })}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {failures.length > 0 && (
+          <>
+            <h3 className="attendance-subtitle">{t("offline.refused")}</h3>
+            {failures.map((failure, i) => (
+              <div className="error-banner" key={i}>
+                {time(failure.entry.at)} ·{" "}
+                {failure.entry.kind === "sale"
+                  ? `${failure.entry.label} (${failure.entry.chargedTotal})`
+                  : failure.entry.secret.slice(0, 8)}
+                <br />
+                {failure.message}
+              </div>
+            ))}
+            <button
+              className="btn ghost"
+              onClick={() => {
+                // Cleared by hand, on purpose: this is the one list that must
+                // not disappear because an app was restarted.
+                saveFailures([]);
+                setFailures([]);
+              }}
+            >
+              {t("offline.dismissRefused")}
+            </button>
+          </>
+        )}
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 20 }}>
+          <button
+            className="btn primary"
+            disabled={!online || syncing || queue.length === 0}
+            onClick={onSync}
+          >
+            {syncing ? t("offline.syncing") : t("offline.sync")}
+          </button>
+          <button className="btn ghost" onClick={onClose}>
+            {t("settings.close")}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}

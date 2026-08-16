@@ -1,6 +1,8 @@
+import { markReachable, markUnreachable } from "./connectivity";
 import type {
   Attendance, AttendeeMatch, CancelResult, Catalog, History, InitializeResponse,
-  Pairing, PosConfig, PosEvent, RedeemResult, SaleResult, SummaryResponse,
+  OfflineSnapshot, Pairing, PosConfig, PosEvent, RedeemResult, SaleResult,
+  SummaryResponse,
 } from "./types";
 
 const BASE = "/api/v1";
@@ -63,8 +65,13 @@ async function request<T>(
     });
   } catch (e) {
     if (e instanceof DOMException && e.name === "AbortError") throw e;
+    // The request never reached the server: that, and not what the browser
+    // thinks of its network interface, is what puts the till in offline mode.
+    markUnreachable();
     throw new ApiError(0, "network", e);
   }
+  // An answer of any kind — even a refusal — means the server is there.
+  markReachable();
 
   const text = await response.text();
   let parsed: unknown = null;
@@ -77,6 +84,11 @@ async function request<T>(
   }
 
   if (!response.ok) {
+    // A server that faults is, from a till's point of view, a server that is not
+    // there: proxies answer 502/503/504 for a backend that is down, and a 500
+    // means it cannot take this sale either. The probe corrects the label within
+    // seconds if it turns out only one endpoint was unwell.
+    if (response.status >= 500) markUnreachable();
     throw new ApiError(response.status, describe(parsed, `HTTP ${response.status}`), parsed);
   }
   return parsed as T;
@@ -116,17 +128,34 @@ export const api = {
     p: Pairing,
     payload: {
       idempotency_key: string;
-      positions: { item: number; variation: number | null; count: number }[];
+      positions: { item: number; variation: number | null; count: number; price?: string }[];
       payment_type: string;
       cash_given?: string | null;
       cashier?: string;
       expected_total?: string;
+      /** Set only when replaying a sale rung up with no network. */
+      offline?: { recorded_at: string; charged_total: string };
     },
   ): Promise<SaleResult> {
     return request(`/organizers/${p.organizer}/events/${p.event}/openpos/checkout/`, {
       method: "POST",
       body: payload,
       token: p.token,
+    });
+  },
+
+  /**
+   * The guest list for one check-in list, to be carried while offline.
+   *
+   * Fetched while the connection is good so a dropout is survivable: without it
+   * a door with no network can only guess, and guessing at a door means either
+   * turning away valid tickets or admitting anything presented.
+   */
+  offlineSnapshot(p: Pairing, listId: number, signal?: AbortSignal): Promise<OfflineSnapshot> {
+    const params = new URLSearchParams({ list: String(listId) });
+    return request(`/organizers/${p.organizer}/events/${p.event}/openpos/offline/?${params}`, {
+      token: p.token,
+      signal,
     });
   },
 
@@ -213,11 +242,13 @@ export const api = {
    */
   async redeem(
     p: Pairing,
-    { secret, lists, nonce, force = false }: {
+    { secret, lists, nonce, force = false, datetime }: {
       secret: string;
       lists: number[];
       nonce: string;
       force?: boolean;
+      /** When the scan happened, for one replayed from an offline queue. */
+      datetime?: string;
     },
   ): Promise<RedeemResult> {
     try {
@@ -234,6 +265,7 @@ export const api = {
           // an explicit reason instead of returning an "incomplete" we could not act on.
           questions_supported: false,
           nonce,
+          ...(datetime ? { datetime } : {}),
         },
       });
     } catch (e) {

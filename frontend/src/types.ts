@@ -134,6 +134,10 @@ export interface SaleResult {
   replayed: boolean;
   checked_in: number | null;
   checkin_errors: string[];
+  /** Lines an offline till charged at something other than today's tariff. */
+  off_tariff?: { item_name: string; charged: string; tariff: string }[];
+  /** Set by the app, not the server: this sale is queued, not recorded yet. */
+  offline?: boolean;
 }
 
 /** One admission product's share of the room. */
@@ -213,6 +217,73 @@ export interface CancelResult {
   /** Number of the credit note pretix issued, when the order had an invoice. */
   credit_note: string | null;
   refunded: boolean;
+}
+
+/** One ticket of the guest list a till carries for a network dropout. */
+export interface OfflineTicket {
+  secret: string;
+  item: number;
+  name: string;
+  /** Already admitted when the snapshot was taken. */
+  used: boolean;
+}
+
+export interface OfflineSnapshot {
+  list: { id: number; name: string };
+  generated: string;
+  tickets: OfflineTicket[];
+  /** The event is larger than a till can carry; this list is partial. */
+  truncated: boolean;
+}
+
+/** A sale rung up with no network, waiting to reach the server. */
+export interface QueuedSale {
+  kind: "sale";
+  /** Its idempotency key, minted when the customer paid. */
+  id: string;
+  at: string;
+  event: string;
+  positions: { item: number; variation: number | null; count: number; price: string }[];
+  chargedTotal: string;
+  paymentType: PaymentType;
+  cashGiven: string | null;
+  cashChange: string | null;
+  cashier: string;
+  /** Whether the basket admits anyone, decided locally from the cached catalogue. */
+  admits: boolean;
+  label: string;
+}
+
+/** A ticket admitted at the door with no network, waiting to be recorded. */
+export interface QueuedCheckin {
+  kind: "checkin";
+  /** The nonce pretix deduplicates on, minted at the moment of the scan. */
+  id: string;
+  at: string;
+  event: string;
+  list: number;
+  secret: string;
+  name: string;
+}
+
+export type QueueEntry = QueuedSale | QueuedCheckin;
+
+/** An entry the server refused on replay: never dropped, always shown. */
+export interface SyncFailure {
+  entry: QueueEntry;
+  at: string;
+  message: string;
+}
+
+/** What a sync run did, for the operator to read afterwards. */
+export interface SyncReport {
+  sales: number;
+  checkins: number;
+  failed: number;
+  /** Sales the server would have priced differently from what was charged. */
+  offTariff: { order: string; item_name: string; charged: string; tariff: string }[];
+  /** Tickets refused on replay — admitted at the door, contested afterwards. */
+  contested: { name: string; secret: string; reason: string }[];
 }
 
 export interface Takings {

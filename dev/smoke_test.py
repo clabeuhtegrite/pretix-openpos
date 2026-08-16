@@ -11,6 +11,7 @@ same request to prove idempotency, and prints the takings. Standard library only
 import json
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 import urllib.error
 import urllib.request
 import uuid
@@ -173,6 +174,57 @@ def main():
     }, token)
     check("price field ignored", status == 201 and float(spoof["order"]["total"]) == float(full["price"]),
           f"HTTP {status}: total {spoof.get('order', {}).get('total')} vs {full['price']}")
+
+    print("\n-- hors ligne : liste embarquée -----------------------------")
+    status, snapshot = call("GET", f"/organizers/{ORG}/events/{EVENT}/openpos/offline/", token=token)
+    check("offline snapshot reachable", status == 200, f"HTTP {status}: {str(snapshot)[:200]}")
+    if status == 200:
+        print(f"        {len(snapshot['tickets'])} billets embarqués, liste « {snapshot['list']['name']} »")
+        check("the snapshot carries what a scan needs",
+              all({"secret", "item", "used"} <= set(t) for t in snapshot["tickets"][:5]),
+              str(snapshot["tickets"][:1]))
+        check("and says whether it is complete", snapshot.get("truncated") is False,
+              str(snapshot.get("truncated")))
+
+    print("\n-- hors ligne : rejeu d'une vente ---------------------------")
+    # Une vente encaissée pendant la coupure : elle porte son heure réelle et le
+    # prix effectivement payé — ici volontairement à côté du tarif, ce qui doit
+    # être signalé plutôt que lissé.
+    sold_at = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat()
+    off_price = round(float(full["price"]) - 1.00, 2)
+    offline_key = str(uuid.uuid4())
+    offline_body = {
+        "idempotency_key": offline_key,
+        "positions": [{"item": full["id"], "count": 1, "price": f"{off_price:.2f}"}],
+        "payment_type": "cash",
+        "cash_given": f"{off_price:.2f}",
+        "cashier": "Alice",
+        "offline": {"recorded_at": sold_at, "charged_total": f"{off_price:.2f}"},
+    }
+    status, offline_sale = call("POST", f"/organizers/{ORG}/events/{EVENT}/openpos/checkout/", offline_body, token)
+    check("offline sale accepted", status == 201, f"HTTP {status}: {offline_sale}")
+    if status == 201:
+        check("it is recorded at the price actually charged",
+              float(offline_sale["order"]["total"]) == off_price,
+              f"{offline_sale['order']['total']} vs {off_price:.2f}")
+        check("and the gap with the tariff is reported, not smoothed away",
+              len(offline_sale.get("off_tariff", [])) == 1
+              and offline_sale["off_tariff"][0]["tariff"] == full["price"],
+              str(offline_sale.get("off_tariff")))
+        # Replaying the queue must not sell twice — the whole safety of offline mode.
+        status, replayed_offline = call("POST", f"/organizers/{ORG}/events/{EVENT}/openpos/checkout/", offline_body, token)
+        check("replaying a queued sale returns the first one", status == 200
+              and replayed_offline["replayed"] is True
+              and replayed_offline["order"]["code"] == offline_sale["order"]["code"],
+              f"HTTP {status}: {replayed_offline}")
+
+    # A price the till invented without saying it was offline stays refused.
+    status, sneaky = call("POST", f"/organizers/{ORG}/events/{EVENT}/openpos/checkout/", {
+        "idempotency_key": str(uuid.uuid4()),
+        "positions": [{"item": full["id"], "count": 1, "price": "0.01"}],
+        "payment_type": "cash",
+    }, token)
+    check("a price without an offline block is refused", status == 400, f"HTTP {status}: {sneaky}")
 
     print("\n-- historique de la caisse ---------------------------------")
     status, history = call("GET", f"/organizers/{ORG}/events/{EVENT}/openpos/history/", token=token)

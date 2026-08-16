@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api, ApiError } from "./api";
 import CheckinScreen from "./components/CheckinScreen";
@@ -9,14 +9,19 @@ import PairingScreen from "./components/PairingScreen";
 import PaymentPanel from "./components/PaymentPanel";
 import SaleScreen, { type Sellable } from "./components/SaleScreen";
 import SettingsPanel from "./components/SettingsPanel";
+import SyncPanel from "./components/SyncPanel";
 import { t } from "./i18n";
 import { fromCents, toCents } from "./money";
 import { newNonce } from "./nonce";
 import {
-  clearPairing, loadCashier, loadPairing, saveCashier, savePairing,
+  clearPairing, enqueue, loadCached, loadCashier, loadPairing, loadQueue,
+  requestPersistence, saveCached, saveCashier, savePairing,
 } from "./storage";
+import { useConnectivity } from "./connectivity";
+import { drainQueue } from "./sync";
 import type {
-  Catalog, CartLine, JournalPosition, Pairing, PaymentType, PosConfig, SaleResult,
+  Catalog, CartLine, JournalPosition, Pairing, PaymentType, PosConfig, QueuedSale,
+  SaleResult, SyncReport,
 } from "./types";
 import { useBackClose } from "./useBackClose";
 import { useWakeLock } from "./useWakeLock";
@@ -135,11 +140,50 @@ export default function App() {
    */
   const [credit, setCredit] = useState<{ amountCents: number; order: string } | null>(null);
 
+  const online = useConnectivity();
+  const [pending, setPending] = useState(() => loadQueue().length);
+  const [syncing, setSyncing] = useState(false);
+  const [lastSync, setLastSync] = useState<SyncReport | null>(null);
+  const [syncOpen, setSyncOpen] = useState(false);
+
   // Evaluated once: display-mode does not change without a reload, and a value
   // that flickers would bounce the operator out of a sale.
   const [gated] = useState(() => !isStandalone() && !browserAllowed());
 
   useWakeLock(pairing !== null);
+
+  // What is queued is money that exists nowhere else yet; ask the browser not
+  // to evict it.
+  useEffect(requestPersistence, []);
+
+  // A ref, not the state above: the automatic drain and a tap on "send now" can
+  // land in the same tick, and a state flag would not have flipped yet. The
+  // server would survive it — every entry is idempotent — but the report would
+  // count each sale twice.
+  const syncingRef = useRef(false);
+
+  const sync = useCallback(async () => {
+    if (!pairing || syncingRef.current) return;
+    syncingRef.current = true;
+    setSyncing(true);
+    try {
+      const report = await drainQueue(pairing);
+      // Only worth showing when it did something: draining an empty queue on
+      // every reconnection would be a dialog nobody asked for.
+      if (report.sales || report.checkins || report.failed) setLastSync(report);
+    } finally {
+      syncingRef.current = false;
+      setPending(loadQueue().length);
+      setSyncing(false);
+    }
+  }, [pairing]);
+
+  useEffect(() => {
+    // Back on the network with something to send, and nobody mid-transaction:
+    // interrupting a payment panel to replay a queue would be the worst moment.
+    if (!online || pending === 0 || paying !== null) return;
+    void sync();
+  }, [online, pending, paying, sync]);
 
   // Android's back gesture closes what is on top, not the till. The payment
   // panel is deliberately absent: backing out of a half-tendered payment by
@@ -147,6 +191,7 @@ export default function App() {
   useBackClose(settingsOpen, () => setSettingsOpen(false));
   useBackClose(checkinOpen, () => setCheckinOpen(false));
   useBackClose(historyOpen, () => setHistoryOpen(false));
+  useBackClose(syncOpen, () => setSyncOpen(false));
   useBackClose(sale !== null, () => setSale(null));
 
   const load = useCallback(async (p: Pairing) => {
@@ -155,6 +200,9 @@ export default function App() {
       const [nextConfig, nextCatalog] = await Promise.all([api.config(p), api.catalog(p)]);
       setConfig(nextConfig);
       setCatalog(nextCatalog);
+      // Kept so the till can be started again during an outage.
+      saveCached("config", p.event, nextConfig);
+      saveCached("catalog", p.event, nextCatalog);
     } catch (err) {
       // A revoked or deleted device should send the operator back to pairing
       // rather than leave them staring at an error they cannot fix.
@@ -163,6 +211,18 @@ export default function App() {
         setPairing(null);
         setConfig(null);
         setCatalog(null);
+        return;
+      }
+
+      // Anything else — no network, a gateway answering for a server that is
+      // restarting — must not turn a till into a brick mid-evening. If this
+      // device has been here before, it opens on what it was last told and goes
+      // on selling; the queue is what makes that safe.
+      const cachedConfig = loadCached<PosConfig>("config", p.event);
+      const cachedCatalog = loadCached<Catalog>("catalog", p.event);
+      if (cachedConfig && cachedCatalog) {
+        setConfig(cachedConfig);
+        setCatalog(cachedCatalog);
         return;
       }
       setLoadError(describeError(err));
@@ -260,8 +320,77 @@ export default function App() {
     );
   }
 
+  /**
+   * Record a sale the server cannot be told about yet.
+   *
+   * Written to storage before anything is shown, and only then confirmed: if
+   * the write fails there is no sale, and the operator is told so while the
+   * customer is still standing there — rather than being shown a receipt for
+   * something that will never exist.
+   */
+  function sellOffline(paymentType: PaymentType, cashGiven: string | null): SaleResult {
+    const admissionItems = new Set(config?.admission_items ?? []);
+    const entry: QueuedSale = {
+      kind: "sale",
+      id: paying!.key,
+      at: new Date().toISOString(),
+      event: pairing!.event,
+      positions: cart.map((line) => ({
+        item: line.itemId,
+        variation: line.variationId,
+        count: line.count,
+        // What the customer was charged, from the tariff this till had cached.
+        // The server compares it with its own on replay and reports any gap.
+        price: fromCents(line.unitPrice),
+      })),
+      chargedTotal: fromCents(total),
+      paymentType,
+      cashGiven,
+      cashChange:
+        cashGiven === null ? null : fromCents(Math.max(toCents(cashGiven) - total, 0)),
+      cashier,
+      admits: cart.some((line) => admissionItems.has(line.itemId)),
+      label: cart.map((line) => `${line.count}× ${line.label}`).join(", "),
+    };
+    enqueue(entry);
+    setPending(loadQueue().length);
+
+    // Shaped like a server answer so every screen downstream stays unchanged;
+    // what it does not have is an order code, because no order exists yet.
+    return {
+      order: { code: "", total: entry.chargedTotal, url: null },
+      journal_seq: 0,
+      payment_type: paymentType,
+      cash_given: cashGiven,
+      cash_change: entry.cashChange,
+      datetime: entry.at,
+      replayed: false,
+      // Nobody has been checked in server-side; the replay will do it. The
+      // basket still decides whether a person walks in, which is what the
+      // screen is about to say.
+      checked_in: entry.admits ? 1 : 0,
+      checkin_errors: [],
+      offline: true,
+    };
+  }
+
   async function confirmPayment(paymentType: PaymentType, cashGiven: string | null) {
     if (!pairing || !paying) return;
+
+    if (!online) {
+      setPayError(null);
+      try {
+        const result = sellOffline(paymentType, cashGiven);
+        setSale(result);
+        setPaying(null);
+        setCart([]);
+        setCredit(null);
+      } catch {
+        setPayError(t("offline.queueFailed"));
+      }
+      return;
+    }
+
     setBusy(true);
     setPayError(null);
     try {
@@ -285,6 +414,28 @@ export default function App() {
       // Spent: the corrected order has been settled against it.
       setCredit(null);
     } catch (err) {
+      if (err instanceof ApiError && (err.isNetwork || err.status >= 500)) {
+        // The server could not take this sale: the network died, or it answered
+        // with a fault of its own. Either way the sale is not lost and the
+        // customer is not asked to pay again — it goes to the queue under the
+        // SAME idempotency key, so if the request did in fact commit before the
+        // answer went missing, the replay recognises it and returns the
+        // original order instead of selling a second time.
+        //
+        // A 4xx is the opposite case and deliberately not caught here: the
+        // server understood and refused, and queueing a refusal would only mean
+        // being refused again later, out of sight of the person who could fix it.
+        try {
+          const queued = sellOffline(paymentType, cashGiven);
+          setSale(queued);
+          setPaying(null);
+          setCart([]);
+          setCredit(null);
+        } catch {
+          setPayError(t("offline.queueFailed"));
+        }
+        return;
+      }
       if (err instanceof ApiError && (err.body as { code?: string } | undefined)?.code === "price_changed") {
         // Prices moved under an open basket. Nothing was charged. Pull the new
         // catalogue and re-price the basket in place, so the payment panel —
@@ -350,6 +501,16 @@ export default function App() {
             {t("checkin.open")}
           </button>
         )}
+        {(!online || pending > 0) && (
+          <button
+            className={`btn ghost topbar-action sync-badge${online ? "" : " is-offline"}`}
+            onClick={() => setSyncOpen(true)}
+          >
+            {online
+              ? t("offline.badgePending", { n: pending })
+              : t("offline.badgeOffline", { n: pending })}
+          </button>
+        )}
         <button
           className="icon-button"
           onClick={() => setHistoryOpen(true)}
@@ -404,6 +565,16 @@ export default function App() {
           defaultListId={config.checkin.list_id}
           admissionItems={config.admission_items}
           onClose={() => setCheckinOpen(false)}
+        />
+      )}
+
+      {syncOpen && (
+        <SyncPanel
+          online={online}
+          syncing={syncing}
+          report={lastSync}
+          onSync={() => void sync()}
+          onClose={() => setSyncOpen(false)}
         />
       )}
 

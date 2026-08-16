@@ -137,6 +137,15 @@ class PosSale(models.Model):
     #: thing anyone auditing a till asks about.
     reason = models.CharField(max_length=190, blank=True, default="")
 
+    #: Recorded on a till that had no network, and replayed afterwards.
+    #:
+    #: Worth a column of its own because it changes what the row means: the
+    #: price was decided by the app from a cached tariff rather than by the
+    #: server, and ``datetime`` is when the customer paid, not when the order
+    #: was created. Anyone reconciling a night that had a dropout needs to be
+    #: able to find exactly these rows.
+    offline = models.BooleanField(default=False)
+
     payment_type = models.CharField(max_length=16, choices=PAYMENT_CHOICES)
     #: Negative on a cancellation, so the takings are the plain sum of the column.
     total = models.DecimalField(max_digits=13, decimal_places=2)
@@ -161,6 +170,7 @@ class PosSale(models.Model):
     #: verification replays the shape that row was actually hashed with.
     #: 1 = original fields. 2 = adds `testmode`. 3 = adds `kind`, `cancels_seq`
     #: and `reason`, i.e. everything that distinguishes a reversal from a sale.
+    #: 4 = adds `offline`.
     hash_version = models.PositiveSmallIntegerField(default=1)
 
     class Meta:
@@ -205,7 +215,7 @@ class PosSale(models.Model):
     # -- integrity ---------------------------------------------------------
 
     #: Version used for rows written from now on.
-    CURRENT_HASH_VERSION = 3
+    CURRENT_HASH_VERSION = 4
 
     def _hash_payload(self) -> str:
         """Canonical representation the hash is taken over, for this row's version."""
@@ -229,6 +239,8 @@ class PosSale(models.Model):
             payload["kind"] = self.kind
             payload["cancels_seq"] = self.cancels_seq
             payload["reason"] = self.reason
+        if self.hash_version >= 4:
+            payload["offline"] = self.offline
         return json.dumps(
             payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
         )
@@ -270,7 +282,8 @@ class PosSale(models.Model):
     @classmethod
     def record(cls, *, event, order, device, cashier, payment_type, total, positions,
                idempotency_key, cash_given=None, cash_change=None, testmode=False,
-               kind=KIND_SALE, cancels_seq=None, reason="", attempts=5):
+               kind=KIND_SALE, cancels_seq=None, reason="", offline=False,
+               recorded_at=None, attempts=5):
         """
         Append a sale to the journal, chaining it onto the current tail.
 
@@ -284,7 +297,11 @@ class PosSale(models.Model):
             sale = cls(
                 event=event,
                 seq=(last.seq + 1) if last else 1,
-                datetime=now(),
+                # When the customer paid, which for a sale replayed from a till
+                # that was offline is not when this row is being written. The
+                # sequence still follows the order rows arrive in — the chain
+                # is over `seq`, and a report reads by `datetime`.
+                datetime=recorded_at or now(),
                 device=device,
                 device_serial=device.unique_serial if device else "",
                 device_name=(device.name or "") if device else "",
@@ -301,6 +318,7 @@ class PosSale(models.Model):
                 kind=kind,
                 cancels_seq=cancels_seq,
                 reason=reason or "",
+                offline=offline,
                 hash_version=cls.CURRENT_HASH_VERSION,
                 previous_hash=last.hash if last else GENESIS_HASH,
             )

@@ -85,7 +85,12 @@ with scopes_disabled():
         event = sales[0].event
         settings_url = f"/control/event/{event.organizer.slug}/{event.slug}/openpos/"
         before = event.settings.get("invoice_generate_sales_channels", as_type=list) or []
-        listed = event.checkin_lists.first()
+        # Posting the form writes every field it carries, so the configured
+        # check-in list has to be sent back as it was — otherwise this test
+        # quietly repoints the till's door list at whatever comes first
+        # alphabetically, and the next person to run it wonders why.
+        before_list = event.settings.get("openpos_checkin_list") or ""
+        listed = event.checkin_lists.filter(pk=before_list).first() or event.checkin_lists.first()
         response = client.post(settings_url, {
             "openpos_checkin_list": str(listed.pk) if listed else "",
             "openpos_invoices": "on",
@@ -106,8 +111,10 @@ with scopes_disabled():
         check("unticking it removes only that channel",
               "openpos" not in after_off and "web" in after_off, str(after_off))
 
-        # Leave the dev event as the seed wants it.
-        event.settings.set("invoice_generate_sales_channels", ["web", "openpos"])
+        # Leave the dev event exactly as it was found.
+        event.settings.set("invoice_generate_sales_channels", before or ["web", "openpos"])
+        if before_list:
+            event.settings.set("openpos_checkin_list", before_list)
 
     print("\n-- plugin screens, per permission ----------------------------")
     event = sales[0].event if sales else None

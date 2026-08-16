@@ -1006,6 +1006,44 @@ table.takings thead th {
   background: var(--success);
 }
 
+/* ---------- offline & synchronisation ---------- */
+
+/* Amber, not red: a till with no network is still working. Red is for a refused
+   ticket, and the two must not look alike across a counter. */
+.sync-badge.is-offline {
+  border-color: var(--warning);
+  color: var(--warning);
+}
+
+.sync-state {
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: rgba(245, 158, 11, 0.16);
+  border: 1px solid var(--warning);
+  font-weight: 700;
+  line-height: 1.4;
+  margin-bottom: 14px;
+}
+
+.sync-state.is-online {
+  background: rgba(34, 197, 94, 0.14);
+  border-color: var(--success);
+}
+
+.sync-report {
+  margin-top: 16px;
+}
+
+.scanner-offline {
+  text-align: center;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(245, 158, 11, 0.18);
+  border: 1px solid var(--warning);
+  font-size: 14px;
+  font-weight: 700;
+}
+
 /* ---------- transaction history ---------- */
 
 .history-panel {

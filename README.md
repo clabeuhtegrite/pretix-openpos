@@ -10,7 +10,8 @@ licence is the expensive part. This is a smaller, narrower alternative for
 people who need a till, run pretix themselves, and would rather not pay for one.
 
 **Status: alpha.** The backend is covered by an end-to-end test and the whole
-flow works, but it has not yet been through a real event. Read the scope section
+flow works, including a network dropout exercised by actually stopping the
+server, but it has not yet been through a real event. Read the scope section
 before deciding it fits.
 
 ## What it does
@@ -38,6 +39,11 @@ before deciding it fits.
   cash/card split visible in pretix' own reporting.
 - **Immediate check-in**: the ticket is checked in as it is sold, so the
   customer walks straight in and there is nothing to hand over.
+- **Offline mode.** A network dropout does not stop the till: it keeps selling
+  from the tariff it cached, keeps scanning against a guest list it carries, and
+  queues everything. On reconnection the queue replays in order under the same
+  idempotency keys — a replay never sells twice — and the app reports what needs
+  a human: prices that moved while it was cut off, tickets contested on replay.
 - **Transaction history and cancellation**, scoped to the till in your hands:
   cancelling issues a credit note, records the refund and appends a reversing
   journal entry — the original sale is never touched — and the items go back in
@@ -50,8 +56,8 @@ before deciding it fits.
 
 Being clear about this up front will save you an evaluation:
 
-- **No offline mode.** Every sale needs the server. If your venue's network is
-  unreliable, this is the wrong tool today.
+- **No offline cancellations.** A credit note needs the server, so corrections
+  wait for the network. Selling and scanning do not.
 - **No partial refunds** from the till. A sale is cancelled whole, then rung up
   again corrected; refunding two of three beers is a back-office job.
 - **No receipt printing** and no ticket printing.

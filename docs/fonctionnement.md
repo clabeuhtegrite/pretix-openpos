@@ -1,6 +1,6 @@
 # Fonctionnement de pretix-openpos
 
-Documentation de fonctionnement du plugin, version 0.5.1. Elle couvre trois
+Documentation de fonctionnement du plugin, version 0.6.0. Elle couvre trois
 choses, dans cet ordre : ce que le plugin ajoute à pretix, comment le mettre en
 service, et ce qui se passe exactement quand un bénévole encaisse.
 
@@ -177,7 +177,7 @@ En Docker/Kubernetes, [`deploy/Dockerfile`](../deploy/Dockerfile) intègre le pl
 
 ```bash
 cd frontend && npm run build && cd ..
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.5.1 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.6.0 .
 ```
 
 Deux pièges :
@@ -545,6 +545,93 @@ activée pour l'événement (*Réglages → Facturation*).
 
 ---
 
+## 5ter. Le mode hors ligne
+
+Une coupure réseau pendant un événement ne doit pas arrêter la caisse. Tout
+continue : on vend, on encaisse, on scanne. Ce qui change, c'est que le serveur
+l'apprend plus tard — et la difficulté n'est pas de continuer à fonctionner,
+c'est que la reprise soit vérifiable.
+
+### Comment la caisse sait qu'elle est coupée
+
+Pas par `navigator.onLine` : il décrit une interface réseau, pas un serveur, et
+sur le wifi d'une salle un téléphone est très souvent « en ligne » sur une borne
+qui ne mène nulle part. La vérité vient des requêtes elles-mêmes — toute réponse
+du serveur remet en ligne, toute panne de transport **et tout 5xx** mettent hors
+ligne — et un `HEAD` sur `/openpos/` toutes les 10 s sert de sonde tant que la
+caisse se croit coupée. Les événements du navigateur ne sont qu'un signal pour
+aller vérifier.
+
+### Ce qui continue de marcher
+
+| | Hors ligne |
+|---|---|
+| Vendre | Oui, au tarif embarqué ; la vente part en file d'attente |
+| Rendre la monnaie | Oui, calculé localement |
+| Scanner un billet | Oui, contre la **liste embarquée** (`openpos/offline/`), rafraîchie toutes les 5 min tant qu'il y a du réseau |
+| Redémarrer la caisse | Oui : catalogue et configuration du dernier chargement sont conservés par événement |
+| Historique, annulation, effectif | Non — ils demandent le serveur, et l'écran le dit |
+
+Une vente encaissée pendant la coupure porte **le prix que la caisse avait en
+mémoire**. C'est le seul endroit de tout le plugin où un prix vient du client, et
+c'est assumé : le client a payé cette somme, c'est un fait, pas une proposition.
+Le bloc `offline` de `checkout/` est ce qui l'autorise, et rien d'autre — un prix
+envoyé sans lui reste refusé en 400.
+
+### La reprise
+
+À la reconnexion, la file part **dans l'ordre, une écriture à la fois**, et
+seulement si personne n'est en train d'encaisser. Trois règles gouvernent tout :
+
+1. **On ne retire de la file que ce que le serveur a pris.** Chaque écriture
+   porte la clé qui la rend idempotente — clé d'idempotence pour une vente,
+   `nonce` pour un scan. Une réponse perdue au retour coûte une requête en trop,
+   jamais une vente en double : vérifié, un rejeu d'une vente déjà synchronisée
+   ne crée aucune ligne.
+2. **5xx et panne réseau = « pas maintenant ».** L'écriture garde sa place et la
+   reprise s'arrête là. Seul un 4xx est un refus motivé du serveur.
+   *Se tromper dans ce sens coûte une requête ; se tromper dans l'autre sort une
+   vente encaissée de la file et elle n'arrive jamais — c'est le bug qu'une
+   première version de ce code avait, trouvé en coupant vraiment le serveur.*
+3. **Aucun refus n'est avalé.** Une écriture refusée passe dans une liste qui
+   survit aux redémarrages et reste affichée jusqu'à ce qu'un humain la traite.
+
+Le panneau de synchronisation (badge de la barre supérieure) montre à tout
+moment ce qui reste à envoyer, ce que le dernier envoi a fait, et deux choses
+qu'il faut lire :
+
+- **Écarts de tarif** — « BQSTY : Plein tarif encaissé 13,00, le tarif dit
+  14,00 ». Un prix a bougé dans le back-office pendant que la caisse ne pouvait
+  pas l'apprendre. Personne ne peut corriger ça depuis la caisse ; le taire
+  serait pire.
+- **Entrées contestées** — « Untel est entré hors ligne, mais le billet a été
+  refusé à l'envoi : déjà scanné ». La personne est dans la salle de toute façon.
+  C'est le prix d'un scan hors ligne, et l'organisateur doit le savoir.
+
+### Ce que ça enregistre côté serveur
+
+Une vente rejouée est une vente normale, à trois détails près : la ligne de
+journal porte `offline = True`, son `datetime` est **l'heure réelle de la vente**
+(pas celle de la reprise), et le paiement de la commande porte cette même heure.
+La commande, elle, est bien créée à la reprise — c'est la vérité, et le journal
+garde l'autre moitié. Un scan rejoué porte lui aussi son horodatage d'origine.
+
+### Les limites, dites franchement
+
+- **La file vit sur l'appareil.** Tablette perdue ou effacée avant la reprise,
+  ventes perdues. `navigator.storage.persist()` est demandé pour réduire le
+  risque d'éviction, mais il n'y a pas de miracle : l'appareil *est* le registre
+  tant qu'il n'a pas parlé.
+- **Le scan hors ligne ne voit que sa liste embarquée.** Un billet vendu en ligne
+  pendant la coupure y est absent : il sera refusé à la porte. Un billet déjà
+  scanné à une autre porte pendant la coupure sera accepté ici, et signalé à la
+  reprise.
+- **Pas de moteur de règles hors ligne.** Les règles de check-in de pretix
+  (horaires, quotas d'entrée) ne s'appliquent qu'au retour du réseau.
+- **Pas d'annulation hors ligne.** Un avoir demande le serveur.
+
+---
+
 ## 6. Les garde-fous
 
 ### 6.1 Le serveur est seul maître des prix
@@ -661,6 +748,7 @@ Base : `/api/v1`. Authentification : `Authorization: Device <token>`.
 | `GET` | `…/openpos/summary/` | Relevé du jour |
 | `GET` | `…/openpos/attendance/?list=<id>` | Présents sur place, sur une liste de contrôle |
 | `GET` | `…/openpos/history/` | Journal de l'événement, **de cette caisse seule** (100 dernières, `truncated` si tronqué) |
+| `GET` | `…/openpos/offline/?list=<id>` | Liste embarquée pour scanner sans réseau |
 | `POST` | `…/openpos/cancel/` | Annule une vente de cette caisse (avoir + remboursement + contrepassation) |
 | `POST` | `/organizers/<org>/checkinrpc/redeem/` | Pointage (endpoint pretix natif) |
 | `GET` | `/organizers/<org>/checkinrpc/search/` | Recherche de participant (natif) |
@@ -816,8 +904,7 @@ chaque build.
 
 Rappel, parce que c'est la première question qu'on se pose en incident :
 
-pas de **mode hors ligne** (chaque vente exige le serveur), pas de
-**remboursement partiel** depuis la caisse — une vente s'annule en entier puis se
+pas de **remboursement partiel** depuis la caisse — une vente s'annule en entier puis se
 refait corrigée, rembourser deux bières sur trois reste un travail de back-office
 —, pas d'**impression** de reçu ni de billet, pas de **questions au contrôle**, pas
 de **Tap to Pay** (Stripe ne l'expose que par ses SDK natifs), et **aucune

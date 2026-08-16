@@ -39,6 +39,8 @@ class OpenPosSecurityProfile(AllowListSecurityProfile):
         # anything that is not this device's own, so the token cannot be used to
         # unpick another till's takings.
         ("GET", "api-v1:openpos-history"),
+        # The snapshot a till carries so a network dropout does not close the door.
+        ("GET", "api-v1:openpos-offline"),
         ("POST", "api-v1:openpos-cancel"),
         # Scanning tickets at the door. pretix' own check-in RPC is used rather
         # than a POS-specific endpoint: it already carries the rules engine,
