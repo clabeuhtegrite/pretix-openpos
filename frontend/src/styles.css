@@ -133,6 +133,11 @@ button {
   display: flex;
   flex-direction: column;
   min-width: 0;
+  /* Both are needed, one per direction the workspace runs in. Without
+     min-height, a flex item refuses to shrink below its content — so in the
+     stacked layout the grid pushed the basket, its total and the pay button
+     clean off the bottom of the screen. */
+  min-height: 0;
 }
 
 .tabs {
@@ -383,7 +388,10 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px;
+  /* The insets matter here: a fixed layer covers the notch, the camera cut-out
+     and the gesture bar, which no amount of plain padding accounts for. */
+  padding: calc(24px + env(safe-area-inset-top)) calc(24px + env(safe-area-inset-right))
+    calc(24px + env(safe-area-inset-bottom)) calc(24px + env(safe-area-inset-left));
   z-index: 20;
 }
 
@@ -480,7 +488,11 @@ button {
   align-items: center;
   justify-content: center;
   gap: 16px;
-  padding: 32px;
+  /* Full-screen and therefore under the notch and the gesture bar without this:
+     on an iPhone the amount of change to hand back was the line that landed
+     there. */
+  padding: calc(32px + env(safe-area-inset-top)) calc(32px + env(safe-area-inset-right))
+    calc(32px + env(safe-area-inset-bottom)) calc(32px + env(safe-area-inset-left));
   text-align: center;
   background: var(--success-strong);
   color: #fff;
@@ -1087,10 +1099,16 @@ table.takings thead th {
 }
 
 /* A phone leaves little room either side of a panel; the numbers need it more
-   than the margins do. */
+   than the margins do. Panels also move to the top of the screen: a centred one
+   sits exactly where the software keyboard comes up, and on iOS — which slides
+   the keyboard over the page instead of resizing it — that leaves the operator
+   typing a name they cannot see. */
 @media (max-width: 480px) {
-  .overlay {
-    padding: 12px;
+  .overlay,
+  .centered {
+    align-items: flex-start;
+    padding: calc(12px + env(safe-area-inset-top)) calc(12px + env(safe-area-inset-right))
+      calc(12px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left));
   }
 
   .attendance-panel {
@@ -1105,9 +1123,80 @@ table.takings thead th {
   }
 
   .cart {
-    flex: 0 0 auto;
-    max-height: 45%;
+    /* Sized by what is in it, not by a fixed strip: an empty basket is a
+       header, a five-line one takes half the screen, and the grid above gives
+       up the room and scrolls instead. Beyond the cap the lines scroll — but
+       only once there really is no room left. */
+    flex: 0 1 auto;
+    max-height: 60%;
     border-left: none;
     border-top: 1px solid var(--border);
+  }
+
+  .cart-lines {
+    flex: 0 1 auto;
+  }
+}
+
+/*
+ * Phone held in landscape — the usual grip for a one-hand till.
+ *
+ * ~310px of workspace, of which the basket's own chrome was taking 180: a
+ * five-line basket showed one line and a half and had to be scrolled while the
+ * product grid sat half empty. Everything vertical gets tighter here, and the
+ * total moves beside the pay button instead of above it. Touch targets stay at
+ * 44px and above: this is about spacing, not about shrinking what a thumb aims
+ * at with a queue waiting.
+ */
+@media (max-height: 480px) {
+  .cart-header {
+    padding: 8px 12px;
+  }
+
+  .cart-footer {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+  }
+
+  .total-row {
+    display: block;
+    margin-bottom: 0;
+    line-height: 1.15;
+  }
+
+  .total-row .amount {
+    display: block;
+    font-size: 24px;
+  }
+
+  .cart-footer .btn {
+    width: auto;
+    flex: 1;
+    min-height: 52px;
+  }
+
+  .line {
+    padding: 6px 8px;
+  }
+
+  .tabs {
+    padding: 8px 12px 0;
+  }
+
+  .tab {
+    min-height: 44px;
+    padding: 10px 16px;
+  }
+
+  .grid {
+    gap: 10px;
+    padding: 12px;
+  }
+
+  .product {
+    min-height: 84px;
+    padding: 12px;
   }
 }

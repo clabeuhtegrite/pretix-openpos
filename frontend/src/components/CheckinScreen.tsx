@@ -4,15 +4,28 @@ import { api, ApiError } from "../api";
 import { t, type MessageKey } from "../i18n";
 import { newNonce } from "../nonce";
 import type { Attendance, CheckinListInfo, Pairing, RedeemResult } from "../types";
+import { useBackClose } from "../useBackClose";
 import AttendancePanel from "./AttendancePanel";
 import AttendeeSearch from "./AttendeeSearch";
 import QrScanner from "./QrScanner";
 
-/** How long a verdict stays up before scanning resumes. */
-const HOLD_OK_MS = 1500;
-const HOLD_ERROR_MS = 6000;
-/** Ignore the same code for this long, so one ticket in frame is not read ten times. */
-const REPEAT_GUARD_MS = 3000;
+/**
+ * How long a verdict stays up before scanning resumes.
+ *
+ * Long enough to read the name on it and hand the ticket back without being
+ * rushed. A tap on the verdict cuts it short, so a fast queue is never held up
+ * by the delay — it only protects the operator who is not looking yet.
+ */
+const HOLD_OK_MS = 4000;
+const HOLD_ERROR_MS = 8000;
+/**
+ * Ignore the same code for this long, so one ticket in frame is not read ten times.
+ *
+ * Deliberately longer than the verdict it outlives: a ticket left in front of
+ * the lens is decoded again the instant scanning resumes, and re-submitting it
+ * would answer a valid entry with a red "already scanned".
+ */
+const REPEAT_GUARD_MS = 6000;
 /**
  * How often the head count is re-read while this screen is open.
  *
@@ -27,6 +40,21 @@ const ATTENDANCE_REFRESH_MS = 60_000;
  * that the count has moved by the time the operator looks up from the verdict.
  */
 const ATTENDANCE_SETTLE_MS = 1200;
+
+/**
+ * Buzz on a refusal.
+ *
+ * At a loud door, looking up at the right moment is not a given. Android
+ * vibrates; iOS has no web vibration at all and simply does not, which is why
+ * the red screen stays the actual answer and this is only a nudge.
+ */
+function buzz(): void {
+  try {
+    navigator.vibrate?.([120, 60, 120]);
+  } catch {
+    // Refused without a prior gesture on some browsers. Nothing to do about it.
+  }
+}
 
 function reasonLabel(result: RedeemResult): string {
   if (result.status === "incomplete") return t("reason.incomplete");
@@ -103,6 +131,9 @@ export default function CheckinScreen({ pairing, lists, defaultListId, onClose }
     return () => window.clearInterval(timer);
   }, [listId, loadAttendance]);
 
+  useBackClose(searchOpen, () => setSearchOpen(false));
+  useBackClose(attendanceOpen, () => setAttendanceOpen(false));
+
   const resume = useCallback(() => {
     window.clearTimeout(holdRef.current);
     setVerdict(null);
@@ -115,7 +146,13 @@ export default function CheckinScreen({ pairing, lists, defaultListId, onClose }
       if (!code) return;
 
       const previous = lastCodeRef.current;
-      if (previous && previous.code === code && Date.now() - previous.at < REPEAT_GUARD_MS) return;
+      if (previous && previous.code === code && Date.now() - previous.at < REPEAT_GUARD_MS) {
+        // Sliding window: every frame the ticket is still in view pushes the
+        // guard back, so it expires once the ticket is out of frame rather than
+        // a fixed time after the first read.
+        previous.at = Date.now();
+        return;
+      }
       lastCodeRef.current = { code, at: Date.now() };
 
       busyRef.current = true;
@@ -131,6 +168,7 @@ export default function CheckinScreen({ pairing, lists, defaultListId, onClose }
         setCounts((c) =>
           result.status === "ok" ? { ...c, ok: c.ok + 1 } : { ...c, ko: c.ko + 1 },
         );
+        if (result.status !== "ok") buzz();
         if (result.status === "ok") {
           // The room just changed. Ask the server rather than adding one here:
           // this screen has no way of knowing whether the product that was just

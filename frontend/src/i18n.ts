@@ -126,6 +126,7 @@ const MESSAGES = {
     "gate.title": "Add the till to your home screen",
     "gate.why":
       "The till runs as an installed app, not in a browser tab: full screen, no address bar, and the screen stays awake while you serve.",
+    "gate.install": "Install the app",
     "gate.ios1": "Tap the Share button at the bottom of Safari.",
     "gate.ios2": "Choose “Add to Home Screen”.",
     "gate.ios3": "Open the app from the icon that appears.",
@@ -256,6 +257,7 @@ const MESSAGES = {
     "gate.title": "Ajoutez la caisse à l’écran d’accueil",
     "gate.why":
       "La caisse s’utilise en application installée, pas dans un onglet : plein écran, sans barre d’adresse, et l’écran ne s’éteint pas pendant le service.",
+    "gate.install": "Installer l’application",
     "gate.ios1": "Touchez le bouton Partager, en bas de Safari.",
     "gate.ios2": "Choisissez « Sur l’écran d’accueil ».",
     "gate.ios3": "Ouvrez l’application depuis l’icône qui apparaît.",

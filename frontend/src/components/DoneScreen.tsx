@@ -4,6 +4,9 @@ import { t } from "../i18n";
 import { formatMoney, toCents } from "../money";
 import type { SaleResult } from "../types";
 
+/** How long a sale that needs nothing further stays on screen by itself. */
+const AUTO_DISMISS_MS = 6000;
+
 interface Props {
   sale: SaleResult;
   currency: string;
@@ -22,7 +25,10 @@ export default function DoneScreen({ sale, currency, onDismiss }: Props) {
 
   useEffect(() => {
     if (needsAttention) return;
-    const timer = setTimeout(onDismiss, 2500);
+    // Time to read the order code and let the customer see that it went
+    // through. Tapping anywhere skips it, so this is a floor and not a wait:
+    // the till is only ever held up by an operator who has not looked yet.
+    const timer = setTimeout(onDismiss, AUTO_DISMISS_MS);
     return () => clearTimeout(timer);
   }, [needsAttention, onDismiss]);
 

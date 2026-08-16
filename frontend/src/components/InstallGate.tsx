@@ -1,6 +1,13 @@
+import { useEffect, useState } from "react";
+
 import { t } from "../i18n";
 
 const ALLOW_BROWSER_KEY = "openpos.allowBrowser.v1";
+
+/** Chrome's install prompt, which no published typing covers. */
+interface InstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+}
 
 /**
  * True when the app was launched from the home screen rather than a browser tab.
@@ -45,6 +52,22 @@ export default function InstallGate() {
   const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
     (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 
+  // Android and desktop Chrome offer to install the app themselves, which is
+  // one tap instead of a hunt through a browser menu. Safari fires nothing of
+  // the sort, so iOS keeps the written steps — the only route it has.
+  const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null);
+
+  useEffect(() => {
+    const onBeforeInstallPrompt = (event: Event) => {
+      // Without this the browser shows its own banner whenever it feels like it,
+      // which on a counter is a dialog nobody asked for mid-service.
+      event.preventDefault();
+      setInstallPrompt(event as InstallPromptEvent);
+    };
+    window.addEventListener("beforeinstallprompt", onBeforeInstallPrompt);
+    return () => window.removeEventListener("beforeinstallprompt", onBeforeInstallPrompt);
+  }, []);
+
   return (
     <div className="gate">
       <div className="panel">
@@ -53,20 +76,36 @@ export default function InstallGate() {
         </div>
         <h2>{t("gate.title")}</h2>
         <p style={{ lineHeight: 1.5, color: "var(--text-dim)" }}>{t("gate.why")}</p>
-        <ol>
-          {ios ? (
-            <>
-              <li>{t("gate.ios1")}</li>
-              <li>{t("gate.ios2")}</li>
-              <li>{t("gate.ios3")}</li>
-            </>
-          ) : (
-            <>
-              <li>{t("gate.other1")}</li>
-              <li>{t("gate.other2")}</li>
-            </>
-          )}
-        </ol>
+
+        {installPrompt ? (
+          <button
+            className="btn primary"
+            style={{ marginTop: 8 }}
+            onClick={() => {
+              void installPrompt.prompt();
+              // One shot per event: a second call is refused by the browser.
+              setInstallPrompt(null);
+            }}
+          >
+            {t("gate.install")}
+          </button>
+        ) : (
+          <ol>
+            {ios ? (
+              <>
+                <li>{t("gate.ios1")}</li>
+                <li>{t("gate.ios2")}</li>
+                <li>{t("gate.ios3")}</li>
+              </>
+            ) : (
+              <>
+                <li>{t("gate.other1")}</li>
+                <li>{t("gate.other2")}</li>
+              </>
+            )}
+          </ol>
+        )}
+
         <div className="gate-escape">{t("gate.escape")}</div>
       </div>
     </div>

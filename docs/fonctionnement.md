@@ -1,6 +1,6 @@
 # Fonctionnement de pretix-openpos
 
-Documentation de fonctionnement du plugin, version 0.4.1. Elle couvre trois
+Documentation de fonctionnement du plugin, version 0.4.2. Elle couvre trois
 choses, dans cet ordre : ce que le plugin ajoute à pretix, comment le mettre en
 service, et ce qui se passe exactement quand un bénévole encaisse.
 
@@ -172,7 +172,7 @@ En Docker/Kubernetes, [`deploy/Dockerfile`](../deploy/Dockerfile) intègre le pl
 
 ```bash
 cd frontend && npm run build && cd ..
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.4.1 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.4.2 .
 ```
 
 Deux pièges :
@@ -232,6 +232,29 @@ python -m pretix shell -c "from pretix.base.settings import GlobalSettingsObject
 C'est un réglage global (le manifeste est servi depuis une URL unique). Les
 appareils déjà installés gardent l'ancien nom jusqu'à réinstallation de l'icône.
 
+### 3.5 Android et iOS : ce qui diffère réellement
+
+La caisse tourne sur les deux, mais pas par accident — les deux plateformes ne
+proposent ni les mêmes API ni les mêmes gestes, et chaque écart est traité :
+
+| Sujet | Android (Chrome) | iOS (Safari) |
+|---|---|---|
+| Installation | `beforeinstallprompt` intercepté : l'écran d'accueil propose un vrai bouton **Installer** | Aucun équivalent : les trois étapes Partager → Sur l'écran d'accueil restent la seule voie, et sont affichées telles quelles |
+| Détection du mode installé | `display-mode: standalone` | `navigator.standalone`, qu'Apple n'a jamais remplacé — les deux sont consultés |
+| Geste **retour** | Ferme le panneau ouvert, pas la caisse (chaque panneau empile une entrée d'historique) | N'existe pas |
+| Lecture des QR | jsQR, jamais `BarcodeDetector` | Idem — l'API est derrière un drapeau sur 17 et cassée depuis 18 |
+| Écran allumé | Wake Lock | Wake Lock depuis Safari 16.4 ; absent avant, on s'en passe sans rien dire |
+| Vibration au refus | Oui | Non — l'API n'existe pas sur iOS ; le verdict rouge reste la réponse |
+| Encoche / barre de gestes | `env(safe-area-inset-*)` sur toutes les couches plein écran | Idem, `viewport-fit=cover` dans le shell |
+| Clavier logiciel | Redimensionne la vue | La recouvre : les panneaux à saisie se calent en haut d'écran pour rester visibles dans les deux cas |
+
+Le geste retour mérite un mot : dans une PWA installée, l'historique ne contient
+qu'une entrée, donc un retour ferme **l'application** — panier en cours compris.
+Chaque panneau ouvert empile donc une entrée et la retire en se fermant, si bien
+que le retour veut dire « ferme ça » tant que quelque chose est ouvert. Le
+panneau de paiement est délibérément exclu : sortir d'un encaissement à moitié
+saisi par réflexe n'est pas quelque chose qu'on met à un geste de distance.
+
 ---
 
 ## 4. Le déroulé d'une vente
@@ -249,7 +272,10 @@ appareils déjà installés gardent l'ancien nom jusqu'à réinstallation de l'i
    le laisser devant une erreur qu'il ne peut pas résoudre.
 3. **Panier** — les montants sont manipulés en **centimes entiers** côté client,
    jamais en flottants. Les quantités sont plafonnées par le stock restant quand
-   le quota est fini.
+   le quota est fini. L'affichage suit ce qu'il y a dedans : en écran étroit le
+   panier occupe la hauteur qu'il lui faut, jusqu'à 60 % de l'espace, et c'est la
+   grille au-dessus qui cède du terrain — le total et le bouton d'encaissement
+   restent visibles en toutes circonstances.
 4. **Paiement** — l'ouverture du panneau **frappe la clé d'idempotence**. Le pavé
    numérique se lit en centimes : taper 1-2-3-4 signifie 12,34 €, il n'y a pas de
    virgule à rater dans la file. Boutons d'appoint : *Compte juste*, 5, 10, 20, 50.
@@ -334,8 +360,15 @@ une liste. C'est [CheckinScreen.tsx](../frontend/src/components/CheckinScreen.ts
   ~8 images/s sur une image réduite à 640 px de côté. Pas de `BarcodeDetector` :
   sur iOS, l'API Shape Detection est derrière un drapeau dans les Réglages sur
   17 et cassée depuis 18 — une caisse sur iPhone ne scannerait jamais rien.
-- **Verdict lisible à bout de bras** : vert 1,5 s, rouge 6 s. Un même code est
-  ignoré pendant 3 s pour qu'un billet resté dans le champ ne soit pas lu dix fois.
+- **Verdict lisible à bout de bras** : vert 4 s, rouge 8 s, et un appui sur le
+  verdict le referme aussitôt — le délai ne protège que l'opérateur qui n'a pas
+  encore levé les yeux, il ne retient jamais une file qui avance. Un même code
+  est ignoré pendant 6 s, fenêtre glissante : un billet resté devant l'objectif
+  est redécodé dès que le scan reprend, et le resoumettre répondrait « déjà
+  scanné » à une entrée parfaitement valable. Le garde-fou dure donc forcément
+  plus longtemps que le verdict qu'il doit couvrir.
+- **Vibration sur refus** : Android vibre, iOS n'expose rien de tel et ne vibre
+  pas. C'est un rappel, jamais la réponse — celle-ci reste l'écran rouge.
 - **L'appel est celui de pretix** (`checkinrpc/redeem`), pas un endpoint maison :
   le moteur de règles, les secrets révoqués ou bloqués et les motifs de refus
   exacts viennent de pretix plutôt que d'une réimplémentation qui dériverait.

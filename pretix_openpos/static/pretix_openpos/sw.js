@@ -6,7 +6,7 @@
  * login screen. It never caches anything under /api/, because a cached
  * catalogue would show stale prices and a cached sale would be a disaster.
  */
-const CACHE = "openpos-shell-v1";
+const CACHE = "openpos-shell-v2";
 
 self.addEventListener("install", (event) => {
   // A new build should take over the next time the app is opened, not three
@@ -41,8 +41,15 @@ self.addEventListener("fetch", (event) => {
       (async () => {
         try {
           const response = await fetch(request);
-          const cache = await caches.open(CACHE);
-          cache.put(request, response.clone());
+          // Only ever keep a shell worth falling back to. A 502 caught during a
+          // server restart is exactly the moment this worker runs, and storing
+          // it would hand that same error page to the till every cold start
+          // afterwards. Redirected responses are refused for navigations by
+          // Chrome when replayed from a cache, so they are not kept either.
+          if (response.ok && !response.redirected) {
+            const cache = await caches.open(CACHE);
+            await cache.put(request, response.clone());
+          }
           return response;
         } catch {
           const cached = await caches.match(request);

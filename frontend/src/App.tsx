@@ -15,6 +15,7 @@ import {
   clearPairing, loadCashier, loadPairing, saveCashier, savePairing,
 } from "./storage";
 import type { Catalog, CartLine, Pairing, PaymentType, PosConfig, SaleResult } from "./types";
+import { useBackClose } from "./useBackClose";
 import { useWakeLock } from "./useWakeLock";
 
 /**
@@ -78,6 +79,13 @@ export default function App() {
   const [gated] = useState(() => !isStandalone() && !browserAllowed());
 
   useWakeLock(pairing !== null);
+
+  // Android's back gesture closes what is on top, not the till. The payment
+  // panel is deliberately absent: backing out of a half-tendered payment by
+  // reflex is not something to make one swipe away.
+  useBackClose(settingsOpen, () => setSettingsOpen(false));
+  useBackClose(checkinOpen, () => setCheckinOpen(false));
+  useBackClose(sale !== null, () => setSale(null));
 
   const load = useCallback(async (p: Pairing) => {
     setLoadError(null);
