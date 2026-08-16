@@ -749,6 +749,30 @@ table.takings thead th {
   font-size: 14px;
 }
 
+/* Side by side: the footer eats into the camera preview, and on a phone in
+   portrait every row of it is a row the operator cannot aim with. */
+.scanner-actions {
+  display: flex;
+  gap: 8px;
+}
+
+/* Three quarters to the name search: it is what an operator reaches for with a
+   queue waiting and a code that will not scan. The head count is a glance. */
+.scanner-actions .btn {
+  flex: 3;
+  min-width: 0;
+  min-height: 52px;
+  padding: 0 10px;
+  font-size: 16px;
+  white-space: nowrap;
+}
+
+.scanner-actions .btn.attendance-button {
+  flex: 1;
+  padding: 0 6px;
+  font-variant-numeric: tabular-nums;
+}
+
 .select,
 .scanner-select {
   width: 100%;
@@ -826,6 +850,132 @@ table.takings thead th {
   color: #241a00;
   font-size: 12px;
   font-weight: 700;
+}
+
+/* ---------- attendance ---------- */
+
+.attendance-panel h2 {
+  margin-bottom: 8px;
+}
+
+.attendance-headline {
+  text-align: center;
+  padding: 8px 0 16px;
+}
+
+.attendance-count {
+  font-size: clamp(48px, 14vw, 72px);
+  font-weight: 900;
+  line-height: 1;
+  color: var(--success);
+  font-variant-numeric: tabular-nums;
+}
+
+.attendance-caption {
+  margin-top: 4px;
+  color: var(--text-dim);
+}
+
+.attendance-subtitle {
+  font-size: 16px;
+  margin: 24px 0 8px;
+}
+
+.attendance-note {
+  margin-top: 10px;
+  color: var(--text-dim);
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+/* Four columns have to fit across a phone held in portrait, so this table is
+   tighter than the takings one it borrows from. */
+.attendance-panel table.takings {
+  font-size: 15px;
+}
+
+.attendance-panel table.takings th,
+.attendance-panel table.takings td {
+  padding: 9px 4px;
+}
+
+.attendance-panel table.takings thead th {
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+/* The flow chart. Sizes are in viewBox units, so every label scales with the
+   panel rather than needing a breakpoint of its own. */
+.flow {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.flow-box {
+  fill: var(--surface-2);
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.flow-box.is-inside {
+  fill: rgba(34, 197, 94, 0.16);
+  stroke: var(--success);
+}
+
+.flow-box.is-exited {
+  fill: rgba(245, 158, 11, 0.14);
+  stroke: var(--warning);
+}
+
+/* Not here yet, so: outlined rather than filled. */
+.flow-box.is-waiting {
+  fill: none;
+  stroke: var(--border);
+  stroke-dasharray: 5 4;
+}
+
+.flow-label {
+  fill: var(--text-dim);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.flow-value {
+  fill: var(--text);
+  font-size: 22px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+
+.flow-value.is-inside {
+  fill: var(--success);
+}
+
+.flow-link path {
+  stroke: var(--border);
+  stroke-width: 1.5;
+  fill: none;
+}
+
+.flow-link .flow-arrow {
+  fill: var(--border);
+  stroke: none;
+}
+
+.fill-bar {
+  height: 10px;
+  margin-top: 14px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  overflow: hidden;
+}
+
+.fill-bar-value {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--success);
 }
 
 /* ---------- check-in verdict ---------- */
@@ -934,6 +1084,18 @@ table.takings thead th {
   padding: 0 16px;
   color: var(--text);
   font-weight: 700;
+}
+
+/* A phone leaves little room either side of a panel; the numbers need it more
+   than the margins do. */
+@media (max-width: 480px) {
+  .overlay {
+    padding: 12px;
+  }
+
+  .attendance-panel {
+    padding: 18px 14px;
+  }
 }
 
 /* Portrait phones: the basket moves below the grid rather than squeezing it. */

@@ -134,6 +134,34 @@ export interface SaleResult {
   checkin_errors: string[];
 }
 
+/** One admission product's share of the room. */
+export interface AttendanceItem {
+  id: number;
+  name: string;
+  inside: number;
+  entered: number;
+  expected: number;
+}
+
+/**
+ * How many people are inside, counted over admission products only.
+ *
+ * `entered` counts everyone let in at least once, so `inside + exited` comes
+ * back to it, and `entered + not_arrived` comes back to `expected`.
+ */
+export interface Attendance {
+  list: { id: number; name: string };
+  computed_at: string;
+  inside: number;
+  entered: number;
+  exited: number;
+  expected: number;
+  not_arrived: number;
+  /** Scans of products that do not admit anyone, hence not in any figure above. */
+  non_admission_entered: number;
+  items: AttendanceItem[];
+}
+
 export interface Takings {
   count: number;
   cash: string;

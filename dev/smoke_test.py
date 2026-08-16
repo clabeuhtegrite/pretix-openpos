@@ -103,6 +103,12 @@ def main():
     if not full or not beer:
         return report()
 
+    # Head count before selling anything, so the checks further down can be
+    # differential. The dev database accumulates across runs — and carries
+    # check-ins from before merch was excluded from the door — so an absolute
+    # figure would only ever assert the history of this SQLite file.
+    _, before = call("GET", f"/organizers/{ORG}/events/{EVENT}/openpos/attendance/", token=token)
+
     key = str(uuid.uuid4())
     payload = {
         "idempotency_key": key,
@@ -161,6 +167,32 @@ def main():
     }, token)
     check("price field ignored", status == 201 and float(spoof["order"]["total"]) == float(full["price"]),
           f"HTTP {status}: total {spoof.get('order', {}).get('total')} vs {full['price']}")
+
+    print("\n-- attendance ----------------------------------------------")
+    status, after = call("GET", f"/organizers/{ORG}/events/{EVENT}/openpos/attendance/", token=token)
+    check("attendance reachable", status == 200, f"HTTP {status}: {after}")
+    if status == 200 and isinstance(before, dict) and "inside" in before:
+        print(f"        {after['inside']} on site, {after['entered']} in, "
+              f"{after['not_arrived']} still to come (of {after['expected']})")
+        # Three admission tickets were sold since the snapshot — two on the cash
+        # sale, one on the card sale — and each walked its holder in as it was
+        # sold. Nothing else in between checks anybody in: the merch sale admits
+        # nobody and the replay returns the original order without re-entering.
+        check("every ticket sold at the till walked in",
+              after["inside"] - before["inside"] == 3,
+              f"{before['inside']} -> {after['inside']}")
+        # The three beers and two softs went through the same tills, and a drink
+        # admits nobody: they must not move any figure above.
+        check("merch is not a person",
+              after["non_admission_entered"] == before["non_admission_entered"],
+              f"{before['non_admission_entered']} -> {after['non_admission_entered']}")
+        check("the figures add up",
+              after["inside"] + after["exited"] == after["entered"]
+              and after["entered"] + after["not_arrived"] == after["expected"],
+              str(after))
+        check("per-product breakdown sums to the total",
+              sum(i["inside"] for i in after["items"]) == after["inside"],
+              str(after["items"]))
 
     print("\n-- takings -------------------------------------------------")
     status, summary = call("GET", f"/organizers/{ORG}/events/{EVENT}/openpos/summary/", token=token)

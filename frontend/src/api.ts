@@ -1,6 +1,6 @@
 import type {
-  AttendeeMatch, Catalog, InitializeResponse, Pairing, PosConfig, PosEvent,
-  RedeemResult, SaleResult, SummaryResponse,
+  Attendance, AttendeeMatch, Catalog, InitializeResponse, Pairing, PosConfig,
+  PosEvent, RedeemResult, SaleResult, SummaryResponse,
 } from "./types";
 
 const BASE = "/api/v1";
@@ -133,6 +133,21 @@ export const api = {
   summary(p: Pairing): Promise<SummaryResponse> {
     return request(`/organizers/${p.organizer}/events/${p.event}/openpos/summary/`, {
       token: p.token,
+    });
+  },
+
+  /**
+   * How many people are inside, for one check-in list.
+   *
+   * Read from the server rather than counted in the app: several doors scan the
+   * same event at once, and tickets also get checked in as they are sold, so a
+   * tally kept in this browser would only ever know about its own scans.
+   */
+  attendance(p: Pairing, listId: number, signal?: AbortSignal): Promise<Attendance> {
+    const params = new URLSearchParams({ list: String(listId) });
+    return request(`/organizers/${p.organizer}/events/${p.event}/openpos/attendance/?${params}`, {
+      token: p.token,
+      signal,
     });
   },
 

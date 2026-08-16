@@ -24,6 +24,10 @@ before deciding it fits.
   readable at arm's length, and a keyboard-wedge/manual fallback. It calls
   pretix' own check-in RPC, so the rules engine and every refusal reason come
   from pretix rather than a reimplementation.
+- **A live head count** on the scanning screen: how many people are inside right
+  now, counted over admission products only and across every door and till.
+  Tapping it opens a flow chart of tickets expected → admitted → on site →
+  scanned back out, with the breakdown per product.
 - A dedicated **`openpos` sales channel**, so you pick product by product what
   is sellable at the door — including products that exist *only* on site.
 - **On-site pricing**: a separate tariff per product, because pretix itself has

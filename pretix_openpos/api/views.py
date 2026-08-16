@@ -3,8 +3,10 @@ from datetime import datetime, time
 from decimal import Decimal
 
 from django.db import transaction
+from django.db.models import Count, Exists, OuterRef
 from django.utils.timezone import make_aware, now
 from django.utils.translation import gettext_lazy as _
+from django_scopes import scopes_disabled
 from i18nfield.strings import LazyI18nString
 from pretix.api.serializers.order import OrderCreateSerializer
 from pretix.base.models import Checkin, Device, Order, Quota
@@ -488,7 +490,116 @@ class OpenPosViewSet(viewsets.ViewSet):
             }
         )
 
+    # -- attendance --------------------------------------------------------
+
+    @action(detail=False, methods=["get"], url_path="attendance", url_name="attendance")
+    def attendance(self, request, **kwargs):
+        """
+        How many people are inside right now, and how the room filled up.
+
+        Counts admission products only. A check-in list with ``all_products``
+        happily accepts a T-shirt and pretix will dutifully record the scan, but
+        a merch line has no door: counting those would answer "how many things
+        were scanned" when the question at the door is "how many people are in
+        the room". Everything on the screen is derived from that same
+        population, so the figures always add up.
+
+        Entry and exit scans are resolved by pretix itself, so a list that scans
+        people back out reports the room rather than the turnstile.
+        """
+        event = request.event
+        clist = self._requested_checkin_list(request)
+        if clist is None:
+            raise ValidationError({"list": [_("Unknown check-in list.")]})
+
+        # Scopes off for the counting, as pretix does for its own check-in
+        # figures: the extra organizer filter inside the EXISTS() subquery
+        # tricks PostgreSQL into sequentially scanning every event. Every
+        # queryset below is already bounded to this list, hence to this event.
+        with scopes_disabled():
+            admissions = clist.positions.filter(item__admission=True)
+            entered = self._with_entry_scan(admissions, clist)
+            inside = clist.positions_inside_query().filter(item__admission=True)
+
+            def by_item(qs):
+                return {
+                    row["item"]: row["cnt"]
+                    for row in qs.order_by().values("item").annotate(cnt=Count("id"))
+                }
+
+            expected_by_item = by_item(admissions)
+            entered_by_item = by_item(entered)
+            inside_by_item = by_item(inside)
+
+            items = [
+                {
+                    "id": item.pk,
+                    "name": str(item.name),
+                    "inside": inside_by_item.get(item.pk, 0),
+                    "entered": entered_by_item.get(item.pk, 0),
+                    "expected": expected_by_item.get(item.pk, 0),
+                }
+                for item in event.items.filter(pk__in=list(expected_by_item)).order_by(
+                    "category__position", "category_id", "position", "pk"
+                )
+            ]
+
+            # Reported rather than hidden: it is the one thing that explains a
+            # figure here differing from the count pretix' own back-office shows.
+            non_admission = self._with_entry_scan(
+                clist.positions.filter(item__admission=False), clist
+            ).count()
+
+        expected = sum(expected_by_item.values())
+        entered_count = sum(entered_by_item.values())
+        inside_count = sum(inside_by_item.values())
+
+        return Response(
+            {
+                "list": {"id": clist.pk, "name": str(clist.name)},
+                "computed_at": now().isoformat(),
+                "inside": inside_count,
+                # Everyone who was let in at least once, whether or not they
+                # have since been scanned back out.
+                "entered": entered_count,
+                "exited": entered_count - inside_count,
+                "expected": expected,
+                "not_arrived": expected - entered_count,
+                "non_admission_entered": non_admission,
+                "items": items,
+            }
+        )
+
     # -- helpers -----------------------------------------------------------
+
+    def _requested_checkin_list(self, request):
+        """
+        The list the app is scanning on, defaulting to the one sales check into.
+
+        Returns ``None`` for an unknown or malformed id rather than falling back
+        to another list: a door count is only worth anything if the operator
+        knows which door it is counting.
+        """
+        raw = request.query_params.get("list")
+        if not raw:
+            return checkin_list_for(request.event)
+        try:
+            pk = int(raw)
+        except (TypeError, ValueError):
+            return None
+        return request.event.checkin_lists.filter(pk=pk).first()
+
+    def _with_entry_scan(self, positions, clist):
+        """Narrow a position queryset to the ones let in through ``clist``."""
+        return positions.annotate(
+            checked_in=Exists(
+                Checkin.objects.filter(
+                    list_id=clist.pk,
+                    position=OuterRef("pk"),
+                    type=Checkin.TYPE_ENTRY,
+                )
+            )
+        ).filter(checked_in=True)
 
     def _sale_payload(self, sale, replayed):
         return {
