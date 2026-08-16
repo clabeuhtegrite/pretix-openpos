@@ -59,3 +59,25 @@ class CheckoutSerializer(serializers.Serializer):
                 {"cash_given": _("The amount received only applies to cash payments.")}
             )
         return data
+
+
+class CancelSerializer(serializers.Serializer):
+    """
+    Reverse one sale of this till, named by its journal sequence number.
+
+    The order code is deliberately not what identifies it: the journal is the
+    record that survives an order being purged, and its sequence number is what
+    a printed report cites.
+    """
+
+    seq = serializers.IntegerField(min_value=1)
+    #: Same replay protection as a sale: a timeout that in fact went through
+    #: must not cancel twice, nor report a failure for work that was done.
+    idempotency_key = serializers.CharField(max_length=190, min_length=8)
+    cashier = serializers.CharField(
+        max_length=190, required=False, allow_blank=True, default=""
+    )
+    #: Optional for the operator, valuable to whoever reads the journal later.
+    reason = serializers.CharField(
+        max_length=190, required=False, allow_blank=True, default=""
+    )

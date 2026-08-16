@@ -162,8 +162,60 @@ export interface Attendance {
   items: AttendanceItem[];
 }
 
+/** One line of a sale, as the journal froze it at the time. */
+export interface JournalPosition {
+  item: number;
+  item_name: string;
+  variation: number | null;
+  variation_name: string | null;
+  count: number;
+  unit_price: string;
+  line_total: string;
+}
+
+/**
+ * One line of this till's journal: a sale, or the reversal of one.
+ *
+ * A cancellation is its own entry carrying a negative total and pointing at the
+ * sale it reverses; the sale itself is never rewritten.
+ */
+export interface JournalLine {
+  seq: number;
+  kind: "sale" | "cancellation";
+  datetime: string;
+  order: string;
+  total: string;
+  payment_type: PaymentType;
+  cashier: string;
+  testmode: boolean;
+  positions: JournalPosition[];
+  reason: string;
+  cancels_seq: number | null;
+  /** This sale has since been cancelled. */
+  cancelled: boolean;
+  can_cancel: boolean;
+}
+
+export interface History {
+  device: string | null;
+  since: string | null;
+  results: JournalLine[];
+}
+
+export interface CancelResult {
+  cancellation: JournalLine;
+  /** The sale that was reversed, so its lines can go back in the basket. */
+  sale: JournalLine | null;
+  replayed: boolean;
+  /** Number of the credit note pretix issued, when the order had an invoice. */
+  credit_note: string | null;
+  refunded: boolean;
+}
+
 export interface Takings {
   count: number;
+  /** Reversals recorded in the same window; their money is already netted off. */
+  cancellations: number;
   cash: string;
   card: string;
   total: string;

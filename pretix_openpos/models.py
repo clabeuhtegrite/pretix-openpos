@@ -78,6 +78,13 @@ class PosSale(models.Model):
         (PAYMENT_CARD, _("Card terminal")),
     )
 
+    KIND_SALE = "sale"
+    KIND_CANCELLATION = "cancellation"
+    KIND_CHOICES = (
+        (KIND_SALE, _("Sale")),
+        (KIND_CANCELLATION, _("Cancellation")),
+    )
+
     event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name="openpos_sales")
     #: Gapless per-event counter, starting at 1.
     seq = models.PositiveIntegerField()
@@ -111,7 +118,27 @@ class PosSale(models.Model):
     #: out of the takings — the one thing an append-only journal exists to stop.
     testmode = models.BooleanField(default=False)
 
+    #: Sale, or the reversal of one.
+    #:
+    #: A cancellation is a new row, never an edit of the one it reverses: that is
+    #: the whole point of an append-only journal, and it is what lets the takings
+    #: be recomputed from the journal alone at any later date.
+    kind = models.CharField(max_length=16, choices=KIND_CHOICES, default=KIND_SALE)
+
+    #: For a cancellation, the ``seq`` of the sale it reverses.
+    #:
+    #: The journal's own identity, not a foreign key: the row it points at can
+    #: never move or disappear, and (event, seq) is what a printed report cites.
+    cancels_seq = models.PositiveIntegerField(null=True, blank=True)
+
+    #: Why the sale was cancelled, as typed by the operator.
+    #:
+    #: Optional, but asked for: a reversal with no stated ground is the first
+    #: thing anyone auditing a till asks about.
+    reason = models.CharField(max_length=190, blank=True, default="")
+
     payment_type = models.CharField(max_length=16, choices=PAYMENT_CHOICES)
+    #: Negative on a cancellation, so the takings are the plain sum of the column.
     total = models.DecimalField(max_digits=13, decimal_places=2)
     cash_given = models.DecimalField(max_digits=13, decimal_places=2, null=True, blank=True)
     cash_change = models.DecimalField(max_digits=13, decimal_places=2, null=True, blank=True)
@@ -132,7 +159,8 @@ class PosSale(models.Model):
     #: would report tampering on an untouched journal. So the payload is
     #: versioned, each row records the version it was written under, and
     #: verification replays the shape that row was actually hashed with.
-    #: 1 = original fields. 2 = adds `testmode`.
+    #: 1 = original fields. 2 = adds `testmode`. 3 = adds `kind`, `cancels_seq`
+    #: and `reason`, i.e. everything that distinguishes a reversal from a sale.
     hash_version = models.PositiveSmallIntegerField(default=1)
 
     class Meta:
@@ -145,14 +173,39 @@ class PosSale(models.Model):
                 fields=["event", "idempotency_key"], name="openpos_sale_unique_idempotency"
             ),
         ]
+        indexes = [
+            # Reversals are a small minority of the journal, and the question
+            # asked of them — "has this sale been cancelled?" — is asked every
+            # time the history is opened.
+            models.Index(
+                fields=["event", "cancels_seq"],
+                name="openpos_sale_cancels_idx",
+                condition=models.Q(cancels_seq__isnull=False),
+            ),
+        ]
 
     def __str__(self):
         return f"#{self.seq} {self.order_code} {self.total}"
 
+    @classmethod
+    def cancelled_seqs(cls, event, seqs):
+        """
+        Which of these sales already have a cancellation against them.
+
+        Asked of the journal rather than of the order, because the journal is
+        what survives: a test-mode purge takes the orders away and the takings
+        still have to add up afterwards.
+        """
+        return set(
+            cls.objects.filter(
+                event=event, kind=cls.KIND_CANCELLATION, cancels_seq__in=list(seqs)
+            ).values_list("cancels_seq", flat=True)
+        )
+
     # -- integrity ---------------------------------------------------------
 
     #: Version used for rows written from now on.
-    CURRENT_HASH_VERSION = 2
+    CURRENT_HASH_VERSION = 3
 
     def _hash_payload(self) -> str:
         """Canonical representation the hash is taken over, for this row's version."""
@@ -172,6 +225,10 @@ class PosSale(models.Model):
         }
         if self.hash_version >= 2:
             payload["testmode"] = self.testmode
+        if self.hash_version >= 3:
+            payload["kind"] = self.kind
+            payload["cancels_seq"] = self.cancels_seq
+            payload["reason"] = self.reason
         return json.dumps(
             payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
         )
@@ -213,7 +270,7 @@ class PosSale(models.Model):
     @classmethod
     def record(cls, *, event, order, device, cashier, payment_type, total, positions,
                idempotency_key, cash_given=None, cash_change=None, testmode=False,
-               attempts=5):
+               kind=KIND_SALE, cancels_seq=None, reason="", attempts=5):
         """
         Append a sale to the journal, chaining it onto the current tail.
 
@@ -241,6 +298,9 @@ class PosSale(models.Model):
                 positions=positions,
                 idempotency_key=idempotency_key,
                 testmode=testmode,
+                kind=kind,
+                cancels_seq=cancels_seq,
+                reason=reason or "",
                 hash_version=cls.CURRENT_HASH_VERSION,
                 previous_hash=last.hash if last else GENESIS_HASH,
             )

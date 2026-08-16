@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, ApiError } from "./api";
 import CheckinScreen from "./components/CheckinScreen";
 import DoneScreen from "./components/DoneScreen";
+import HistoryPanel from "./components/HistoryPanel";
 import InstallGate, { browserAllowed, isStandalone } from "./components/InstallGate";
 import PairingScreen from "./components/PairingScreen";
 import PaymentPanel from "./components/PaymentPanel";
@@ -14,7 +15,9 @@ import { newNonce } from "./nonce";
 import {
   clearPairing, loadCashier, loadPairing, saveCashier, savePairing,
 } from "./storage";
-import type { Catalog, CartLine, Pairing, PaymentType, PosConfig, SaleResult } from "./types";
+import type {
+  Catalog, CartLine, JournalPosition, Pairing, PaymentType, PosConfig, SaleResult,
+} from "./types";
 import { useBackClose } from "./useBackClose";
 import { useWakeLock } from "./useWakeLock";
 
@@ -27,6 +30,55 @@ import { useWakeLock } from "./useWakeLock";
  * figure and charging another.
  */
 const CATALOG_REFRESH_MS = 60_000;
+
+/**
+ * Turn the lines of a cancelled sale back into a basket.
+ *
+ * Priced from today's catalogue rather than from what the journal recorded: the
+ * original figures belong to the sale that was reversed, and re-selling at them
+ * would quietly resurrect yesterday's tariff. A product that has since left the
+ * catalogue is dropped here — the server would refuse it at checkout anyway,
+ * and it is better noticed with the basket open than at payment.
+ */
+function basketFromJournal(positions: JournalPosition[], catalog: Catalog): CartLine[] {
+  const sellable = new Map<string, { label: string; price: number; available: number | null }>();
+  for (const category of catalog.categories) {
+    for (const item of category.items) {
+      if (item.variations.length) {
+        for (const variation of item.variations) {
+          sellable.set(`${item.id}:${variation.id}`, {
+            label: `${item.name} · ${variation.name}`,
+            price: toCents(variation.price),
+            available: variation.available,
+          });
+        }
+      } else {
+        sellable.set(`${item.id}:`, {
+          label: item.name,
+          price: toCents(item.price),
+          available: item.available,
+        });
+      }
+    }
+  }
+
+  const lines: CartLine[] = [];
+  for (const position of positions) {
+    const key = `${position.item}:${position.variation ?? ""}`;
+    const product = sellable.get(key);
+    if (!product) continue;
+    lines.push({
+      key,
+      itemId: position.item,
+      variationId: position.variation,
+      label: product.label,
+      unitPrice: product.price,
+      count: position.count,
+      available: product.available,
+    });
+  }
+  return lines;
+}
 
 /** Re-price an open basket against a freshly loaded catalogue. */
 function repriceCart(lines: CartLine[], catalog: Catalog): CartLine[] {
@@ -73,6 +125,7 @@ export default function App() {
   const [sale, setSale] = useState<SaleResult | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [checkinOpen, setCheckinOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   // Evaluated once: display-mode does not change without a reload, and a value
   // that flickers would bounce the operator out of a sale.
@@ -85,6 +138,7 @@ export default function App() {
   // reflex is not something to make one swipe away.
   useBackClose(settingsOpen, () => setSettingsOpen(false));
   useBackClose(checkinOpen, () => setCheckinOpen(false));
+  useBackClose(historyOpen, () => setHistoryOpen(false));
   useBackClose(sale !== null, () => setSale(null));
 
   const load = useCallback(async (p: Pairing) => {
@@ -280,6 +334,14 @@ export default function App() {
             {t("checkin.open")}
           </button>
         )}
+        <button
+          className="icon-button"
+          onClick={() => setHistoryOpen(true)}
+          aria-label={t("history.open")}
+          title={t("history.open")}
+        >
+          🧾
+        </button>
         <button className="icon-button" onClick={() => setSettingsOpen(true)} aria-label="settings">
           ⚙
         </button>
@@ -324,6 +386,22 @@ export default function App() {
           lists={config.checkin.lists}
           defaultListId={config.checkin.list_id}
           onClose={() => setCheckinOpen(false)}
+        />
+      )}
+
+      {historyOpen && (
+        <HistoryPanel
+          pairing={pairing}
+          currency={config.event.currency}
+          cashier={cashier}
+          onReuse={(positions) => {
+            // Straight into the basket, replacing whatever was there: this only
+            // ever runs right after a cancellation, and the operator asked for
+            // these exact lines to correct.
+            setCart(basketFromJournal(positions, catalog));
+            setHistoryOpen(false);
+          }}
+          onClose={() => setHistoryOpen(false)}
         />
       )}
 

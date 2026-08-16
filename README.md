@@ -38,6 +38,10 @@ before deciding it fits.
   cash/card split visible in pretix' own reporting.
 - **Immediate check-in**: the ticket is checked in as it is sold, so the
   customer walks straight in and there is nothing to hand over.
+- **Transaction history and cancellation**, scoped to the till in your hands:
+  cancelling issues a credit note, records the refund and appends a reversing
+  journal entry — the original sale is never touched — and the items go back in
+  the basket so the corrected order is rung up as a new sale.
 - An **append-only journal**, hash-chained so that editing history after the
   fact is detectable.
 - Per-till and per-cashier takings for the day.
@@ -48,7 +52,8 @@ Being clear about this up front will save you an evaluation:
 
 - **No offline mode.** Every sale needs the server. If your venue's network is
   unreliable, this is the wrong tool today.
-- **No refunds or cancellations** from the till. Do those in the pretix backend.
+- **No partial refunds** from the till. A sale is cancelled whole, then rung up
+  again corrected; refunding two of three beers is a back-office job.
 - **No receipt printing** and no ticket printing.
 - **No check-in questions.** Scanning sends `questions_supported: false`, so a
   product that requires answers at the door is refused with a clear reason
@@ -73,7 +78,9 @@ iPad / iPhone / laptop                pretix server
 │  catalogue         │               │  /openpos/config             │
 │  basket            │               │  /openpos/catalog            │
 │  cash keypad       │◀──────────────│  /openpos/checkout           │
-└────────────────────┘   order + QR  │  /openpos/summary            │
+│  history           │   order + QR  │  /openpos/history            │
+└────────────────────┘               │  /openpos/cancel             │
+                                     │  /openpos/summary            │
                                      │                              │
                                      │  → OrderCreateSerializer     │
                                      │  → PosSale journal           │
@@ -95,7 +102,8 @@ the single most common way a homegrown POS loses money.
 
 Authentication uses pretix' own **device tokens** — the same mechanism pretixSCAN
 uses. Each till has its own credential, revocable from the organizer settings,
-and a custom security profile narrows it down to the four POS endpoints.
+and a custom security profile narrows it down to the POS endpoints and nothing
+else.
 
 ## Requirements
 
@@ -147,7 +155,10 @@ rather than to a rolling minor.
 3. **Set the on-site prices** under *Open POS → On-site prices*. Leave a field
    empty to charge the same as the online shop.
 4. **Choose the check-in list** under *Open POS → Settings*, so tickets are
-   checked in as they are sold. Leave it empty to sell without checking in.
+   checked in as they are sold. Leave it empty to sell without checking in. The
+   same screen has **Issue invoices for till sales**: tick it if you want a
+   cancellation from the till to produce a credit note, which also requires
+   invoicing to be on for the event at all.
 5. **Create a device** under the organizer's *Devices*: give it access to the
    event and pick the **Open POS** security profile. pretix shows a pairing QR
    code.

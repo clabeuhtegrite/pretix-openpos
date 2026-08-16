@@ -1,6 +1,6 @@
 import type {
-  Attendance, AttendeeMatch, Catalog, InitializeResponse, Pairing, PosConfig,
-  PosEvent, RedeemResult, SaleResult, SummaryResponse,
+  Attendance, AttendeeMatch, CancelResult, Catalog, History, InitializeResponse,
+  Pairing, PosConfig, PosEvent, RedeemResult, SaleResult, SummaryResponse,
 } from "./types";
 
 const BASE = "/api/v1";
@@ -124,6 +124,32 @@ export const api = {
     },
   ): Promise<SaleResult> {
     return request(`/organizers/${p.organizer}/events/${p.event}/openpos/checkout/`, {
+      method: "POST",
+      body: payload,
+      token: p.token,
+    });
+  },
+
+  /** What this till has recorded today. Never another till's takings. */
+  history(p: Pairing, signal?: AbortSignal): Promise<History> {
+    return request(`/organizers/${p.organizer}/events/${p.event}/openpos/history/`, {
+      token: p.token,
+      signal,
+    });
+  },
+
+  /**
+   * Reverse one sale of this till.
+   *
+   * Carries an idempotency key like a sale does: a timeout that in fact went
+   * through must not cancel a second time, nor report a failure for a
+   * cancellation the server has already committed.
+   */
+  cancelSale(
+    p: Pairing,
+    payload: { seq: number; idempotency_key: string; cashier?: string; reason?: string },
+  ): Promise<CancelResult> {
+    return request(`/organizers/${p.organizer}/events/${p.event}/openpos/cancel/`, {
       method: "POST",
       body: payload,
       token: p.token,

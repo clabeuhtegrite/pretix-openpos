@@ -124,7 +124,16 @@ export default function SettingsPanel({
               <TakingsRow label={t("summary.allTills")} takings={summary.event} currency={currency} />
             </tbody>
           </table>
-        ) : (
+        ) : null}
+        {summary && summary.event.cancellations > 0 && (
+          // Said out loud rather than left to be discovered: the amounts above
+          // are net, so a drawer that is short by exactly a cancelled sale is
+          // not short at all.
+          <div className="attendance-note">
+            {t("summary.cancellations", { n: summary.event.cancellations })}
+          </div>
+        )}
+        {!summary && (
           <p style={{ color: "var(--text-dim)" }}>…</p>
         )}
 

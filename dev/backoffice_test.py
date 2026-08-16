@@ -76,6 +76,39 @@ with scopes_disabled():
     if sales and not cash_seen:
         print("        (no cash sale among the last 10 — the money filter path was not exercised)")
 
+    print("\n-- saving the settings form ---------------------------------")
+    # The form does more than store its own fields: ticking "issue invoices for
+    # till sales" edits pretix' own list of invoiced sales channels, and that is
+    # what decides whether cancelling a sale can produce a credit note. A silent
+    # failure here would only be noticed the night someone needs an avoir.
+    if sales:
+        event = sales[0].event
+        settings_url = f"/control/event/{event.organizer.slug}/{event.slug}/openpos/"
+        before = event.settings.get("invoice_generate_sales_channels", as_type=list) or []
+        listed = event.checkin_lists.first()
+        response = client.post(settings_url, {
+            "openpos_checkin_list": str(listed.pk) if listed else "",
+            "openpos_invoices": "on",
+        })
+        check("settings form saves", response.status_code in (200, 302),
+              f"HTTP {response.status_code}")
+        event.settings.flush()
+        after = event.settings.get("invoice_generate_sales_channels", as_type=list) or []
+        check("ticking it adds the POS channel to the invoiced ones", "openpos" in after, str(after))
+        check("it leaves the other channels alone",
+              all(c in after for c in before if c != "openpos"), f"{before} -> {after}")
+
+        response = client.post(settings_url, {
+            "openpos_checkin_list": str(listed.pk) if listed else "",
+        })
+        event.settings.flush()
+        after_off = event.settings.get("invoice_generate_sales_channels", as_type=list) or []
+        check("unticking it removes only that channel",
+              "openpos" not in after_off and "web" in after_off, str(after_off))
+
+        # Leave the dev event as the seed wants it.
+        event.settings.set("invoice_generate_sales_channels", ["web", "openpos"])
+
     print("\n-- plugin screens, per permission ----------------------------")
     event = sales[0].event if sales else None
     if event:

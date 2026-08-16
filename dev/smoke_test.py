@@ -70,7 +70,8 @@ def main():
     if status != 200:
         return report()
     token = body["api_token"]
-    print(f"        serial {body['unique_serial']}")
+    serial = body["unique_serial"]
+    print(f"        serial {serial}")
 
     print("\n-- config --------------------------------------------------")
     status, config = call("GET", f"/organizers/{ORG}/events/{EVENT}/openpos/config/", token=token)
@@ -168,6 +169,62 @@ def main():
     check("price field ignored", status == 201 and float(spoof["order"]["total"]) == float(full["price"]),
           f"HTTP {status}: total {spoof.get('order', {}).get('total')} vs {full['price']}")
 
+    print("\n-- historique de la caisse ---------------------------------")
+    status, history = call("GET", f"/organizers/{ORG}/events/{EVENT}/openpos/history/", token=token)
+    check("history reachable", status == 200, f"HTTP {status}: {history}")
+    seqs = [line["seq"] for line in history.get("results", [])]
+    check("this till's own sales are listed", sale["journal_seq"] in seqs, str(seqs))
+    check("history is scoped to this device", history.get("device") == serial,
+          f"{history.get('device')} vs {serial}")
+    check("a fresh sale can be cancelled",
+          all(line["can_cancel"] for line in history["results"] if line["seq"] == sale["journal_seq"]),
+          str(history["results"][:2]))
+
+    print("\n-- annulation ----------------------------------------------")
+    # The merch sale, deliberately: nobody was admitted on it, so cancelling it
+    # cannot disturb the head count the previous section just checked.
+    merch_seq = merch.get("journal_seq") if isinstance(merch, dict) else None
+    key_cancel = str(uuid.uuid4())
+    cancel_body = {"seq": merch_seq, "idempotency_key": key_cancel, "cashier": "Alice",
+                   "reason": "smoke test"}
+    status, cancelled = (0, "pas de vente de merch à annuler")
+    cancelled_cash = 0.0
+    if merch_seq:
+        status, cancelled = call("POST", f"/organizers/{ORG}/events/{EVENT}/openpos/cancel/", cancel_body, token)
+    check("cancel accepted", status == 201, f"HTTP {status}: {cancelled}")
+    if status == 201:
+        check("the reversal is a new journal line, not an edit",
+              cancelled["cancellation"]["seq"] > merch_seq
+              and cancelled["cancellation"]["cancels_seq"] == merch_seq,
+              str(cancelled["cancellation"]))
+        check("the reversal carries the negative amount",
+              float(cancelled["cancellation"]["total"]) == -merch_total,
+              f"{cancelled['cancellation']['total']} vs {-merch_total:.2f}")
+        check("a credit note was issued", bool(cancelled["credit_note"]), str(cancelled))
+        check("the money is recorded as refunded", cancelled["refunded"] is True, str(cancelled))
+        cancelled_cash = merch_total
+        print(f"        avoir {cancelled['credit_note']}, écriture #{cancelled['cancellation']['seq']}")
+
+        # Replaying the exact same request must not cancel a second time.
+        status, replayed = call("POST", f"/organizers/{ORG}/events/{EVENT}/openpos/cancel/", cancel_body, token)
+        check("replayed cancellation returns the first one", status == 200
+              and replayed["replayed"] is True
+              and replayed["cancellation"]["seq"] == cancelled["cancellation"]["seq"],
+              f"HTTP {status}: {replayed}")
+
+        # And a second, genuinely new attempt must be refused.
+        status, again = call("POST", f"/organizers/{ORG}/events/{EVENT}/openpos/cancel/", {
+            "seq": merch_seq, "idempotency_key": str(uuid.uuid4()),
+        }, token)
+        check("cancelling twice is refused", status == 400, f"HTTP {status}: {again}")
+
+        status, history2 = call("GET", f"/organizers/{ORG}/events/{EVENT}/openpos/history/", token=token)
+        line = next((li for li in history2["results"] if li["seq"] == merch_seq), None)
+        check("the cancelled sale is still in the journal", line is not None, str(history2)[:200])
+        if line:
+            check("it is now flagged as cancelled, not removed",
+                  line["cancelled"] is True and line["can_cancel"] is False, str(line))
+
     print("\n-- attendance ----------------------------------------------")
     status, after = call("GET", f"/organizers/{ORG}/events/{EVENT}/openpos/attendance/", token=token)
     check("attendance reachable", status == 200, f"HTTP {status}: {after}")
@@ -200,9 +257,16 @@ def main():
     if status == 200:
         print(f"        this till : {summary['device']}")
         print(f"        all tills : {summary['event']}")
-        check("cash total recorded",
-              abs(float(summary["device"]["cash"]) - (expected_total + merch_total)) < 0.005,
-              f"got {summary['device']['cash']}, expected {expected_total + merch_total:.2f}")
+        # The cancelled sale is netted off here, which is the whole point: the
+        # drawer holds what the journal says it holds, cancellations included.
+        expected_cash = expected_total + merch_total - cancelled_cash
+        check("cash total is net of the cancellation",
+              abs(float(summary["device"]["cash"]) - expected_cash) < 0.005,
+              f"got {summary['device']['cash']}, expected {expected_cash:.2f}")
+        check("the cancellation is counted apart from the sales",
+              summary["device"]["cancellations"] == (1 if cancelled_cash else 0)
+              and summary["device"]["count"] == 3,
+              str(summary["device"]))
 
     return report()
 

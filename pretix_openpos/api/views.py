@@ -10,9 +10,10 @@ from django_scopes import scopes_disabled
 from i18nfield.strings import LazyI18nString
 from pretix.api.serializers.order import OrderCreateSerializer
 from pretix.base.models import Checkin, Device, Order, Quota
-from pretix.base.models.orders import OrderPayment
+from pretix.base.models.orders import OrderPayment, OrderRefund
 from pretix.base.services.checkin import CheckInError, perform_checkin
 from pretix.base.services.invoices import generate_invoice, invoice_qualified
+from pretix.base.services.orders import OrderError, cancel_order
 from pretix.base.signals import order_paid, order_placed
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -86,6 +87,24 @@ def quota_availability(quotas, cache):
             continue
         remaining = available if remaining is None else min(remaining, available)
     return remaining
+
+
+#: Longest run of transactions a till shows itself. A night's work on one till
+#: is well inside this; the back office is where a whole event gets read.
+HISTORY_LIMIT = 100
+
+
+def start_of_day(event):
+    """
+    Midnight in the event's own timezone.
+
+    The boundary for both the takings and the history: a till's day is the
+    evening it is serving, not a UTC calendar day that would cut a night in two.
+    """
+    return make_aware(
+        datetime.combine(now().astimezone(event.timezone).date(), time.min),
+        event.timezone,
+    )
 
 
 def checkin_list_for(event):
@@ -442,6 +461,151 @@ class OpenPosViewSet(viewsets.ViewSet):
         body["checkin_errors"] = checkin_errors
         return Response(body, status=status.HTTP_201_CREATED)
 
+    # -- history and cancellation ------------------------------------------
+
+    @action(detail=False, methods=["get"], url_path="history", url_name="history")
+    def history(self, request, **kwargs):
+        """
+        What this till has recorded today, newest first.
+
+        Scoped to the calling device on purpose. An operator correcting a
+        mistake is correcting *their* mistake, made a minute ago on the tablet
+        in their hand; handing every till the power to reverse every other
+        till's takings is a different feature with different consequences, and
+        the back office already covers it.
+        """
+        event = request.event
+        device = request.auth if isinstance(request.auth, Device) else None
+        if device is None:
+            # No device, no till history: this is per-device by design, and
+            # answering with the whole event's journal would quietly widen it.
+            return Response({"device": None, "since": None, "results": []})
+
+        sales = list(
+            PosSale.objects.filter(
+                event=event, device=device, datetime__gte=start_of_day(event)
+            )
+            .select_related("order")
+            .order_by("-seq")[:HISTORY_LIMIT]
+        )
+        cancelled = PosSale.cancelled_seqs(event, [s.seq for s in sales])
+
+        return Response(
+            {
+                "device": device.unique_serial,
+                "since": start_of_day(event).isoformat(),
+                "results": [self._journal_payload(s, cancelled) for s in sales],
+            }
+        )
+
+    @action(detail=False, methods=["post"], url_path="cancel", url_name="cancel")
+    def cancel(self, request, **kwargs):
+        """
+        Reverse a sale: cancel the order, credit it, refund it, journal it.
+
+        Nothing is ever edited or removed. The order is cancelled through
+        pretix' own service, which issues the credit note for the invoice it
+        had; the money is recorded as an ``OrderRefund`` so the payment stops
+        counting as taken; and the journal gains a *new* line carrying the
+        negative amount. The sale it reverses stays exactly as it was written,
+        which is the entire point of keeping the journal append-only — the
+        takings for the evening remain recomputable from it alone.
+
+        Correcting an order is therefore three documents, not one edit: the
+        sale, the credit note, and whatever new sale the operator rings up
+        afterwards.
+        """
+        from .serializers import CancelSerializer
+
+        event = request.event
+        device = request.auth if isinstance(request.auth, Device) else None
+
+        serializer = CancelSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        # A retry of a cancellation we already committed hands back the same
+        # answer rather than trying to cancel an order that is already gone.
+        replay = PosSale.objects.filter(
+            event=event, idempotency_key=data["idempotency_key"]
+        ).first()
+        if replay:
+            original = PosSale.objects.filter(event=event, seq=replay.cancels_seq).first()
+            return Response(
+                self._cancellation_payload(replay, original, replayed=True),
+                status=status.HTTP_200_OK,
+            )
+
+        sale = PosSale.objects.filter(event=event, seq=data["seq"]).select_related("order").first()
+        if sale is None:
+            raise ValidationError({"seq": [_("No such entry in this event's journal.")]})
+        if device is None or sale.device_id != device.pk:
+            # Deliberately not a 403: it is not a permission the operator can be
+            # granted, it is somebody else's till.
+            raise ValidationError(
+                {"seq": [_("This sale was made on another till and can only be corrected there.")]}
+            )
+        if sale.kind != PosSale.KIND_SALE:
+            raise ValidationError({"seq": [_("This journal entry is not a sale.")]})
+        if sale.datetime < start_of_day(event):
+            raise ValidationError(
+                {"seq": [_("Sales from an earlier day are corrected in the back office.")]}
+            )
+        if PosSale.cancelled_seqs(event, [sale.seq]):
+            raise ValidationError({"seq": [_("This sale has already been cancelled.")]})
+        if sale.order is None:
+            raise ValidationError({"seq": [_("The order behind this sale no longer exists.")]})
+
+        order = sale.order
+        if not order.cancel_allowed():
+            raise ValidationError(
+                {"seq": [_("pretix will not let this order be cancelled: {status}.").format(
+                    status=order.get_status_display()
+                )]}
+            )
+
+        with transaction.atomic():
+            try:
+                # pretix' own cancellation, so the credit note, the invalidated
+                # ticket secrets and the log entry are the ones the back office
+                # would have produced. send_mail is off: at a till the customer
+                # is standing right there, and the address is usually the
+                # organiser's own placeholder for an on-site sale.
+                cancel_order(
+                    order,
+                    device=device,
+                    send_mail=False,
+                    cancel_invoice=True,
+                    email_comment=data["reason"] or None,
+                )
+            except OrderError as e:
+                raise ValidationError({"seq": [str(e)]})
+
+            order.refresh_from_db()
+            refund = self._record_refund(request, order, sale, data["reason"])
+
+            cancellation = PosSale.record(
+                event=event,
+                order=order,
+                device=device,
+                cashier=data["cashier"],
+                payment_type=sale.payment_type,
+                # Negative, so the takings stay the plain sum of the column and
+                # the drawer reconciles against the journal without arithmetic.
+                total=-sale.total,
+                positions=self._reversed_positions(sale.positions),
+                idempotency_key=data["idempotency_key"],
+                testmode=sale.testmode,
+                kind=PosSale.KIND_CANCELLATION,
+                cancels_seq=sale.seq,
+                reason=data["reason"],
+            )
+
+        body = self._cancellation_payload(cancellation, sale, replayed=False)
+        body["credit_note"] = self._credit_note_number(order)
+        body["refunded"] = refund is not None
+        return Response(body, status=status.HTTP_201_CREATED)
+
     # -- takings -----------------------------------------------------------
 
     @action(detail=False, methods=["get"], url_path="summary", url_name="summary")
@@ -456,16 +620,24 @@ class OpenPosViewSet(viewsets.ViewSet):
         event = request.event
         device = request.auth if isinstance(request.auth, Device) else None
 
-        start_of_day = make_aware(
-            datetime.combine(now().astimezone(event.timezone).date(), time.min),
-            event.timezone,
-        )
-        sales = PosSale.objects.filter(event=event, datetime__gte=start_of_day)
+        since = start_of_day(event)
+        sales = PosSale.objects.filter(event=event, datetime__gte=since)
 
         def totals(qs):
-            result = {"count": qs.count(), "cash": "0.00", "card": "0.00", "total": "0.00"}
+            result = {
+                # Sales, not journal lines: a cancellation is not a sale, and
+                # counting it as one would say six when four customers were
+                # served. Its money is another matter — see below.
+                "count": qs.filter(kind=PosSale.KIND_SALE).count(),
+                "cancellations": qs.filter(kind=PosSale.KIND_CANCELLATION).count(),
+                "cash": "0.00",
+                "card": "0.00",
+                "total": "0.00",
+            }
             grand = Decimal("0.00")
             for payment_type in (PosSale.PAYMENT_CASH, PosSale.PAYMENT_CARD):
+                # Cancellations carry a negative total, so the amounts net out
+                # here on their own: this is what the drawer should hold.
                 amount = sum(
                     (s.total for s in qs.filter(payment_type=payment_type)), Decimal("0.00")
                 )
@@ -483,7 +655,7 @@ class OpenPosViewSet(viewsets.ViewSet):
 
         return Response(
             {
-                "since": start_of_day.isoformat(),
+                "since": since.isoformat(),
                 "device": totals(real.filter(device=device)) if device else None,
                 "event": totals(real),
                 "testmode": totals(test) if test.exists() else None,
@@ -600,6 +772,96 @@ class OpenPosViewSet(viewsets.ViewSet):
                 )
             )
         ).filter(checked_in=True)
+
+    def _journal_payload(self, sale, cancelled_seqs=()):
+        """One journal line as the till displays it."""
+        return {
+            "seq": sale.seq,
+            "kind": sale.kind,
+            "datetime": sale.datetime.isoformat(),
+            "order": sale.order_code,
+            "total": str(sale.total),
+            "payment_type": sale.payment_type,
+            "cashier": sale.cashier,
+            "testmode": sale.testmode,
+            "positions": sale.positions,
+            "reason": sale.reason,
+            "cancels_seq": sale.cancels_seq,
+            "cancelled": sale.seq in cancelled_seqs,
+            # What the app may still offer. The real decision is taken again,
+            # server-side, when the cancellation is actually asked for.
+            "can_cancel": (
+                sale.kind == PosSale.KIND_SALE
+                and sale.seq not in cancelled_seqs
+                and sale.order is not None
+                and sale.order.status in (Order.STATUS_PAID, Order.STATUS_PENDING)
+            ),
+        }
+
+    def _cancellation_payload(self, cancellation, sale, replayed):
+        return {
+            "cancellation": self._journal_payload(cancellation),
+            # The lines of the sale that was reversed, so the till can put them
+            # straight back in the basket for the operator to correct.
+            "sale": self._journal_payload(sale, {sale.seq}) if sale else None,
+            "replayed": replayed,
+            "credit_note": None,
+            "refunded": False,
+        }
+
+    def _reversed_positions(self, positions):
+        """The sold lines, negated, so the journal reads as a credit note."""
+        reversed_lines = []
+        for line in positions:
+            entry = dict(line)
+            for field in ("count", "line_total"):
+                value = entry.get(field)
+                if value is None:
+                    continue
+                entry[field] = -value if isinstance(value, int) else str(-Decimal(str(value)))
+            reversed_lines.append(entry)
+        return reversed_lines
+
+    def _record_refund(self, request, order, sale, reason):
+        """
+        Record that the money went back out.
+
+        Cancelling an order does not by itself say the customer was paid back —
+        pretix would keep showing the payment as taken. The refund is what makes
+        the books agree with the drawer. It is marked done immediately because
+        it is: cash out of the till, or an operator who has just refunded on the
+        card terminal standing in front of the customer.
+        """
+        payment = order.payments.filter(
+            state=OrderPayment.PAYMENT_STATE_CONFIRMED
+        ).order_by("-local_id").first()
+        if payment is None:
+            logger.warning("POS cancellation of %s has no confirmed payment to refund", order.code)
+            return None
+
+        refund = order.refunds.create(
+            state=OrderRefund.REFUND_STATE_CREATED,
+            # Not the buyer's own doing: an operator corrected the till.
+            source=OrderRefund.REFUND_SOURCE_ADMIN,
+            amount=payment.amount,
+            payment=payment,
+            provider=payment.provider,
+            info_data={
+                "journal_seq": sale.seq,
+                "device": sale.device_serial,
+                "cashier": sale.cashier,
+                "reason": reason,
+            },
+        )
+        refund.done(
+            user=request.user if request.user.is_authenticated else None,
+            auth=request.auth,
+        )
+        return refund
+
+    def _credit_note_number(self, order):
+        invoice = order.invoices.filter(is_cancellation=True).order_by("-pk").first()
+        return invoice.number if invoice else None
 
     def _sale_payload(self, sale, replayed):
         return {

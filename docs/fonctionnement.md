@@ -1,6 +1,6 @@
 # Fonctionnement de pretix-openpos
 
-Documentation de fonctionnement du plugin, version 0.4.2. Elle couvre trois
+Documentation de fonctionnement du plugin, version 0.5.0. Elle couvre trois
 choses, dans cet ordre : ce que le plugin ajoute à pretix, comment le mettre en
 service, et ce qui se passe exactement quand un bénévole encaisse.
 
@@ -32,7 +32,9 @@ Tablette / téléphone                        Serveur pretix
 │  panier (centimes)       │               │  GET  /openpos/catalog           │
 │  pavé de paiement        │◀──────────────│  POST /openpos/checkout          │
 │  scan QR (jsQR)          │  commande +   │  GET  /openpos/summary           │
-│  relevé du jour          │  verdict      │  GET  /openpos/attendance        │
+│  historique + annulation │  verdict      │  GET  /openpos/attendance        │
+│  relevé du jour          │               │  GET  /openpos/history           │
+│                          │               │  POST /openpos/cancel            │
 └──────────────────────────┘               │  ├─ OrderCreateSerializer        │
         localStorage :                     │  ├─ journal PosSale (chaîné)     │
         token, caissier                    │  └─ perform_checkin()            │
@@ -102,7 +104,7 @@ de tous les événements visibles ; celui-ci réduit à :
 - le cycle de vie du device (`initialize` implicite, `info`, `update`, `roll`,
   `revoke`, `eventselection`) ;
 - la lecture des événements (nom, devise) ;
-- les six endpoints Open POS ;
+- les huit endpoints Open POS ;
 - `checkinrpc.redeem` et `checkinrpc.search` pour le scan à la porte.
 
 ### 2.4 Deux modèles
@@ -129,6 +131,9 @@ jamais supprimée : `save()` sur une ligne existante et `delete()` lèvent une
 | `testmode` | Écrit à la création, pas déduit après coup (voir §6.4) |
 | `positions` | Instantané JSON de ce qui a été vendu, lisible même si le produit est renommé ou supprimé |
 | `idempotency_key` | Unique par événement |
+| `kind` | `sale` ou `cancellation` : une annulation est une ligne neuve, jamais une modification |
+| `cancels_seq` | Pour une annulation, le `seq` de la vente qu'elle contrepasse |
+| `reason` | Le motif saisi par l'opérateur, pour qui lira le journal plus tard |
 | `previous_hash`, `hash`, `hash_version` | La chaîne d'intégrité |
 
 ### 2.5 Trois écrans de back-office
@@ -172,7 +177,7 @@ En Docker/Kubernetes, [`deploy/Dockerfile`](../deploy/Dockerfile) intègre le pl
 
 ```bash
 cd frontend && npm run build && cd ..
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.4.2 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.5.0 .
 ```
 
 Deux pièges :
@@ -431,6 +436,76 @@ dedans.
 
 ---
 
+## 5bis. Historique et annulation
+
+Bouton 🧾 de la barre supérieure. C'est
+[HistoryPanel.tsx](../frontend/src/components/HistoryPanel.tsx), servi par
+`openpos/history/` et `openpos/cancel/`.
+
+### Ce que la caisse montre
+
+Les écritures du **jour**, **de cette caisse seule** — pas de la soirée entière.
+Une annulation se lit d'un coup d'œil : cadre pointillé, montant négatif en
+ambre, « annule la #13 » ; la vente contrepassée porte la mention « annulée ».
+Une caisse ne corrige donc que ses propres erreurs ; les autres se corrigent sur
+leur propre appareil, ou en back-office. Élargir ce pouvoir à toutes les caisses
+serait une autre fonctionnalité, avec d'autres conséquences.
+
+### Ce qu'une annulation fait vraiment
+
+Rien n'est jamais modifié ni supprimé. Corriger une commande produit **trois
+documents**, là où un tableur aurait changé une ligne :
+
+1. **La vente d'origine** reste au journal, octet pour octet — son hash continue
+   de vérifier, et la chaîne avec lui.
+2. **L'annulation** : `cancel_order()` de pretix, donc les mêmes effets que
+   depuis le back-office — statut `canceled`, secrets de billets invalidés,
+   entrée de log signée par le device, et surtout **l'avoir** émis pour la
+   facture s'il y en avait une. Un `OrderRefund` marqué `done` enregistre que
+   l'argent est ressorti, sans quoi pretix continuerait d'afficher le paiement
+   comme encaissé. Puis une **ligne neuve** au journal, de montant négatif,
+   pointant sur le `seq` de la vente et portant le motif saisi.
+3. **La nouvelle vente**, si l'opérateur reprend les articles au panier : une
+   commande neuve, sa propre facture, sa propre ligne de journal.
+
+Conséquence directe : les recettes restent **la somme de la colonne**. Une
+annulation étant négative, le tiroir se réconcilie sans arithmétique — et le
+relevé le dit explicitement (« 2 annulations sont déjà déduites de ces
+montants »), parce qu'une caisse qui semble manquer exactement le montant d'une
+vente annulée ne manque rien du tout.
+
+### Ce que la caisse ne fait pas à votre place
+
+- **L'argent physique.** Espèces : « Rendez 52,50 € sur la caisse. » Carte :
+  « Remboursez le client sur le TPE » — le plugin ne pilote aucun terminal, et
+  prétendre le contraire serait pire que se taire.
+- **Le remboursement partiel.** Une vente s'annule en entier. Reprendre les
+  articles au panier, en retirer un et réencaisser fait le même travail, avec
+  une piste écrite en trois documents plutôt qu'une modification silencieuse.
+
+### Ce qu'il faut activer pour avoir des avoirs
+
+pretix n'émet de facture que pour les canaux de vente qu'on lui désigne, et le
+défaut est `web` seul : sans réglage, une vente au guichet n'a **pas** de
+facture, donc son annulation n'a pas d'avoir — la contrepassation et le
+remboursement, eux, ont bien lieu. La case **« Émettre une facture pour les
+ventes au guichet »** (*Open POS → Réglages*) ajoute le canal `openpos` à la
+liste de pretix sans toucher aux autres. Il faut aussi que la facturation soit
+activée pour l'événement (*Réglages → Facturation*).
+
+### Garde-fous
+
+| Cas | Réponse |
+|---|---|
+| Vente d'une autre caisse | 400, « cette vente a été faite sur une autre caisse » |
+| Vente déjà annulée | 400, et le bouton n'est de toute façon plus proposé |
+| Vente d'un jour antérieur | 400 : passé minuit, c'est un travail de back-office |
+| Rejeu de la même requête | 200 avec `replayed: true`, la première annulation est renvoyée |
+| Commande purgée (mode test) | 400 : le journal survit à la commande, pas l'inverse |
+| pretix refuse l'annulation | 400 avec le motif de pretix, tel quel |
+
+---
+
 ## 6. Les garde-fous
 
 ### 6.1 Le serveur est seul maître des prix
@@ -546,6 +621,8 @@ Base : `/api/v1`. Authentification : `Authorization: Device <token>`.
 | `POST` | `…/openpos/checkout/` | Encaissement |
 | `GET` | `…/openpos/summary/` | Relevé du jour |
 | `GET` | `…/openpos/attendance/?list=<id>` | Présents sur place, sur une liste de contrôle |
+| `GET` | `…/openpos/history/` | Journal du jour, **de cette caisse seule** |
+| `POST` | `…/openpos/cancel/` | Annule une vente de cette caisse (avoir + remboursement + contrepassation) |
 | `POST` | `/organizers/<org>/checkinrpc/redeem/` | Pointage (endpoint pretix natif) |
 | `GET` | `/organizers/<org>/checkinrpc/search/` | Recherche de participant (natif) |
 
@@ -607,6 +684,27 @@ lignes. `cash_given` n'est accepté que pour un paiement en espèces.
 les quatre chiffres sont tirés de la même population. `list` est facultatif dans
 la requête et retombe alors sur la liste configurée pour la caisse ; une liste
 inconnue est un 400, pas un repli silencieux sur une autre porte.
+
+### Corps et réponse de `cancel/`
+
+```json
+{ "seq": 42, "idempotency_key": "01J8Z…", "cashier": "Alice", "reason": "erreur d'article" }
+```
+
+```json
+{
+  "cancellation": { "seq": 43, "kind": "cancellation", "total": "-52.50", "cancels_seq": 42, … },
+  "sale":         { "seq": 42, "kind": "sale", "total": "52.50", "cancelled": true, … },
+  "replayed": false,
+  "credit_note": "FESTIVAL-00004",
+  "refunded": true
+}
+```
+
+`credit_note` vaut `null` quand la commande n'avait pas de facture — voir §5bis.
+`sale.positions` sert à remettre les articles au panier ; les prix, eux, sont
+repris du catalogue du jour et non du journal, sinon une correction ressusciterait
+le tarif d'hier.
 
 ### Erreurs utiles
 
@@ -680,8 +778,9 @@ chaque build.
 Rappel, parce que c'est la première question qu'on se pose en incident :
 
 pas de **mode hors ligne** (chaque vente exige le serveur), pas de
-**remboursement ni d'annulation** depuis la caisse (à faire dans le back-office),
-pas d'**impression** de reçu ni de billet, pas de **questions au contrôle**, pas
+**remboursement partiel** depuis la caisse — une vente s'annule en entier puis se
+refait corrigée, rembourser deux bières sur trois reste un travail de back-office
+—, pas d'**impression** de reçu ni de billet, pas de **questions au contrôle**, pas
 de **Tap to Pay** (Stripe ne l'expose que par ses SDK natifs), et **aucune
 certification fiscale** — le journal est conçu pour qu'un travail de conformité
 reste possible, mais aucune revendication n'est faite sur les législations

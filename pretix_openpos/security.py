@@ -35,6 +35,11 @@ class OpenPosSecurityProfile(AllowListSecurityProfile):
         ("POST", "api-v1:openpos-checkout"),
         ("GET", "api-v1:openpos-summary"),
         ("GET", "api-v1:openpos-attendance"),
+        # Correcting a sale made on this same till. The endpoint itself refuses
+        # anything that is not this device's own, so the token cannot be used to
+        # unpick another till's takings.
+        ("GET", "api-v1:openpos-history"),
+        ("POST", "api-v1:openpos-cancel"),
         # Scanning tickets at the door. pretix' own check-in RPC is used rather
         # than a POS-specific endpoint: it already carries the rules engine,
         # revoked/blocked secrets, and the exact semantics pretixSCAN relies on.

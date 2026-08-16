@@ -990,6 +990,118 @@ table.takings thead th {
   background: var(--success);
 }
 
+/* ---------- transaction history ---------- */
+
+.history-panel {
+  display: flex;
+  flex-direction: column;
+  max-height: min(85vh, 720px);
+}
+
+.history-list {
+  flex: 1;
+  min-height: 120px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.history-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 12px 14px;
+  min-height: 64px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  text-align: left;
+}
+
+.history-row + .history-row {
+  margin-top: 8px;
+}
+
+.history-row:active {
+  filter: brightness(1.2);
+}
+
+/* A reversal reads as one at a glance, before any figure is compared. */
+.history-row.is-cancellation {
+  background: transparent;
+  border: 1px dashed var(--border);
+}
+
+.history-row-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.history-row-order {
+  display: block;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.history-row-meta {
+  display: block;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.history-row-total {
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.history-row-total.is-negative {
+  color: var(--warning);
+}
+
+.history-detail-head {
+  margin-bottom: 12px;
+}
+
+.history-detail-head .btn {
+  width: auto;
+  min-height: 44px;
+  padding: 0 14px;
+}
+
+.history-meta {
+  color: var(--text-dim);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 12px;
+}
+
+.history-done {
+  text-align: center;
+}
+
+.history-done-headline {
+  font-size: 26px;
+  font-weight: 800;
+  color: var(--success);
+  margin-bottom: 8px;
+}
+
+.history-done-meta {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* What the operator still has to do with actual money. */
+.history-warn {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: rgba(245, 158, 11, 0.16);
+  border: 1px solid var(--warning);
+  font-weight: 700;
+  line-height: 1.4;
+}
+
 /* ---------- check-in verdict ---------- */
 
 .verdict {
