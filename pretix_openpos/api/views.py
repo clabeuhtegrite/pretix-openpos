@@ -1,9 +1,9 @@
 import logging
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from decimal import Decimal
 
 from django.db import transaction
-from django.db.models import Count, Exists, OuterRef
+from django.db.models import Count, Exists, OuterRef, Sum
 from django.utils.timezone import make_aware, now
 from django.utils.translation import gettext_lazy as _
 from django_scopes import scopes_disabled
@@ -20,6 +20,7 @@ from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 
+from .. import __version__
 from ..channels import POS_CHANNEL, PosSalesChannelType
 from ..invoicing import pos_invoices_enabled
 from ..models import PosPrice, PosSale
@@ -105,17 +106,24 @@ HISTORY_LIMIT = 100
 OFFLINE_SNAPSHOT_LIMIT = 20000
 
 
-def start_of_day(event):
-    """
-    Midnight in the event's own timezone.
+#: Where one till day ends and the next begins, in the event's timezone.
+#:
+#: Six in the morning, not midnight: a till serves an evening, and an evening
+#: crosses midnight. At 01:30 the drawer still holds everything taken since the
+#: doors opened, so the figure it reconciles against must not have reset at
+#: 00:00 — which is exactly the mistake the history screen used to make. Six is
+#: late enough that any night has ended, early enough that none has begun.
+#: (Chosen safely clear of DST switches, which happen at 2–3 am.)
+BUSINESS_DAY_STARTS_AT = time(6, 0)
 
-    The boundary for both the takings and the history: a till's day is the
-    evening it is serving, not a UTC calendar day that would cut a night in two.
-    """
-    return make_aware(
-        datetime.combine(now().astimezone(event.timezone).date(), time.min),
-        event.timezone,
-    )
+
+def start_of_business_day(event):
+    """The moment the takings count from: 6 am on the day the current night began."""
+    local = now().astimezone(event.timezone)
+    day = local.date()
+    if local.time() < BUSINESS_DAY_STARTS_AT:
+        day -= timedelta(days=1)
+    return make_aware(datetime.combine(day, BUSINESS_DAY_STARTS_AT), event.timezone)
 
 
 def checkin_list_for(event):
@@ -196,6 +204,11 @@ class OpenPosViewSet(viewsets.ViewSet):
         clist = checkin_list_for(event)
         return Response(
             {
+                # The plugin's version, which is also the version the bundle is
+                # built with. A till that stays open across a deploy — a whole
+                # festival weekend, routinely — compares this against its own
+                # build on the idle refresh and offers a reload.
+                "version": __version__,
                 "event": {
                     "slug": event.slug,
                     "organizer": event.organizer.slug,
@@ -324,7 +337,20 @@ class OpenPosViewSet(viewsets.ViewSet):
             event=event, idempotency_key=idempotency_key
         ).first()
         if replay:
-            return Response(self._sale_payload(replay, replayed=True), status=status.HTTP_200_OK)
+            body = self._sale_payload(replay, replayed=True)
+            # The original attempt may have died between committing the order
+            # and the best-effort tail: the connection that carried this very
+            # retry is proof that connections die at the worst moment. Whatever
+            # is missing — the invoice, the check-ins, and nothing else — is
+            # done now. Idempotent: a second retry finds nothing left to do.
+            if replay.kind == PosSale.KIND_SALE and replay.order is not None:
+                self._ensure_invoice(request, replay.order)
+                checked_in, checkin_errors = self._check_in(
+                    request, replay.order, only_missing=True
+                )
+                body["checked_in"] = checked_in
+                body["checkin_errors"] = checkin_errors
+            return Response(body, status=status.HTTP_200_OK)
 
         channel = get_pos_channel(event.organizer)
         overrides = pos_price_overrides(event)
@@ -725,36 +751,45 @@ class OpenPosViewSet(viewsets.ViewSet):
     @action(detail=False, methods=["get"], url_path="summary", url_name="summary")
     def summary(self, request, **kwargs):
         """
-        Running total for the current day, for the calling till and overall.
+        Running total for the current till day, for the calling till and overall.
 
         This is the lightweight alternative to a full cash session: no opening
-        float, no blind count, just what has gone through since midnight so a
-        volunteer can reconcile the drawer at the end of the night.
+        float, no blind count, just what has gone through since the day began —
+        at six in the morning, so a night that crosses midnight stays one figure
+        — for a volunteer to reconcile the drawer at the end of it.
         """
         event = request.event
         device = request.auth if isinstance(request.auth, Device) else None
 
-        since = start_of_day(event)
+        since = start_of_business_day(event)
         sales = PosSale.objects.filter(event=event, datetime__gte=since)
 
         def totals(qs):
+            # Two aggregate queries per bucket, instead of fetching every row
+            # of the night to add it up in Python.
+            kinds = {
+                row["kind"]: row["n"]
+                for row in qs.order_by().values("kind").annotate(n=Count("pk"))
+            }
+            amounts = {
+                # Quantized because SQLite hands Sum() back with the trailing
+                # zeros gone — "50" where PostgreSQL says "50.00" — and this
+                # string is API surface.
+                row["payment_type"]: (row["amount"] or Decimal("0.00")).quantize(Decimal("0.01"))
+                for row in qs.order_by().values("payment_type").annotate(amount=Sum("total"))
+            }
             result = {
                 # Sales, not journal lines: a cancellation is not a sale, and
                 # counting it as one would say six when four customers were
                 # served. Its money is another matter — see below.
-                "count": qs.filter(kind=PosSale.KIND_SALE).count(),
-                "cancellations": qs.filter(kind=PosSale.KIND_CANCELLATION).count(),
-                "cash": "0.00",
-                "card": "0.00",
-                "total": "0.00",
+                "count": kinds.get(PosSale.KIND_SALE, 0),
+                "cancellations": kinds.get(PosSale.KIND_CANCELLATION, 0),
             }
             grand = Decimal("0.00")
             for payment_type in (PosSale.PAYMENT_CASH, PosSale.PAYMENT_CARD):
                 # Cancellations carry a negative total, so the amounts net out
                 # here on their own: this is what the drawer should hold.
-                amount = sum(
-                    (s.total for s in qs.filter(payment_type=payment_type)), Decimal("0.00")
-                )
+                amount = amounts.get(payment_type, Decimal("0.00"))
                 result[payment_type] = str(amount)
                 grand += amount
             result["total"] = str(grand)
@@ -1025,6 +1060,16 @@ class OpenPosViewSet(viewsets.ViewSet):
                 auth=request.auth,
             )
 
+        self._ensure_invoice(request, order)
+
+    def _ensure_invoice(self, request, order):
+        """
+        Generate the invoice this order should have but does not yet.
+
+        Called on the first attempt, and again on a replay: it checks what
+        exists before doing anything, so running it twice costs a query, never
+        a second invoice.
+        """
         settings = request.event.settings
         # The plugin answers for its own channel. An event set to invoice "by
         # hand" — a reasonable webshop policy — would otherwise leave every till
@@ -1054,13 +1099,18 @@ class OpenPosViewSet(viewsets.ViewSet):
                     "pretix.event.order.invoice.failed", data={"exception": str(e)}
                 )
 
-    def _check_in(self, request, order):
+    def _check_in(self, request, order, only_missing=False):
         """
         Walk the customer straight in.
 
         Deliberately best-effort: the money is already in the drawer, so a
         check-in that fails is reported back to the app for the operator to sort
         out, never a reason to fail the sale.
+
+        With ``only_missing`` — the replay-repair case — positions that already
+        have an entry on the list are left alone. The customer may have walked
+        to the door and been scanned there in the meantime, and forcing a second
+        entry would count one person twice.
         """
         clist = checkin_list_for(request.event)
         if not clist:
@@ -1072,6 +1122,13 @@ class OpenPosViewSet(viewsets.ViewSet):
         # line has no door. Left unfiltered it also made the till announce
         # "let them in" after a pure shop sale.
         positions = [p for p in order.positions.select_related("item") if p.item.admission]
+        if only_missing and positions:
+            already = set(
+                Checkin.objects.filter(
+                    position__in=positions, list=clist, type=Checkin.TYPE_ENTRY
+                ).values_list("position_id", flat=True)
+            )
+            positions = [p for p in positions if p.pk not in already]
         if not positions:
             return 0, []
 

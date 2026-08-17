@@ -1,6 +1,6 @@
 # Fonctionnement de pretix-openpos
 
-Documentation de fonctionnement du plugin, version 0.6.1. Elle couvre trois
+Documentation de fonctionnement du plugin, version 0.7.0. Elle couvre trois
 choses, dans cet ordre : ce que le plugin ajoute à pretix, comment le mettre en
 service, et ce qui se passe exactement quand un bénévole encaisse.
 
@@ -376,10 +376,12 @@ une liste. C'est [CheckinScreen.tsx](../frontend/src/components/CheckinScreen.ts
 - **Vibration sur refus** : Android vibre, iOS n'expose rien de tel et ne vibre
   pas. C'est un rappel, jamais la réponse — celle-ci reste l'écran rouge.
 - **Lampe** : bouton 🔦 dans la barre, affiché **uniquement si la caméra en a
-  une** (`track.getCapabilities().torch`). Android l'expose, Safari n'expose rien
-  de tel sur aucune version d'iOS : sur iPhone le bouton n'apparaît pas, ce qui
-  vaut mieux qu'un bouton inerte dans une entrée sombre. Si la capacité est
-  annoncée puis refusée, le bouton disparaît au lieu d'insister.
+  une** (`track.getCapabilities().torch`). Android l'expose depuis longtemps,
+  Safari depuis iOS 17.4 — la présence du bouton dépend donc de l'appareil et de
+  la version, et les capabilities sont la seule source honnête. Après chaque
+  bascule, l'état réel est relu (`getSettings().torch`) : une contrainte
+  `advanced` est best-effort par spécification, et un bouton qui n'allume rien
+  se retire au lieu d'insister.
 - **Trois verdicts, pas deux.** Vert « Entrée autorisée » quand quelqu'un entre.
   Rouge avec le motif quand c'est refusé. Et **bleu « Enregistré · pas une
   entrée »** quand le scan est accepté pour un produit qui ne fait entrer
@@ -643,7 +645,9 @@ garde l'autre moitié. Un scan rejoué porte lui aussi son horodatage d'origine.
 - **Le scan hors ligne ne voit que sa liste embarquée.** Un billet vendu en ligne
   pendant la coupure y est absent : il sera refusé à la porte. Un billet déjà
   scanné à une autre porte pendant la coupure sera accepté ici, et signalé à la
-  reprise.
+  reprise. Et la liste embarquée ne répond **que pour sa propre porte** : changer
+  de liste pendant la coupure affiche « pas de liste embarquée » plutôt que de
+  faire entrer les invités de l'autre porte.
 - **Pas de moteur de règles hors ligne.** Les règles de check-in de pretix
   (horaires, quotas d'entrée) ne s'appliquent qu'au retour du réseau.
 - **Pas d'annulation hors ligne.** Un avoir demande le serveur.
@@ -730,19 +734,29 @@ chargement.
 - le **choix de l'événement**, si le device en voit plusieurs ;
 - le **nom du caissier**, mémorisé sur l'appareil, joint à chaque vente ;
 - le **relevé du jour** : nombre de ventes, espèces, carte, total — pour cette
-  caisse et pour l'événement entier. La journée commence à minuit **dans le
-  fuseau de l'événement** ;
+  caisse et pour l'événement entier. La journée de caisse commence à **6 h du
+  matin dans le fuseau de l'événement**, pas à minuit : une soirée traverse
+  minuit, et le chiffre qu'on rapproche du tiroir à 1 h 30 doit couvrir toute la
+  soirée, pas les quatre-vingt-dix dernières minutes ;
 - *Recharger* et *Dépairer*.
 
 C'est l'alternative légère à une vraie session de caisse : pas de fonds de
-caisse, pas de comptage aveugle, juste ce qui est passé depuis minuit pour qu'un
-bénévole rapproche le tiroir en fin de soirée.
+caisse, pas de comptage aveugle, juste ce qui est passé depuis le début de la
+journée de caisse pour qu'un bénévole rapproche le tiroir en fin de soirée.
 
 ### 7.2 Dans le back-office
 
 *Open POS → Ventes* affiche le journal (100 lignes par page, plus récent
 d'abord), les recettes **ventilées par caisse et par caissier**, le total, la
-ligne mode test séparée, et l'état de la chaîne d'intégrité.
+ligne mode test séparée, et l'état de la chaîne d'intégrité. Le bouton
+**Export CSV** télécharge le journal entier — une ligne par écriture, avoirs
+compris — pour la personne qui tient les comptes ; les recettes se recalculent
+depuis ce fichier, c'est le but.
+
+La page vérifie la chaîne depuis un point de contrôle plutôt que de re-hacher
+tout le journal à chaque affichage ; l'audit intégral, depuis la première
+écriture, se lance avec `python -m pretix openpos_verify_journal` (une ligne
+par événement, code de sortie non nul si une chaîne ne colle pas).
 
 Les commandes elles-mêmes sont des commandes pretix ordinaires : elles
 apparaissent dans les listes, les exports et les rapports habituels, sur le canal
@@ -914,7 +928,7 @@ chaque build.
 | Un billet refuse de se scanner | Code-barres non-QR : passer par la recherche par nom ou une douchette clavier |
 | La caméra ne démarre pas | Contexte non sécurisé (HTTP), ou autorisation refusée dans les réglages du navigateur |
 | Le relevé ne correspond pas au tiroir | Vérifier la ligne « mode test » sur l'écran *Ventes* : elle est comptée à part |
-| L'app reste sur un vieux build | Le service worker n'est jamais mis en cache, mais fermer et rouvrir l'app force la reprise |
+| L'app reste sur un vieux build | Une caisse ouverte compare sa version à celle du serveur au rafraîchissement du catalogue et affiche « Nouvelle version — recharger » entre deux clients ; sinon, fermer et rouvrir l'app force la reprise |
 
 ---
 

@@ -169,6 +169,33 @@ with scopes_disabled():
                   granted == 200 and denied != 200,
                   f"with={granted} without={denied}")
 
+        print("\n-- journal export -------------------------------------------")
+        response = client.get(base + "sales/?export=csv")
+        check("the journal exports as CSV",
+              response.status_code == 200
+              and response["Content-Type"].startswith("text/csv"),
+              f"HTTP {response.status_code} {response.get('Content-Type')}")
+        if response.status_code == 200:
+            content = b"".join(response.streaming_content).decode("utf-8-sig")
+            lines = [line for line in content.splitlines() if line]
+            expected_rows = PosSale.objects.filter(event=event).count()
+            check("one line per journal entry plus the header",
+                  len(lines) == expected_rows + 1,
+                  f"{len(lines)} lines vs {expected_rows} entries + header")
+            check("the columns a treasurer needs come first",
+                  lines[0].startswith("seq;kind;datetime;order"), lines[0][:80])
+
+    print("\n-- the shell and its headers ---------------------------------")
+    # Unauthenticated on purpose: the shell is public, the CSP is what keeps a
+    # public page from being a way at the device token in localStorage.
+    anonymous = Client()
+    response = anonymous.get("/openpos/")
+    check("the shell renders unauthenticated", response.status_code == 200,
+          f"HTTP {response.status_code}")
+    check("and locks itself to same-origin",
+          "default-src 'self'" in response.get("Content-Security-Policy", ""),
+          str(response.get("Content-Security-Policy"))[:120])
+
 print()
 if failures:
     print(f"{len(failures)} check(s) failed")

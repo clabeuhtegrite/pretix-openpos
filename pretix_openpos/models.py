@@ -1,6 +1,7 @@
 import hashlib
 import json
 
+from django.core.cache import cache
 from django.db import IntegrityError, models, transaction
 from django.utils.timezone import now
 from django.utils.translation import gettext_lazy as _
@@ -249,23 +250,81 @@ class PosSale(models.Model):
         return hashlib.sha256(self._hash_payload().encode("utf-8")).hexdigest()
 
     @classmethod
-    def verify_chain(cls, event):
+    def _walk_chain(cls, rows, previous, expected_seq):
         """
-        Walk the journal of an event and return the first row that does not add
-        up, or ``None`` when the chain is intact.
+        Walk ``rows`` (ascending ``seq``) checking every link.
+
+        Returns ``(first bad row or None, last good (seq, hash) or None)``.
         """
-        previous = GENESIS_HASH
-        expected_seq = 1
-        for sale in cls.objects.filter(event=event).order_by("seq").iterator():
+        last = None
+        for sale in rows:
             if (
                 sale.seq != expected_seq
                 or sale.previous_hash != previous
                 or sale.hash != sale.compute_hash()
             ):
-                return sale
+                return sale, last
             previous = sale.hash
             expected_seq += 1
-        return None
+            last = (sale.seq, sale.hash)
+        return None, last
+
+    @classmethod
+    def verify_chain(cls, event):
+        """
+        Walk the whole journal of an event and return the first row that does
+        not add up, or ``None`` when the chain is intact.
+        """
+        bad, _last = cls._walk_chain(
+            cls.objects.filter(event=event).order_by("seq").iterator(), GENESIS_HASH, 1
+        )
+        return bad
+
+    #: Cache key of the last verified ``(seq, hash)`` of an event's journal.
+    CHAIN_CHECKPOINT_KEY = "pretix_openpos:chain:{}"
+
+    @classmethod
+    def verify_chain_cached(cls, event):
+        """
+        Like :meth:`verify_chain`, but resuming from the last row a previous
+        call verified — so the back-office page does not re-hash a whole
+        festival's journal on every load.
+
+        The checkpoint is an anchor, not a shortcut past scrutiny: rows are
+        only skipped while the checkpoint row still carries the hash recorded
+        *outside* the journal, and any consistent rewrite of history has to
+        propagate new hashes through that row — so it is still caught here.
+        What a checkpointed walk cannot see is an edit behind the anchor that
+        never bothered to fix the hashes; the full walk exists for that, and
+        ``manage.py openpos_verify_journal`` runs it. A cold or evicted cache
+        simply pays for one full walk and checkpoints again.
+        """
+        key = cls.CHAIN_CHECKPOINT_KEY.format(event.pk)
+        checkpoint = cache.get(key)
+        if checkpoint and cls.objects.filter(
+            event=event, seq=checkpoint["seq"], hash=checkpoint["hash"]
+        ).exists():
+            rows = (
+                cls.objects.filter(event=event, seq__gt=checkpoint["seq"])
+                .order_by("seq")
+                .iterator()
+            )
+            bad, last = cls._walk_chain(rows, checkpoint["hash"], checkpoint["seq"] + 1)
+            if bad is None:
+                if last:
+                    cache.set(key, {"seq": last[0], "hash": last[1]}, None)
+                return None
+            # The tail is broken. Re-walk from the start so the row reported is
+            # the first that no longer adds up, not merely the first after the
+            # checkpoint.
+            return cls.verify_chain(event)
+
+        bad, last = cls._walk_chain(
+            cls.objects.filter(event=event).order_by("seq").iterator(), GENESIS_HASH, 1
+        )
+        if bad is None and last:
+            cache.set(key, {"seq": last[0], "hash": last[1]}, None)
+        return bad
 
     # -- append-only enforcement -------------------------------------------
 

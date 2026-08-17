@@ -35,6 +35,32 @@ def app_name() -> str:
     return GlobalSettingsObject().settings.get("openpos_app_name") or DEFAULT_APP_NAME
 
 
+#: Everything the shell loads is same-origin, so say exactly that.
+#:
+#: The device token lives in localStorage on a tablet that sits on a counter;
+#: a script injected from anywhere would walk off with it, and this header is
+#: the cheap way to make "from anywhere" mean "from nowhere". style-src keeps
+#: 'unsafe-inline' because React writes style attributes; scripts get no such
+#: allowance.
+#:
+#: pretix' CSP middleware re-parses this header and refuses directives outside
+#: its own whitelist — with a 500, found by serving the page, not by reading
+#: the docs. So no ``frame-ancestors`` and no ``base-uri`` here: framing is
+#: already denied by the global X-Frame-Options, and the page carries no
+#: ``<base>`` for the latter to police.
+SHELL_CSP = (
+    "default-src 'self'; "
+    "script-src 'self'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "connect-src 'self'; "
+    "manifest-src 'self'; "
+    "worker-src 'self'; "
+    "object-src 'none'; "
+    "form-action 'self'"
+)
+
+
 class ShellView(TemplateView):
     """
     The app shell.
@@ -45,6 +71,11 @@ class ShellView(TemplateView):
     """
 
     template_name = "pretix_openpos/pwa.html"
+
+    def get(self, request, *args, **kwargs):
+        response = super().get(request, *args, **kwargs)
+        response["Content-Security-Policy"] = SHELL_CSP
+        return response
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)

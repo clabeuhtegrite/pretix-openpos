@@ -79,6 +79,8 @@ def main():
     check("config reachable", status == 200, f"HTTP {status}: {config}")
     if status == 200:
         check("currency present", config.get("event", {}).get("currency") == "EUR", str(config))
+        # What lets a till that stays open across a deploy notice it is stale.
+        check("plugin version announced", bool(config.get("version")), str(config.get("version")))
         check("check-in configured", config.get("checkin", {}).get("enabled") is True, str(config.get("checkin")))
         # The scanning screen needs these to tell an entry from a T-shirt, and
         # they must cover the whole event, not just what the till may sell.
@@ -229,6 +231,13 @@ def main():
               and replayed_offline["replayed"] is True
               and replayed_offline["order"]["code"] == offline_sale["order"]["code"],
               f"HTTP {status}: {replayed_offline}")
+        # A replay finishes whatever the first attempt left undone — invoice,
+        # check-ins — and here the first attempt finished everything, so the
+        # repair must find nothing and above all must not re-admit anybody.
+        check("the replay repairs nothing when nothing is missing",
+              replayed_offline.get("checked_in") == 0
+              and replayed_offline.get("checkin_errors") == [],
+              str({k: replayed_offline.get(k) for k in ("checked_in", "checkin_errors")}))
 
     # A price the till invented without saying it was offline stays refused.
     status, sneaky = call("POST", f"/organizers/{ORG}/events/{EVENT}/openpos/checkout/", {
