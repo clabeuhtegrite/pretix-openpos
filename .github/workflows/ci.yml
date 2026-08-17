@@ -1,0 +1,41 @@
+# What a push must not break. The full end-to-end story — a pretix stack, a
+# seeded event, real sales and a real network cut — lives in dev/ and runs
+# against docker compose; this here is the fast half that needs no stack.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  frontend:
+    name: "Frontend: typecheck, tests, build"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      # The queue-replay rules, the offline door verdicts, the money handling.
+      - run: npm test
+      # tsc -b runs first inside the build script, so this is the typecheck too.
+      - run: npm run build
+
+  backend:
+    name: "Backend: syntax"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # The plugin only imports inside a running pretix, which CI does not
+      # have; compileall at least refuses a push that does not parse.
+      - run: python -m compileall -q pretix_openpos

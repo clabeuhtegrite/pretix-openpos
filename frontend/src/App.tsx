@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api, ApiError } from "./api";
+import { basketFromJournal, repriceCart } from "./basket";
 import CheckinScreen from "./components/CheckinScreen";
 import DoneScreen from "./components/DoneScreen";
 import HistoryPanel from "./components/HistoryPanel";
@@ -20,7 +21,7 @@ import {
 import { useConnectivity } from "./connectivity";
 import { drainQueue } from "./sync";
 import type {
-  Catalog, CartLine, JournalPosition, Pairing, PaymentType, PosConfig, QueuedSale,
+  Catalog, CartLine, Pairing, PaymentType, PosConfig, QueuedSale,
   SaleResult, SyncReport,
 } from "./types";
 import { useBackClose } from "./useBackClose";
@@ -36,79 +37,26 @@ import { useWakeLock } from "./useWakeLock";
  */
 const CATALOG_REFRESH_MS = 60_000;
 
-/**
- * Turn the lines of a cancelled sale back into a basket.
- *
- * Priced from today's catalogue rather than from what the journal recorded: the
- * original figures belong to the sale that was reversed, and re-selling at them
- * would quietly resurrect yesterday's tariff. A product that has since left the
- * catalogue is dropped here — the server would refuse it at checkout anyway,
- * and it is better noticed with the basket open than at payment.
- */
-function basketFromJournal(positions: JournalPosition[], catalog: Catalog): CartLine[] {
-  const sellable = new Map<string, { label: string; price: number; available: number | null }>();
-  for (const category of catalog.categories) {
-    for (const item of category.items) {
-      if (item.variations.length) {
-        for (const variation of item.variations) {
-          sellable.set(`${item.id}:${variation.id}`, {
-            label: `${item.name} · ${variation.name}`,
-            price: toCents(variation.price),
-            available: variation.available,
-          });
-        }
-      } else {
-        sellable.set(`${item.id}:`, {
-          label: item.name,
-          price: toCents(item.price),
-          available: item.available,
-        });
-      }
-    }
-  }
-
-  const lines: CartLine[] = [];
-  for (const position of positions) {
-    const key = `${position.item}:${position.variation ?? ""}`;
-    const product = sellable.get(key);
-    if (!product) continue;
-    lines.push({
-      key,
-      itemId: position.item,
-      variationId: position.variation,
-      label: product.label,
-      unitPrice: product.price,
-      count: position.count,
-      available: product.available,
-    });
-  }
-  return lines;
-}
-
-/** Re-price an open basket against a freshly loaded catalogue. */
-function repriceCart(lines: CartLine[], catalog: Catalog): CartLine[] {
-  const prices = new Map<string, number>();
-  for (const category of catalog.categories) {
-    for (const item of category.items) {
-      if (item.variations.length) {
-        for (const variation of item.variations) {
-          prices.set(`${item.id}:${variation.id}`, toCents(variation.price));
-        }
-      } else {
-        prices.set(`${item.id}:`, toCents(item.price));
-      }
-    }
-  }
-  // A line whose product vanished from the catalogue keeps its price here; the
-  // server refuses it at checkout, which is the answer that matters.
-  return lines.map((line) =>
-    prices.has(line.key) ? { ...line, unitPrice: prices.get(line.key)! } : line,
-  );
-}
-
 function describeError(err: unknown): string {
   if (err instanceof ApiError) return err.isNetwork ? t("error.offline") : err.message;
   return String(err);
+}
+
+/**
+ * Pull the new build in one tap.
+ *
+ * The service worker hands static assets out cache-first, so a bare reload
+ * would come back with the very bundle it is trying to replace. Dropping the
+ * caches first makes the reload fetch the new shell for real.
+ */
+async function reloadForUpdate(): Promise<void> {
+  try {
+    const names = await caches.keys();
+    await Promise.all(names.map((name) => caches.delete(name)));
+  } catch {
+    // No Cache API (plain-HTTP dev box): the reload alone still helps.
+  }
+  window.location.reload();
 }
 
 export default function App() {
@@ -242,10 +190,16 @@ export default function App() {
     let cancelled = false;
 
     const refresh = () => {
-      api
-        .catalog(pairing)
-        .then((next) => {
-          if (!cancelled) setCatalog(next);
+      // Config rides along with the catalogue: it is where the server's
+      // version comes from, and it also lets a check-in list added mid-evening
+      // reach the door without a relaunch.
+      Promise.all([api.catalog(pairing), api.config(pairing)])
+        .then(([nextCatalog, nextConfig]) => {
+          if (cancelled) return;
+          setCatalog(nextCatalog);
+          setConfig(nextConfig);
+          saveCached("catalog", pairing.event, nextCatalog);
+          saveCached("config", pairing.event, nextConfig);
         })
         .catch(() => {
           // A missed refresh is harmless: the previous catalogue stays on
@@ -486,12 +440,22 @@ export default function App() {
 
   const total = cart.reduce((sum, line) => sum + line.unitPrice * line.count, 0);
 
+  // The server has been upgraded under this till. Only ever offered between
+  // customers — reloading is safe (the queue and pairing survive it), but the
+  // button must not sit next to a basket being rung up.
+  const updateAvailable = config.version !== undefined && config.version !== __APP_VERSION__;
+
   return (
     <div className="app">
       <div className="topbar">
         <h1>{config.event.name}</h1>
         {config.event.testmode && <span className="badge">{t("testmode")}</span>}
         <span className="spacer" />
+        {updateAvailable && !servingCustomer && (
+          <button className="btn ghost topbar-action" onClick={() => void reloadForUpdate()}>
+            {t("update.reload")}
+          </button>
+        )}
         {cashier && <span className="badge muted">{cashier}</span>}
         {config.checkin.lists.length > 0 && (
           <button

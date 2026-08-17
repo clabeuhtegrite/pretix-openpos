@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { api, ApiError } from "../api";
 import { useConnectivity } from "../connectivity";
 import { t, type MessageKey } from "../i18n";
 import { newNonce } from "../nonce";
+import { indexSnapshot, offlineVerdict } from "../offline";
 import { enqueue, loadQueue, loadSnapshot, saveSnapshot } from "../storage";
 import type {
   Attendance, CheckinListInfo, OfflineSnapshot, Pairing, RedeemResult,
@@ -52,30 +53,6 @@ const ATTENDANCE_SETTLE_MS = 1200;
  * their ticket during the evening.
  */
 const SNAPSHOT_REFRESH_MS = 300_000;
-
-/**
- * Answer a scan from the guest list held on the device.
- *
- * Deliberately stricter than the server on one point and looser on another. An
- * unknown secret is refused, because the alternative is admitting anything
- * presented to a camera. A ticket the snapshot says is already used is refused
- * too. But no rules engine runs here, and nothing later than the snapshot is
- * known — which is why every scan is queued and settled against the server the
- * moment there is one.
- */
-function offlineVerdict(
-  snapshot: OfflineSnapshot | null,
-  secret: string,
-  scannedHere: Set<string>,
-): RedeemResult {
-  if (!snapshot) return { status: "error", reason: "offline_no_snapshot" };
-  const ticket = snapshot.tickets.find((entry) => entry.secret === secret);
-  if (!ticket) return { status: "error", reason: "invalid" };
-  if (ticket.used || scannedHere.has(secret)) {
-    return { status: "error", reason: "already_redeemed" };
-  }
-  return { status: "ok", position: { item: ticket.item, attendee_name: ticket.name } };
-}
 
 /**
  * Buzz on a refusal.
@@ -143,6 +120,11 @@ export default function CheckinScreen({
 
   const online = useConnectivity();
   const [snapshot, setSnapshot] = useState<OfflineSnapshot | null>(() => loadSnapshot());
+  // Indexed once per snapshot, not per scan; also carries which list it is
+  // for, so a door switched mid-dropout is answered with "no guest list"
+  // rather than with the other door's.
+  const snapshotIndex = useMemo(() => indexSnapshot(snapshot), [snapshot]);
+  const snapshotUsable = snapshotIndex !== null && snapshotIndex.listId === listId;
   // Scanned on this device since the snapshot was taken, so a second scan of the
   // same ticket is caught without waiting for the network to come back.
   const scannedHereRef = useRef<Set<string>>(
@@ -257,7 +239,7 @@ export default function CheckinScreen({
         } else {
           // No server to ask: answer from the snapshot, and queue what was
           // admitted so pretix hears about it — with this timestamp — later.
-          result = offlineVerdict(snapshot, code, scannedHereRef.current);
+          result = offlineVerdict(snapshotIndex, listId, code, scannedHereRef.current);
           if (result.status === "ok") {
             scannedHereRef.current.add(code);
             enqueue({
@@ -300,7 +282,7 @@ export default function CheckinScreen({
         setBusy(false);
       }
     },
-    [listId, pairing, loadAttendance, admissionItems, online, snapshot],
+    [listId, pairing, loadAttendance, admissionItems, online, snapshotIndex],
   );
 
   if (!lists.length) {
@@ -378,8 +360,8 @@ export default function CheckinScreen({
           </div>
           {!online && (
             <div className="scanner-offline">
-              {snapshot
-                ? t("offline.scanning", { n: snapshot.tickets.length })
+              {snapshotUsable
+                ? t("offline.scanning", { n: snapshotIndex.count })
                 : t("offline.noSnapshot")}
             </div>
           )}

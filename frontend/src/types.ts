@@ -26,6 +26,8 @@ export interface CheckinListInfo {
 }
 
 export interface PosConfig {
+  /** Plugin version the server runs; absent on servers older than the field. */
+  version?: string;
   event: {
     slug: string;
     organizer: string;
