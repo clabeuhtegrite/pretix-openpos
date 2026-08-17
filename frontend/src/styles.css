@@ -70,8 +70,12 @@ button {
   display: flex;
   flex-direction: column;
   height: 100%;
-  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
-    env(safe-area-inset-left);
+  /* No bottom inset here, deliberately. Whatever ends up against that edge —
+     the basket footer, or the product grid when the basket is beside it —
+     already pads itself by the same amount, and reserving it twice left a
+     strip of dead background under the pay button on every phone that has a
+     gesture bar. */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
 }
 
 .topbar {
@@ -175,8 +179,20 @@ button {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
   gap: 12px;
-  padding: 16px;
+  /* Held in a variable because the landscape rules retune it and the bottom
+     edge below has to follow whatever it becomes. */
+  --grid-pad: 16px;
+  padding: var(--grid-pad);
   align-content: start;
+}
+
+/* Beside the basket, the grid is what reaches the bottom of the screen, so its
+   last row has to be able to scroll clear of the gesture bar. Stacked above the
+   basket (portrait phones) it touches nothing and needs none of this. */
+@media (min-width: 721px) {
+  .grid {
+    padding-bottom: calc(var(--grid-pad) + env(safe-area-inset-bottom));
+  }
 }
 
 .product {
@@ -662,8 +678,9 @@ table.takings thead th {
   display: flex;
   flex-direction: column;
   background: #000;
-  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
-    env(safe-area-inset-left);
+  /* Same rule as the till: the bottom inset belongs to the last row of chrome,
+     not to the frame around it. */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
 }
 
 .scanner-bar {
@@ -737,6 +754,12 @@ table.takings thead th {
   text-align: center;
   color: var(--text-dim);
   flex: 0 0 auto;
+}
+
+/* Pairing has no footer under it, so here the hint is the last row and carries
+   the inset itself. With a footer (check-in) that one does, just below. */
+.scanner-hint:last-child {
+  padding-bottom: calc(10px + env(safe-area-inset-bottom));
 }
 
 .scanner-footer {
@@ -1365,7 +1388,7 @@ table.takings thead th {
 
   .grid {
     gap: 10px;
-    padding: 12px;
+    --grid-pad: 12px;
   }
 
   .product {

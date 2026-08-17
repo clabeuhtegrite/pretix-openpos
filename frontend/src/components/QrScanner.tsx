@@ -40,10 +40,11 @@ export default function QrScanner({
   const trackRef = useRef<MediaStreamTrack | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(true);
-  // Offered only where the camera actually has a lamp to switch on. Android
-  // exposes it through the track's capabilities; Safari exposes nothing of the
-  // sort on any iOS version, so on an iPhone the button simply is not there —
-  // better than one that does nothing when the doorway is dark.
+  // Offered only where the camera actually has a lamp to switch on. The track's
+  // capabilities are the one honest source for that, and the only one worth
+  // asking: whether a torch is there depends on the device and on the browser
+  // version, not on the platform — recent iOS Safari reports one where older
+  // versions reported nothing at all.
   const [torchAvailable, setTorchAvailable] = useState(false);
   const [torchOn, setTorchOn] = useState(false);
 
@@ -156,13 +157,26 @@ export default function QrScanner({
       await track.applyConstraints({
         advanced: [{ torch: next } as MediaTrackConstraintSet & { torch: boolean }],
       });
-      setTorchOn(next);
     } catch {
       // The capability was advertised and then refused. Stop offering a button
       // that does nothing rather than leave the operator pressing it.
       setTorchAvailable(false);
       setTorchOn(false);
+      return;
     }
+
+    // An `advanced` constraint set is best-effort by spec: a browser that
+    // cannot work the lamp resolves the promise and changes nothing. Read the
+    // setting back rather than take the call at its word — and only treat a
+    // refusal to light up as a dead button, since a lamp that will not switch
+    // off still needs the button that switches it off.
+    const applied = (track.getSettings() as MediaTrackSettings & { torch?: boolean }).torch;
+    if (next && applied === false) {
+      setTorchAvailable(false);
+      setTorchOn(false);
+      return;
+    }
+    setTorchOn(applied ?? next);
   }
 
   return (
