@@ -8,6 +8,8 @@ import type { AttendeeMatch, Pairing } from "../types";
 const MIN_QUERY = 2;
 /** Let the operator finish typing a name before asking the server. */
 const DEBOUNCE_MS = 300;
+/** How long the confirmation ignores the tap that opened it. */
+const CONFIRM_ARM_MS = 500;
 
 interface Props {
   pairing: Pairing;
@@ -18,14 +20,40 @@ interface Props {
 
 export default function AttendeeSearch({ pairing, listId, onPick, onClose }: Props) {
   const [query, setQuery] = useState("");
+  /**
+   * The hit the operator tapped, held back until they confirm it.
+   *
+   * A scan cannot admit the wrong person — the barcode is the person. A name
+   * search can: the results are a list of strangers' names an arm's length
+   * apart on a phone held in one hand, at a door, in the dark, with a queue.
+   * So the tap selects, and a second, differently placed gesture admits.
+   */
+  const [pending, setPending] = useState<AttendeeMatch | null>(null);
+  /**
+   * Whether the confirmation has been on screen long enough to be answered.
+   *
+   * Placing the admit button away from the list does not protect anything: the
+   * results scroll, so a row can sit under any point of the screen, and the
+   * button measured out to overlap the third and fourth of them. What a tap
+   * cannot outrun is time — half a second no thumb bridges by accident, and no
+   * operator who meant it will notice.
+   */
+  const [armed, setArmed] = useState(false);
   const [results, setResults] = useState<AttendeeMatch[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
+    if (!pending) inputRef.current?.focus();
+  }, [pending]);
+
+  useEffect(() => {
+    if (!pending) return;
+    setArmed(false);
+    const timer = window.setTimeout(() => setArmed(true), CONFIRM_ARM_MS);
+    return () => window.clearTimeout(timer);
+  }, [pending]);
 
   useEffect(() => {
     const trimmed = query.trim();
@@ -62,6 +90,45 @@ export default function AttendeeSearch({ pairing, listId, onPick, onClose }: Pro
     };
   }, [query, listId, pairing]);
 
+  if (pending) {
+    const name = pending.attendee_name?.trim();
+    const alreadyIn = pending.checkins.length > 0;
+    return (
+      <div className="overlay overlay-top" onClick={(e) => e.stopPropagation()}>
+        <div className="panel search-panel" onClick={(e) => e.stopPropagation()}>
+          <h2>{t("search.confirmTitle")}</h2>
+
+          {/* The name at the size it has to be read from: at arm's length,
+              against the face of somebody waiting to be let in. */}
+          <div className="confirm-name">{name || pending.order}</div>
+          <div className="confirm-meta">
+            {name
+              ? [pending.order, pending.seat?.name].filter(Boolean).join(" · ")
+              : t("search.confirmNoName")}
+          </div>
+
+          {alreadyIn && <div className="confirm-warn">{t("search.confirmAlreadyIn")}</div>}
+          {pending.require_attention && (
+            <div className="confirm-warn">{t("search.confirmAttention")}</div>
+          )}
+
+          {/* Refusing stays reachable throughout — the guard is on admitting
+              somebody by accident, never on changing your mind. */}
+          <button className="btn ghost confirm-back" onClick={() => setPending(null)}>
+            {t("search.confirmBack")}
+          </button>
+          <button
+            className="btn success confirm-admit"
+            disabled={!armed}
+            onClick={() => onPick(pending)}
+          >
+            {t("search.confirmAdmit")}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="overlay overlay-top" onClick={onClose}>
       <div className="panel search-panel" onClick={(e) => e.stopPropagation()}>
@@ -94,7 +161,7 @@ export default function AttendeeSearch({ pairing, listId, onPick, onClose }: Pro
               <button
                 key={match.id}
                 className="search-hit"
-                onClick={() => onPick(match)}
+                onClick={() => setPending(match)}
               >
                 <span className="search-hit-name">
                   {match.attendee_name || match.order}

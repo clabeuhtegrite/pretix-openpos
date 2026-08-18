@@ -968,6 +968,50 @@ table.takings thead th {
   font-weight: 700;
 }
 
+/*
+ * Confirming a name picked out of a search.
+ *
+ * The one screen in the app where the operator is checking a person against a
+ * word rather than a barcode, so the word is the biggest thing on it. Long
+ * names wrap rather than shrink: a truncated name is exactly the mistake this
+ * screen exists to catch.
+ */
+.confirm-name {
+  margin: 8px 0 4px;
+  font-size: 34px;
+  font-weight: 800;
+  line-height: 1.12;
+  overflow-wrap: anywhere;
+}
+
+.confirm-meta {
+  color: var(--text-dim);
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+
+.confirm-warn {
+  margin-top: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--warning);
+  border-radius: var(--radius);
+  color: var(--warning);
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+/* Pushed well clear of where the tapped row sat a moment ago: the gesture that
+   opened this screen must not be able to finish it. */
+.confirm-back {
+  margin-top: 32px;
+}
+
+.confirm-admit {
+  margin-top: 10px;
+  min-height: 76px;
+  font-size: 19px;
+}
+
 /* ---------- attendance ---------- */
 
 .attendance-panel h2 {
