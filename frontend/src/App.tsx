@@ -16,7 +16,8 @@ import { fromCents, toCents } from "./money";
 import { newNonce } from "./nonce";
 import {
   clearPairing, enqueue, loadCached, loadCashier, loadPairing, loadQueue,
-  requestPersistence, saveCached, saveCashier, savePairing,
+  loadUpdateAttempt, requestPersistence, saveCached, saveCashier, savePairing,
+  saveUpdateAttempt,
 } from "./storage";
 import { useConnectivity } from "./connectivity";
 import { drainQueue } from "./sync";
@@ -49,7 +50,10 @@ function describeError(err: unknown): string {
  * would come back with the very bundle it is trying to replace. Dropping the
  * caches first makes the reload fetch the new shell for real.
  */
-async function reloadForUpdate(): Promise<void> {
+async function reloadForUpdate(serverVersion: string): Promise<void> {
+  // Written before the reload, not after: whatever comes back has to be able to
+  // tell that the offer was already taken up.
+  saveUpdateAttempt(serverVersion);
   try {
     const names = await caches.keys();
     await Promise.all(names.map((name) => caches.delete(name)));
@@ -67,6 +71,8 @@ export default function App() {
 
   const [cart, setCart] = useState<CartLine[]>([]);
   const [cashier, setCashier] = useState<string>(loadCashier);
+  /** Read once at startup: the server version a previous reload already tried. */
+  const [updateTried] = useState<string | null>(loadUpdateAttempt);
 
   // Non-null while the payment panel is open. The key is minted once per
   // attempt and reused across retries, so a timeout that actually committed
@@ -442,8 +448,14 @@ export default function App() {
 
   // The server has been upgraded under this till. Only ever offered between
   // customers — reloading is safe (the queue and pairing survive it), but the
-  // button must not sit next to a basket being rung up.
-  const updateAvailable = config.version !== undefined && config.version !== __APP_VERSION__;
+  // prompt must not sit next to a basket being rung up. And only ever offered
+  // once per server version: if the till came back from that reload still
+  // mismatched, the build it was served cannot satisfy this server and asking
+  // again every minute would be noise for the rest of the evening.
+  const updateAvailable =
+    config.version !== undefined &&
+    config.version !== __APP_VERSION__ &&
+    config.version !== updateTried;
 
   return (
     <div className="app">
@@ -451,11 +463,6 @@ export default function App() {
         <h1>{config.event.name}</h1>
         {config.event.testmode && <span className="badge">{t("testmode")}</span>}
         <span className="spacer" />
-        {updateAvailable && !servingCustomer && (
-          <button className="btn ghost topbar-action" onClick={() => void reloadForUpdate()}>
-            {t("update.reload")}
-          </button>
-        )}
         {cashier && <span className="badge muted">{cashier}</span>}
         {config.checkin.lists.length > 0 && (
           <button
@@ -487,6 +494,15 @@ export default function App() {
           ⚙
         </button>
       </div>
+
+      {updateAvailable && !servingCustomer && (
+        <button
+          className="update-bar"
+          onClick={() => void reloadForUpdate(config.version as string)}
+        >
+          {t("update.reload")}
+        </button>
+      )}
 
       <SaleScreen
         catalog={catalog}

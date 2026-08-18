@@ -12,3 +12,8 @@ data
 .DS_Store
 .venv
 venv
+
+# Built by the bundle stage of deploy/Dockerfile. Letting the host's copy into
+# the context would only shadow it, which is the whole failure this arrangement
+# exists to prevent.
+pretix_openpos/static/pretix_openpos/pwa

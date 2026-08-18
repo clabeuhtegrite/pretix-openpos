@@ -5,6 +5,7 @@ const CASHIER_KEY = "openpos.cashier.v1";
 const QUEUE_KEY = "openpos.queue.v1";
 const FAILURES_KEY = "openpos.failures.v1";
 const SNAPSHOT_KEY = "openpos.snapshot.v1";
+const UPDATE_KEY = "openpos.updateTried.v1";
 
 /**
  * Ask the browser to keep this data.
@@ -131,4 +132,26 @@ export function loadCashier(): string {
 
 export function saveCashier(name: string): void {
   localStorage.setItem(CASHIER_KEY, name);
+}
+
+/**
+ * The server version this till last reloaded itself for.
+ *
+ * The update prompt compares the version the server reports against the one
+ * baked into the running bundle. Normally a reload settles it. When it does
+ * not — a deployment whose image carries a bundle older than the plugin
+ * installed beside it — nothing the operator does will ever make the two
+ * numbers agree, and without this the prompt sits in the topbar all evening
+ * asking to be pressed again. Remembering the attempt turns it into one offer.
+ */
+export function loadUpdateAttempt(): string | null {
+  return localStorage.getItem(UPDATE_KEY);
+}
+
+export function saveUpdateAttempt(version: string): void {
+  try {
+    localStorage.setItem(UPDATE_KEY, version);
+  } catch {
+    // Worst case the prompt is offered again after the reload. Harmless.
+  }
 }
