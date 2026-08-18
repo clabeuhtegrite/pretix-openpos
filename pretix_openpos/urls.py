@@ -1,7 +1,7 @@
 from django.urls import re_path
 from pretix.api.urls import event_router, orga_router
 
-from . import pwa, views
+from . import arrivals, pwa, views
 from .api.views import OpenPosOrganizerViewSet, OpenPosViewSet
 
 urlpatterns = [
@@ -26,6 +26,13 @@ urlpatterns = [
         r"^control/event/(?P<organizer>[^/]+)/(?P<event>[^/]+)/openpos/sales/$",
         views.SalesView.as_view(),
         name="sales",
+    ),
+    # Organizer-level, unlike the screens above: "when do people arrive?" is a
+    # question about all past events at once, not about any single one.
+    re_path(
+        r"^control/organizer/(?P<organizer>[^/]+)/openpos/arrivals/$",
+        arrivals.ArrivalsView.as_view(),
+        name="arrivals",
     ),
 ]
 

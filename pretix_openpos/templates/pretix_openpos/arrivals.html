@@ -1,0 +1,140 @@
+{% extends "pretixcontrol/organizers/base.html" %}
+{% load i18n %}
+{% load static %}
+{% block title %}{% trans "Arrivals" %}{% endblock %}
+{% block content %}
+    {% comment %}A real stylesheet, not a <style> block: the control panel's
+    CSP has no 'unsafe-inline' for styles, and a blocked block turns every SVG
+    rect default-black.{% endcomment %}
+    <link rel="stylesheet" type="text/css" href="{% static "pretix_openpos/arrivals.css" %}">
+
+    <h1>{% trans "Arrivals" %}</h1>
+    <p class="text-muted">
+        {% trans "Successful entry scans across all past events of this organizer, by hour of day — each event counted on its own local clock. Automatic check-ins and test-mode orders are left out, so this is people actually walking through the door." %}
+    </p>
+
+    {% if not events_count %}
+        <div class="alert alert-info">
+            {% trans "There are no past events yet. Come back once the first one is over." %}
+        </div>
+    {% elif not total %}
+        <div class="alert alert-info">
+            {% trans "No entry scans have been recorded for any past event, so there is nothing to chart yet." %}
+        </div>
+    {% else %}
+        <div class="row op-arrivals">
+            <div class="col-sm-3 col-xs-6">
+                <div class="panel panel-default op-tile"><div class="panel-body">
+                    <div class="op-num">{{ total }}</div>
+                    <div class="op-cap">{% trans "entry scans" %}</div>
+                </div></div>
+            </div>
+            <div class="col-sm-3 col-xs-6">
+                <div class="panel panel-default op-tile"><div class="panel-body">
+                    <div class="op-num">{{ events_count }}</div>
+                    <div class="op-cap">{% trans "past events" %}</div>
+                </div></div>
+            </div>
+            <div class="col-sm-3 col-xs-6">
+                <div class="panel panel-default op-tile"><div class="panel-body">
+                    <div class="op-num op-num-time">{{ peak.label }}</div>
+                    <div class="op-cap">
+                        {% blocktrans trimmed with count=peak.count share=peak.share %}
+                            busiest hour · {{ count }} scans ({{ share }} %)
+                        {% endblocktrans %}
+                    </div>
+                </div></div>
+            </div>
+            {% if quiet %}
+                <div class="col-sm-3 col-xs-6">
+                    <div class="panel panel-default op-tile"><div class="panel-body">
+                        <div class="op-num op-num-time">{{ quiet.label }}</div>
+                        <div class="op-cap">
+                            {% blocktrans trimmed with count=quiet.count %}
+                                quietest active hour · {{ count }} scans
+                            {% endblocktrans %}
+                        </div>
+                    </div></div>
+                </div>
+            {% endif %}
+        </div>
+
+        <div class="op-arrivals">
+            <div class="panel panel-default">
+                <div class="panel-heading">{% trans "Entry scans by hour of day" %}</div>
+                <div class="panel-body">
+                    <svg viewBox="0 0 {{ chart.width }} {{ chart.height }}" role="img" aria-labelledby="op-arrivals-svg-title">
+                        <title id="op-arrivals-svg-title">{% trans "Entry scans by hour of day, all past events" %}</title>
+                        {% for tick in chart.yticks %}
+                            <line class="op-grid" x1="{{ chart.plot_left }}" x2="{{ chart.plot_right }}" y1="{{ tick.y }}" y2="{{ tick.y }}"/>
+                            <text class="op-ticklabel" x="{{ chart.ylabel_x }}" y="{{ tick.y }}" dy="3" text-anchor="end">{{ tick.label }}</text>
+                        {% endfor %}
+                        {% for bar in chart.bars %}
+                            <g class="op-band">
+                                <title>{{ bar.title }}</title>
+                                <rect class="op-wash" x="{{ bar.band_x }}" y="{{ chart.plot_top }}" width="{{ bar.band_w }}" height="{{ chart.plot_h }}"/>
+                                {% if bar.d %}<path class="op-bar" d="{{ bar.d }}"/>{% endif %}
+                                {% if bar.is_peak %}
+                                    <text class="op-peaklabel" x="{{ bar.cx }}" y="{{ bar.label_y }}" text-anchor="middle">{{ bar.count }}</text>
+                                {% else %}
+                                    <text class="op-hoverlabel" x="{{ bar.cx }}" y="{{ bar.label_y }}" text-anchor="middle">{{ bar.count }}</text>
+                                {% endif %}
+                            </g>
+                        {% endfor %}
+                        <line class="op-axis" x1="{{ chart.plot_left }}" x2="{{ chart.plot_right }}" y1="{{ chart.baseline }}" y2="{{ chart.baseline }}"/>
+                        {% for tick in chart.xticks %}
+                            <text class="op-xlabel" x="{{ tick.x }}" y="{{ chart.xlabel_y }}" text-anchor="middle">{{ tick.label }}</text>
+                        {% endfor %}
+                    </svg>
+                    <details>
+                        <summary>{% trans "Show as a table" %}</summary>
+                        <table class="table table-condensed op-hours-table">
+                            <thead>
+                            <tr>
+                                <th>{% trans "Hour" %}</th>
+                                <th class="text-right">{% trans "Entry scans" %}</th>
+                                <th class="text-right">{% trans "Share" %}</th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                            {% for row in hours %}
+                                <tr>
+                                    <td>{{ row.label }}</td>
+                                    <td class="text-right">{{ row.count }}</td>
+                                    <td class="text-right">{{ row.share }} %</td>
+                                </tr>
+                            {% endfor %}
+                            </tbody>
+                        </table>
+                    </details>
+                </div>
+            </div>
+
+            <div class="panel panel-default">
+                <div class="panel-heading">{% trans "Per event" %}</div>
+                <table class="table table-condensed table-hover">
+                    <thead>
+                    <tr>
+                        <th>{% trans "Event" %}</th>
+                        <th>{% trans "Date" %}</th>
+                        <th class="text-right">{% trans "Entry scans" %}</th>
+                        <th class="text-right">{% trans "Busiest hour" %}</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    {% for row in event_rows %}
+                        <tr>
+                            <td>
+                                <a href="{% url "control:event.index" organizer=request.organizer.slug event=row.event.slug %}">{{ row.event.name }}</a>
+                            </td>
+                            <td>{{ row.event.date_from|date:"SHORT_DATE_FORMAT" }}</td>
+                            <td class="text-right">{{ row.count }}</td>
+                            <td class="text-right">{{ row.peak|default:"—" }}</td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    {% endif %}
+{% endblock %}

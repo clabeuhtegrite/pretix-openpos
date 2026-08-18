@@ -1,0 +1,95 @@
+/*
+ * Arrivals screen. A static file rather than a <style> block because the
+ * control panel ships a CSP without 'unsafe-inline' for styles — an inline
+ * block silently renders every SVG rect in default black.
+ *
+ * Everything is scoped under .op-arrivals / .op-tile: control pages share one
+ * stylesheet, so these rules must leak nothing into the rest of the backend.
+ */
+
+.op-arrivals svg {
+    display: block;
+    width: 100%;
+    height: auto;
+}
+
+.op-arrivals .op-grid {
+    stroke: #f0f0f0;
+    stroke-width: 1;
+    shape-rendering: crispEdges;
+}
+
+.op-arrivals .op-axis {
+    stroke: #d5d5d5;
+    stroke-width: 1;
+    shape-rendering: crispEdges;
+}
+
+.op-arrivals .op-bar {
+    fill: var(--pretix-brand-primary, #8E44B3);
+}
+
+.op-arrivals .op-wash {
+    fill: transparent;
+}
+
+.op-arrivals .op-band:hover .op-wash {
+    fill: rgba(0, 0, 0, 0.05);
+}
+
+.op-arrivals .op-hoverlabel {
+    opacity: 0;
+}
+
+.op-arrivals .op-band:hover .op-hoverlabel {
+    opacity: 1;
+}
+
+.op-arrivals .op-hoverlabel,
+.op-arrivals .op-peaklabel {
+    fill: #333;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.op-arrivals .op-ticklabel,
+.op-arrivals .op-xlabel {
+    fill: #888;
+    font-size: 11px;
+}
+
+.op-arrivals details {
+    margin-top: 10px;
+}
+
+.op-arrivals summary {
+    cursor: pointer;
+    color: #777;
+}
+
+.op-arrivals .op-hours-table {
+    max-width: 420px;
+    margin-top: 10px;
+}
+
+.op-tile {
+    text-align: center;
+}
+
+.op-tile .op-num {
+    font-size: 28px;
+    font-weight: 600;
+    line-height: 1.3;
+}
+
+/* Hour ranges are longer than counts; slightly smaller so "21:00–22:00"
+   never wraps around its own dash. */
+.op-tile .op-num-time {
+    font-size: 22px;
+    line-height: 1.65;
+    white-space: nowrap;
+}
+
+.op-tile .op-cap {
+    color: #777;
+}

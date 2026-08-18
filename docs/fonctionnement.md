@@ -1,6 +1,6 @@
 # Fonctionnement de pretix-openpos
 
-Documentation de fonctionnement du plugin, version 0.7.0. Elle couvre trois
+Documentation de fonctionnement du plugin, version 0.8.0. Elle couvre trois
 choses, dans cet ordre : ce que le plugin ajoute à pretix, comment le mettre en
 service, et ce qui se passe exactement quand un bénévole encaisse.
 
@@ -136,15 +136,28 @@ jamais supprimée : `save()` sur une ligne existante et `delete()` lèvent une
 | `reason` | Le motif saisi par l'opérateur, pour qui lira le journal plus tard |
 | `previous_hash`, `hash`, `hash_version` | La chaîne d'intégrité |
 
-### 2.5 Trois écrans de back-office
+### 2.5 Quatre écrans de back-office
 
-[views.py](../pretix_openpos/views.py), montés par [urls.py](../pretix_openpos/urls.py).
+[views.py](../pretix_openpos/views.py) et [arrivals.py](../pretix_openpos/arrivals.py),
+montés par [urls.py](../pretix_openpos/urls.py).
 
 | URL | Écran | Permission exigée |
 |---|---|---|
 | `/control/event/<org>/<ev>/openpos/` | Réglages (liste de contrôle d'accès) | `event.settings.general:write` |
 | `…/openpos/prices/` | Prix sur place | `event.items:write` |
 | `…/openpos/sales/` | Journal des ventes + relevé | `event.orders:read` |
+| `/control/organizer/<org>/openpos/arrivals/` | Affluence à l'entrée, tous événements passés | `event.orders:read` sur ≥ 1 événement |
+
+L'écran Affluence est le seul au niveau *organisateur* : « à quelle heure les
+gens arrivent-ils ? » est une question qui se pose sur l'ensemble des soirées
+passées, pas sur une seule. Il est strictement en lecture — un histogramme des
+scans d'entrée réussis par heure locale de l'événement, le pic et le creux, et
+le détail par événement. Les check-ins automatiques, les commandes en mode test,
+les scans refusés et les scans de sortie n'y comptent pas : la page mesure des
+personnes qui franchissent une porte. Une équipe limitée à certains événements
+ne voit que les scans de ces événements-là. Le graphique est un SVG rendu côté
+serveur, stylé par une feuille statique — la CSP du back-office interdit les
+styles inline, et un `<style>` bloqué rend chaque rectangle SVG noir par défaut.
 
 ### 2.6 L'app elle-même
 
