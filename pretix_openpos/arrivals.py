@@ -33,15 +33,32 @@ def hour_label(hour):
     return f"{hour:02d}:00–{(hour + 1) % 24:02d}:00"
 
 
+def px(value):
+    """
+    A coordinate as a string, because the template must not see a float.
+
+    Django localizes bare numbers in templates: under a French locale
+    ``507.8`` renders as ``507,8``, and in an SVG attribute that comma makes a
+    *list* — ``x="507,8"`` puts the first glyph at 507 and every following
+    glyph at 8. Each label then shows one character in place while the rest
+    pile up at the edge of the chart. Pre-formatting here keeps l10n out of
+    the geometry entirely.
+    """
+    text = f"{value:.1f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
 def chart_geometry(by_hour, total):
     """
     Everything the SVG needs, precomputed.
 
     The template only prints coordinates: Django's template language cannot do
     the arithmetic, and trying to make it would smear the geometry across two
-    files. One bar per hour of day, thin, rounded at the data end and square at
-    the baseline, with a full-height hover band per hour because a 22px bar is
-    too small a hover target.
+    files. Every coordinate is a pre-formatted string (see ``px``); the only
+    numbers handed to the template are whole counts, which l10n cannot damage.
+    One bar per hour of day, thin, rounded at the data end and square at the
+    baseline, with a full-height hover band per hour because a 22px bar is too
+    small a hover target.
     """
     width, height = 960, 300
     left, right, top, bottom = 46, 10, 34, 32
@@ -72,10 +89,10 @@ def chart_geometry(by_hour, total):
         cx = round(left + hour * band + band / 2, 1)
         bar_top = y(value)
         bar = {
-            "band_x": round(left + hour * band, 1),
-            "band_w": round(band, 1),
-            "cx": cx,
-            "label_y": round(min(bar_top, baseline) - 8, 1),
+            "band_x": px(left + hour * band),
+            "band_w": px(band),
+            "cx": px(cx),
+            "label_y": px(min(bar_top, baseline) - 8),
             "count": value,
             "title": "{} · {} · {:.1f} %".format(
                 hour_label(hour), value, 100 * value / total
@@ -109,11 +126,11 @@ def chart_geometry(by_hour, total):
         "baseline": baseline,
         "bars": bars,
         "yticks": [
-            {"y": y(v), "label": v}
+            {"y": px(y(v)), "label": v}
             for v in range(step, scale_top + 1, step)
         ],
         "xticks": [
-            {"x": round(left + hour * band + band / 2, 1), "label": f"{hour}:00"}
+            {"x": px(left + hour * band + band / 2), "label": f"{hour}:00"}
             for hour in range(0, 24, 2)
         ],
         "xlabel_y": height - 10,

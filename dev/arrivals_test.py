@@ -203,6 +203,29 @@ with scopes_disabled():
     check("future event not listed", "arr-futur" not in body)
     check("hourly table carries the midnight bucket", "00:00–01:00" in body)
 
+    print("\n-- French locale ---------------------------------------------")
+    # Django localizes bare floats in templates: under fr, 507.8 renders as
+    # "507,8", and inside an SVG attribute that comma is a coordinate LIST —
+    # every label shows its first glyph in place and piles the rest at the
+    # chart edge. Found in production, where the real account is French; the
+    # geometry must therefore reach the template pre-formatted, never as
+    # floats. The HTML-level signature of the bug is a decimal comma inside
+    # an attribute value.
+    admin.locale = "fr"
+    admin.save(update_fields=["locale"])
+    try:
+        response = client_for(admin).get(url)
+        check("page renders for a French-locale user", response.status_code == 200,
+              f"HTTP {response.status_code}")
+        body_fr = response.content.decode(errors="replace") if response.status_code == 200 else ""
+        commas = re.findall(r'\S+="\d+,\d+"', body_fr)
+        check("no SVG attribute carries a localized decimal comma", not commas,
+              f"e.g. {commas[:3]}")
+        check("x-axis labels survive in the markup", "22:00" in body_fr)
+    finally:
+        admin.locale = "en"
+        admin.save(update_fields=["locale"])
+
     print("\n-- permission scoping ----------------------------------------")
     response = client_for(limited).get(url)
     body = response.content.decode(errors="replace") if response.status_code == 200 else ""

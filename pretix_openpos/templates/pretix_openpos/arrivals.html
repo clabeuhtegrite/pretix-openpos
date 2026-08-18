@@ -39,7 +39,9 @@
                 <div class="panel panel-default op-tile"><div class="panel-body">
                     <div class="op-num op-num-time">{{ peak.label }}</div>
                     <div class="op-cap">
-                        {% blocktrans trimmed with count=peak.count share=peak.share %}
+                        {% blocktrans trimmed count count=peak.count with share=peak.share %}
+                            busiest hour · {{ count }} scan ({{ share }} %)
+                        {% plural %}
                             busiest hour · {{ count }} scans ({{ share }} %)
                         {% endblocktrans %}
                     </div>
@@ -50,7 +52,9 @@
                     <div class="panel panel-default op-tile"><div class="panel-body">
                         <div class="op-num op-num-time">{{ quiet.label }}</div>
                         <div class="op-cap">
-                            {% blocktrans trimmed with count=quiet.count %}
+                            {% blocktrans trimmed count count=quiet.count %}
+                                quietest active hour · {{ count }} scan
+                            {% plural %}
                                 quietest active hour · {{ count }} scans
                             {% endblocktrans %}
                         </div>
