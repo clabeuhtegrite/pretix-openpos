@@ -162,6 +162,10 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
               {selected.cashier ? ` · ${selected.cashier}` : ""}
             </div>
 
+            {selected.testmode && (
+              <div className="history-row-test">{t("history.badgeTestmode")}</div>
+            )}
+
             <table className="takings">
               <tbody>
                 {selected.positions.map((position, i) => (
@@ -222,7 +226,10 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
                 return (
                   <button
                     key={line.seq}
-                    className={`history-row${cancellation ? " is-cancellation" : ""}`}
+                    className={
+                      `history-row${cancellation ? " is-cancellation" : ""}` +
+                      (line.testmode ? " is-testmode" : "")
+                    }
                     onClick={() => setOpenSeq(line.seq)}
                   >
                     <span className="history-row-main">
@@ -235,6 +242,9 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
                         {cancellation ? ` · ${t("history.isCancellation", { seq: line.cancels_seq ?? 0 })}` : ""}
                         {line.cancelled ? ` · ${t("history.badgeCancelled")}` : ""}
                       </span>
+                      {line.testmode && (
+                        <span className="history-row-test">{t("history.badgeTestmode")}</span>
+                      )}
                     </span>
                     <span className={`history-row-total${cancellation ? " is-negative" : ""}`}>
                       {formatMoney(toCents(line.total), currency)}
@@ -243,6 +253,14 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
                 );
               })}
             </div>
+            {/* Once, under the list, rather than on every row: the tag marks
+                which lines, this says what it costs the reader to ignore. The
+                risk being guarded against is a volunteer totting the column up
+                as the night's takings. */}
+            {lines?.some((line) => line.testmode) && (
+              <div className="attendance-note is-testmode">{t("history.testmodeNote")}</div>
+            )}
+
             <div className="attendance-note">
               {t("history.scopeEvent")}
               {truncated && <> {t("history.truncated", { n: lines?.length ?? 0 })}</>}

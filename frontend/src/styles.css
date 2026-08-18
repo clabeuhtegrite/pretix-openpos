@@ -1173,6 +1173,32 @@ table.takings thead th {
   border: 1px dashed var(--border);
 }
 
+/* A test sale is not a smaller sale, it is not a sale — so it does not get a
+   quieter version of the same row. The same amber the topbar uses for TEST MODE
+   is reused deliberately: an operator who has seen one has learnt the other. */
+.history-row.is-testmode {
+  background: transparent;
+  border: 1px solid var(--warning);
+}
+
+
+.history-row-test {
+  display: inline-block;
+  margin-top: 5px;
+  padding: 1px 7px;
+  border-radius: 5px;
+  background: var(--warning);
+  color: #1a1a1a;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.attendance-note.is-testmode {
+  color: var(--warning);
+}
+
 .history-row-main {
   flex: 1;
   min-width: 0;
