@@ -101,6 +101,27 @@ button {
   flex: 1;
 }
 
+/* The server has a newer build and the till is between customers.
+   Full width under the topbar rather than a button inside it: on a phone the
+   label is the longest thing in the row, and squeezing it in there left it
+   wrapped over three lines while pushing the check-in and sync controls into
+   the same state. */
+.update-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 16px;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 700;
+  border-bottom: 1px solid var(--border);
+}
+
 .badge {
   font-size: 12px;
   font-weight: 700;
@@ -508,6 +529,50 @@ button {
   background: var(--surface-2);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
+}
+
+/*
+ * The panel that has to fit on a phone.
+ *
+ * A keypad, a row of notes and two amounts is more than a portrait screen
+ * holds, and the one thing that must never be below the fold is the pair the
+ * operator uses while the customer is still holding out a note: what to hand
+ * back, and the button that ends the sale. So the panel is a column — the
+ * entry scrolls, the verdict and the actions are pinned to the bottom of it.
+ */
+.pay-panel {
+  display: flex;
+  flex-direction: column;
+  /* The body scrolls; the panel itself must not, or the pinned footer would
+     scroll away with it. */
+  overflow: hidden;
+  padding-bottom: 0;
+}
+
+.pay-panel .pay-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Negative margins so the rule sits edge to edge across the panel rather than
+   stopping short of its padding. */
+.pay-panel .pay-actions {
+  flex: 0 0 auto;
+  margin: 0 -24px;
+  padding: 12px 24px 24px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.pay-panel .pay-actions .amount-display {
+  padding-top: 0;
+}
+
+.pay-panel .pay-buttons {
+  display: flex;
+  gap: 10px;
 }
 
 /* ---------- done screen ---------- */
@@ -1286,12 +1351,17 @@ table.takings thead th {
   background: var(--border);
 }
 
-.topbar-action {
+/* Two class names, so this wins over .btn.ghost's dimmed colour rather than
+   losing to it on specificity: a topbar control is a control, not a caption,
+   and read as a grey smear on a phone. nowrap for the same reason — "Check-in"
+   was breaking after the hyphen into two half-height lines. */
+.btn.topbar-action {
   width: auto;
   min-height: 44px;
-  padding: 0 16px;
+  padding: 0 14px;
   color: var(--text);
   font-weight: 700;
+  white-space: nowrap;
 }
 
 /* A phone leaves little room either side of a panel; the numbers need it more
@@ -1309,6 +1379,62 @@ table.takings thead th {
 
   .attendance-panel {
     padding: 18px 14px;
+  }
+
+  /* A phone's topbar is over-subscribed: an event name, the cashier, check-in,
+     the sync state and two icons do not fit across 393px, and the labels no
+     longer wrap themselves into a grey smear to make room. So the one item
+     there that is not a control gives way — who is on the till is still on the
+     settings screen, while everything else is something to press. */
+  .topbar {
+    gap: 8px;
+  }
+
+  .topbar .badge.muted {
+    display: none;
+  }
+
+  /* Every row loses a few pixels rather than one row losing all of them: at
+     these sizes the keypad still clears the 44px a thumb needs, and the whole
+     panel comes in under a portrait screen. */
+  .pay-panel {
+    /* Bottom stays with .pay-actions, as above. */
+    padding: 18px 18px 0;
+  }
+
+  .pay-panel h2 {
+    margin-bottom: 10px;
+  }
+
+  .pay-panel .pay-toggle {
+    margin-bottom: 12px;
+  }
+
+  .pay-panel .amount-display {
+    padding: 8px 0;
+  }
+
+  .pay-panel .keypad {
+    gap: 8px;
+    margin: 10px 0 0;
+  }
+
+  .pay-panel .keypad button {
+    min-height: 56px;
+  }
+
+  .pay-panel .quick-tender {
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .pay-panel .quick-tender button {
+    min-height: 48px;
+  }
+
+  .pay-panel .pay-actions {
+    margin: 0 -18px;
+    padding: 10px 18px 18px;
   }
 }
 

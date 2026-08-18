@@ -138,17 +138,16 @@ If you run pretix in Docker or Kubernetes, [`deploy/Dockerfile`](deploy/Dockerfi
 bakes the plugin into the official image:
 
 ```bash
-cd frontend && npm run build && cd ..
 docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.1.0 .
 ```
 
-Two things that bite:
+The PWA bundle is built inside the image, from the tree you are building, so the
+JavaScript the till runs and the plugin serving it always carry the same version
+number. Nothing needs building by hand first.
 
-- **Build the frontend first.** The PWA bundle is generated, not committed. An
-  image built without it starts fine and then 500s on the till's own JavaScript.
-- **`--platform linux/amd64` on an Apple Silicon Mac.** An arm64 image builds,
-  pushes and passes every manifest check, then gets refused by the kubelet at
-  pull time on an amd64 node.
+One thing that bites: **`--platform linux/amd64` on an Apple Silicon Mac.** An
+arm64 image builds, pushes and passes every manifest check, then gets refused by
+the kubelet at pull time on an amd64 node.
 
 Pin the base image to the same immutable patch tag your cluster already runs
 rather than to a rolling minor.
