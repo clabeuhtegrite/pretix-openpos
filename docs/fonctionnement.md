@@ -1,6 +1,6 @@
 # Fonctionnement de pretix-openpos
 
-Documentation de fonctionnement du plugin, version 0.8.1. Elle couvre trois
+Documentation de fonctionnement du plugin, version 0.9.0. Elle couvre trois
 choses, dans cet ordre : ce que le plugin ajoute à pretix, comment le mettre en
 service, et ce qui se passe exactement quand un bénévole encaisse.
 
@@ -60,7 +60,13 @@ chargé par `PluginApp.ready()` ([apps.py](../pretix_openpos/apps.py)).
 [channels.py](../pretix_openpos/channels.py) déclare un `SalesChannelType`. C'est la
 manière native de pretix pour séparer le catalogue du guichet de celui de la
 billetterie en ligne : chaque produit porte une case « Open POS » dans
-*Disponibilité*, et seuls les produits cochés remontent à la caisse.
+*Disponibilité*.
+
+Attention au défaut, qui n'est pas celui qu'on suppose : pretix met un produit
+sur **tous** les canaux tant qu'on ne lui dit pas le contraire, donc tout le
+catalogue remonte à la caisse au départ. Les cases ne servent qu'aux produits
+qu'on restreint — pour en garder un hors du guichet, ou pour en créer un qui
+n'existe *que* là.
 
 Propriétés notables :
 
@@ -147,6 +153,13 @@ montés par [urls.py](../pretix_openpos/urls.py).
 | `…/openpos/prices/` | Prix sur place | `event.items:write` |
 | `…/openpos/sales/` | Journal des ventes + relevé | `event.orders:read` |
 | `/control/organizer/<org>/openpos/arrivals/` | Affluence à l'entrée, tous événements passés | `event.orders:read` sur ≥ 1 événement |
+
+L'écran *Prix sur place* est un tableau, pas un formset : un champ par ligne
+vendable, et un champ vide signifie « facturer le prix en ligne ». Il est **tout
+ou rien** — le formulaire est lu en entier avant que quoi que ce soit ne soit
+écrit, donc un prix mal saisi n'enregistre aucun des autres et la page revient
+avec ce qui a été tapé, pas avec ce que la base contient encore. La virgule est
+acceptée comme séparateur décimal.
 
 L'écran Affluence est le seul au niveau *organisateur* : « à quelle heure les
 gens arrivent-ils ? » est une question qui se pose sur l'ensemble des soirées
@@ -629,6 +642,13 @@ seulement si personne n'est en train d'encaisser. Trois règles gouvernent tout 
 3. **Aucun refus n'est avalé.** Une écriture refusée passe dans une liste qui
    survit aux redémarrages et reste affichée jusqu'à ce qu'un humain la traite.
 
+Une écriture qui appartient à **un autre événement** — la caisse a changé
+d'événement avec une file non vide — n'est ni envoyée ici ni bloquante : elle est
+enjambée, comptée, et le panneau dit à quel événement elle attend de revenir.
+Elle arrêtait la reprise autrefois, ce qui suffisait à figer toute la file
+derrière elle, avec un badge qui comptait et un bouton « Envoyer maintenant » qui
+n'envoyait rien sans expliquer pourquoi.
+
 Le panneau de synchronisation (badge de la barre supérieure) montre à tout
 moment ce qui reste à envoyer, ce que le dernier envoi a fait, et deux choses
 qu'il faut lire :
@@ -649,6 +669,24 @@ journal porte `offline = True`, son `datetime` est **l'heure réelle de la vente
 La commande, elle, est bien créée à la reprise — c'est la vérité, et le journal
 garde l'autre moitié. Un scan rejoué porte lui aussi son horodatage d'origine.
 
+**Et elle n'est pas refusée parce que le catalogue a bougé.** L'argent est dans
+le tiroir et le billet dans une main : refuser à ce moment n'annule pas la vente,
+ça la laisse dans un navigateur, hors de pretix *et hors du journal* — c'est-à-dire
+exactement là où un journal en ajout seul existe pour qu'elle ne soit pas. Donc
+un rejeu est créé avec `force`, et résolu sur tout ce que l'événement connaît
+encore plutôt que sur le seul catalogue du jour :
+
+| Ce qui a changé pendant la coupure | Vente en direct | Vente rejouée |
+|---|---|---|
+| Quota épuisé | refusée (rien n'a été encaissé) | enregistrée |
+| Produit retiré du canal Open POS | refusée | enregistrée |
+| Déclinaison désactivée | refusée | enregistrée |
+| Produit ou déclinaison qui n'a jamais existé | refusée | refusée |
+| Tarif modifié | prix serveur appliqué | prix encaissé conservé, écart signalé |
+
+Un survendu reste un survendu : c'est un fait à réconcilier après la soirée, et
+`offline = True` est précisément ce qui permet de retrouver ces lignes-là.
+
 ### Les limites, dites franchement
 
 - **La file vit sur l'appareil.** Tablette perdue ou effacée avant la reprise,
@@ -664,6 +702,12 @@ garde l'autre moitié. Un scan rejoué porte lui aussi son horodatage d'origine.
 - **Pas de moteur de règles hors ligne.** Les règles de check-in de pretix
   (horaires, quotas d'entrée) ne s'appliquent qu'au retour du réseau.
 - **Pas d'annulation hors ligne.** Un avoir demande le serveur.
+- **Un rejeu peut encore être refusé**, mais seulement pour une raison qui ne
+  vient pas de la soirée : une file corrompue en stockage (les lignes ne
+  totalisent pas ce qui a été encaissé), une vente datée dans le futur, ou une
+  vente vieille de plus de sept jours — à ce stade c'est une restauration de
+  sauvegarde, pas une coupure réseau. Le refus part alors dans la liste affichée
+  jusqu'à ce qu'un humain la traite.
 
 ---
 
@@ -707,15 +751,34 @@ première ligne qui ne tombe plus juste. Le résultat est affiché en haut de
 l'écran *Ventes* : une chaîne cassée est visible, pas silencieusement acceptée.
 
 Le hash porte sur : `seq`, événement, date, série du device, caissier, code de
-commande, type de paiement, total, reçu, rendu, positions, hash précédent — et,
-depuis la version 2, `testmode`. `device_name` n'est **pas** haché : c'est la
-série qui identifie une caisse, le nom n'est qu'un libellé de rapport.
+commande, type de paiement, total, reçu, rendu, positions, hash précédent — puis,
+par version : `testmode` (v2), `kind`, `cancels_seq` et `reason` (v3, tout ce qui
+distingue un contre-passage d'une vente), `offline` (v4). `device_name` n'est
+**pas** haché : c'est la série qui identifie une caisse, le nom n'est qu'un
+libellé de rapport.
 
 **Pourquoi `hash_version`.** Une chaîne de hachage ne s'étend pas sur place :
 ajouter un champ à la charge hachée invaliderait toutes les lignes écrites avant,
 et `verify_chain()` signalerait une falsification sur un journal intact. La charge
 est donc versionnée, chaque ligne mémorise sa version, et la vérification rejoue
 la forme sous laquelle la ligne a réellement été hachée.
+
+**Deux vérifications, et elles ne disent pas la même chose.** L'écran *Ventes*
+repart du dernier point vérifié, gardé en cache, pour ne pas re-hacher tout un
+festival à chaque ouverture de page : il répond donc à « le journal a-t-il tenu
+depuis la dernière fois qu'on l'a regardé ? ». Ce qui est *derrière* ce point
+n'est pas réexaminé, et un point de reprise qui ne correspond plus n'est pas
+traité comme une falsification — un cache s'évince au redémarrage, et une alarme
+qui sonne à chaque retour de Redis est une alarme que plus personne n'écoute.
+L'audit qui ne rate rien est le parcours complet depuis la première ligne :
+
+```bash
+python -m pretix openpos_verify_journal              # tous les événements
+python -m pretix openpos_verify_journal --event org/slug
+```
+
+C'est celui à mettre dans un cron, et celui à lancer le jour où quelqu'un doute
+du journal.
 
 ### 6.5 Le mode test ne se mélange pas à la recette
 
@@ -818,6 +881,26 @@ un événement pour lequel l'organisateur n'a jamais ouvert de caisse.
 `variation` est optionnel (défaut `null`), `count` va de 1 à 999, au maximum 100
 lignes. `cash_given` n'est accepté que pour un paiement en espèces.
 
+Une vente rejouée depuis une caisse qui était coupée porte en plus un bloc
+`offline`, et c'est **la seule chose qui débloque un prix envoyé par le
+client** :
+
+```json
+{
+  "idempotency_key": "01J8Z…",
+  "positions": [ { "item": 12, "variation": null, "count": 2, "price": "8.50" } ],
+  "payment_type": "cash",
+  "cash_given": "20.00",
+  "offline": { "recorded_at": "2026-08-16T22:02:21Z", "charged_total": "17.00" }
+}
+```
+
+Toutes les lignes doivent porter leur prix ou aucune, la somme doit tomber sur
+`charged_total` (garde-fou contre une file corrompue en stockage), et
+`expected_total` est interdit — il répondrait à une question que la caisse ne
+pouvait pas poser. La réponse ajoute alors `off_tariff` : les lignes dont le
+tarif serveur diffère de ce qui a été encaissé. Voir §5ter.
+
 ### Réponse
 
 ```json
@@ -830,9 +913,15 @@ lignes. `cash_given` n'est accepté que pour un paiement en espèces.
   "datetime": "2026-08-09T21:14:05+02:00",
   "replayed": false,
   "checked_in": 2,
-  "checkin_errors": []
+  "checkin_errors": [],
+  "off_tariff": []
 }
 ```
+
+`replayed` vaut `true` — avec un `200` au lieu d'un `201` — quand la clé
+d'idempotence désigne une vente déjà enregistrée. La réponse est alors celle de
+la vente d'origine, et ce qui manquait de la traîne (facture, pointages) est
+terminé au passage.
 
 ### Réponse de `attendance/`
 
@@ -916,13 +1005,59 @@ hachés : le cache-busting est le travail de pretix via
 `ManifestStaticFilesStorage`, ce qui évite de régénérer le gabarit Django à
 chaque build.
 
-### Les trois scripts de vérification
+### Les tests
+
+Deux suites tournent à chaque push (CI), une troisième série se lance à la main.
+
+**La suite backend** (`tests/`) parle au plugin **en HTTP, à travers un vrai
+pretix** : vrai ORM, vraie création de commande, vrai service de check-in, vraie
+authentification par device. Elle tourne sur SQLite avec les réglages de test de
+pretix et ses migrations désactivées — le schéma est construit depuis les
+modèles, ce qui la rend rapide (une dizaine de secondes).
+
+```bash
+pip install pretix && pip install --no-deps -e . && pip install pytest pytest-django
+pytest
+
+# ou, sans rien installer sur la machine :
+docker compose exec pretix sh -c "pip install -q pytest pytest-django && cd /plugin && pytest"
+```
+
+Ce qu'elle couvre, fichier par fichier :
+
+| Fichier | Ce qu'il pin |
+|---|---|
+| `test_checkout.py` | Le serveur seul décide du prix, l'idempotence, le total annoncé, le rendu de monnaie, le check-in immédiat limité aux produits d'admission |
+| `test_offline_replay.py` | Ce qu'un rejeu enregistre, et surtout ce qu'il **refuse de refuser** — quota épuisé, produit retiré du canal, déclinaison désactivée |
+| `test_offline_snapshot.py` | Le contenu de la liste embarquée, et que la lire coûte le même nombre de requêtes quelle que soit sa taille |
+| `test_cancel.py` | Avoir, remboursement, contre-passation, et le rejeu d'une annulation qui avait expiré |
+| `test_journal.py` | La chaîne de hachage : falsification détectée, ligne supprimée détectée, ajout seul, versions de charge, ce que le point de reprise voit et ne voit pas |
+| `test_summary.py` | La journée de caisse qui commence à 6 h, le mode test à part, une annulation qui se nette |
+| `test_catalog.py` | Ce que la caisse a le droit de vendre et ce qu'on lui dit de l'événement |
+| `test_attendance.py` | Le compteur de présents, produits d'admission seulement |
+| `test_backoffice.py` | Les écrans, chacun avec sa permission exacte — dont la page de commande de pretix, qu'une vente espèces a déjà mise en 500 |
+| `test_arrivals.py` | L'histogramme et tout ce qu'il ne doit pas compter |
+| `test_security.py` | Ce qu'un token de caisse atteint, et surtout ce qu'il n'atteint pas |
+
+**La suite frontend** (`frontend/src/*.test.ts`) couvre la logique qui décide où
+va l'argent : les règles de reprise de la file, les verdicts hors ligne à la
+porte, l'arithmétique en centimes, la monnaie à rendre sur une commande corrigée
+contre un avoir, et la clé d'idempotence d'une annulation.
+
+```bash
+cd frontend && npm test
+```
+
+**Les scripts de `dev/`** se lancent à la main contre la pile docker compose.
+Ils ne font pas doublon : ils couvrent ce qui n'existe que dans un système
+entier.
 
 | Script | Ce qu'il couvre |
 |---|---|
-| [`dev/smoke_test.py`](../dev/smoke_test.py) | Bout en bout de l'API : appairage, catalogue, vente espèces, rejeu à l'identique pour prouver l'idempotence, relevé. Bibliothèque standard uniquement |
-| [`dev/backoffice_test.py`](../dev/backoffice_test.py) | Rend les pages du back-office que le plugin touche, chacune avec la permission exacte qu'elle déclare |
-| [`dev/concurrency_test.py`](../dev/concurrency_test.py) | Martèle la caisse depuis plusieurs fils et vérifie que le journal tient : tout committé, séquence sans trou ni doublon, pas deux ventes sur une même commande. À lancer sur PostgreSQL |
+| [`dev/smoke_test.py`](../dev/smoke_test.py) | Bout en bout de l'API : appairage, catalogue, vente espèces, rejeu à l'identique, relevé. Bibliothèque standard uniquement |
+| [`dev/backoffice_test.py`](../dev/backoffice_test.py) | Rend les pages du back-office avec un vrai navigateur de session |
+| [`dev/concurrency_test.py`](../dev/concurrency_test.py) | Martèle la caisse depuis plusieurs fils et vérifie que le journal tient. **À lancer sur PostgreSQL** : le savepoint du journal est indulgent sur SQLite et impitoyable sur PostgreSQL, ce que la suite backend ne peut pas voir |
+| [`dev/arrivals_test.py`](../dev/arrivals_test.py) | Sème son propre organisateur et vérifie l'histogramme sur des données connues |
 
 `OPENPOS_BASE` permet de viser une autre instance que la pile de dev SQLite.
 

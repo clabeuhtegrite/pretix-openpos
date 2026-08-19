@@ -1,4 +1,4 @@
-import { api, ApiError } from "./api";
+import { api, ApiError, isRetryable } from "./api";
 import { isOnline } from "./connectivity";
 import { loadFailures, loadQueue, saveFailures, saveQueue } from "./storage";
 import type { Pairing, QueueEntry, SyncReport } from "./types";
@@ -22,24 +22,6 @@ import type { Pairing, QueueEntry, SyncReport } from "./types";
  * one thing an operator has to hear about, so it moves to a failures list that
  * survives restarts and is shown until someone has dealt with it.
  */
-
-/**
- * Whether this failure means "not now" rather than "no".
- *
- * The distinction is the whole safety of the queue. A transport failure or any
- * fault from the server means the entry was not processed — or that we cannot
- * know, which comes to the same thing because every entry is idempotent — so it
- * keeps its place in line. Only a 4xx is the server understanding and refusing,
- * and that is the one case where retrying forever would hide a problem instead
- * of solving it.
- *
- * Getting this wrong in the lenient direction costs a duplicate request. Getting
- * it wrong the other way takes a paid sale out of the queue and it never
- * reaches pretix at all — which is exactly what an early version of this did.
- */
-function isRetryable(error: unknown): boolean {
-  return error instanceof ApiError && (error.isNetwork || error.status >= 500);
-}
 
 async function replaySale(pairing: Pairing, entry: QueueEntry & { kind: "sale" }, report: SyncReport) {
   const result = await api.checkout(pairing, {
@@ -84,22 +66,35 @@ async function replayCheckin(
 }
 
 /**
- * Send everything queued, oldest first.
+ * Send everything queued for this event, oldest first.
  *
  * Stops at the first transport failure — the network went away again, and the
  * rest of the queue keeps its place in line.
+ *
+ * Entries belonging to another event are stepped over rather than sent: this
+ * till was switched, and posting them here would file a sale against the wrong
+ * event. They used to *stop* the drain, which meant one stranded entry at the
+ * head held every later sale hostage — with a badge counting them and a "send
+ * now" button that reported nothing and explained less. They are counted in the
+ * report instead, so the operator is told what is waiting and what for.
  */
 export async function drainQueue(pairing: Pairing): Promise<SyncReport> {
-  const report: SyncReport = { sales: 0, checkins: 0, failed: 0, offTariff: [], contested: [] };
-  let queue = loadQueue();
+  const report: SyncReport = {
+    sales: 0, checkins: 0, failed: 0, stranded: 0, offTariff: [], contested: [],
+  };
+  // Ids the server has already been asked about in this run. The queue is
+  // re-read from storage on every turn — a sale made while the drain is running
+  // appends to it — and without this the entry just handed over would be
+  // offered again by the next read.
+  const attempted = new Set<string>();
 
-  while (queue.length > 0) {
-    const [entry] = queue;
-    if (entry.event !== pairing.event) {
-      // Queued for another event on this same till. Left alone rather than
-      // sent to the wrong one; switching back is what will drain it.
-      break;
-    }
+  for (;;) {
+    // Oldest entry of this event that has not been through the loop yet.
+    const entry = loadQueue().find(
+      (candidate) => candidate.event === pairing.event && !attempted.has(candidate.id),
+    );
+    if (!entry) break;
+    attempted.add(entry.id);
 
     try {
       if (entry.kind === "sale") await replaySale(pairing, entry, report);
@@ -119,12 +114,11 @@ export async function drainQueue(pairing: Pairing): Promise<SyncReport> {
       ]);
     }
 
-    // Re-read rather than trusting our copy: a sale made during the drain has
-    // been appended to the stored queue in the meantime.
-    queue = loadQueue().filter((q) => q.id !== entry.id);
-    saveQueue(queue);
+    // Re-read rather than trusting an earlier copy, for the same reason.
+    saveQueue(loadQueue().filter((queued) => queued.id !== entry.id));
   }
 
+  report.stranded = loadQueue().filter((queued) => queued.event !== pairing.event).length;
   return report;
 }
 

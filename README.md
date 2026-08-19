@@ -9,10 +9,11 @@ backed by a pretix Enterprise plugin, and for a self-hosted installation that
 licence is the expensive part. This is a smaller, narrower alternative for
 people who need a till, run pretix themselves, and would rather not pay for one.
 
-**Status: alpha.** The backend is covered by an end-to-end test and the whole
-flow works, including a network dropout exercised by actually stopping the
-server, but it has not yet been through a real event. Read the scope section
-before deciding it fits.
+**Status: alpha.** The whole flow works and is covered by tests — the backend
+against a real pretix, the app's money handling on its own, and an end-to-end
+run against a live stack including a network dropout exercised by actually
+stopping the server. It has not yet been through a real event. Read the scope
+section before deciding it fits.
 
 ## What it does
 
@@ -29,8 +30,8 @@ before deciding it fits.
   now, counted over admission products only and across every door and till.
   Tapping it opens a flow chart of tickets expected → admitted → on site →
   scanned back out, with the breakdown per product.
-- A dedicated **`openpos` sales channel**, so you pick product by product what
-  is sellable at the door — including products that exist *only* on site.
+- A dedicated **`openpos` sales channel**, so a product can be limited to the
+  door, kept off it, or made to exist *only* on site.
 - **On-site pricing**: a separate tariff per product, because pretix itself has
   no concept of a price per sales channel.
 - **Cash** with change calculation, and **card** taken on a standalone terminal
@@ -44,6 +45,11 @@ before deciding it fits.
   queues everything. On reconnection the queue replays in order under the same
   idempotency keys — a replay never sells twice — and the app reports what needs
   a human: prices that moved while it was cut off, tickets contested on replay.
+  A queued sale is never refused for something that changed while the till was
+  cut off, either: the money is already in the drawer, so a quota that ran out
+  or a product pulled from the till in the meantime is recorded as a fact to
+  reconcile rather than left stranded in a browser. Those rows are marked
+  `offline` in the journal, which is how you find them afterwards.
 - **Transaction history and cancellation**, scoped to the till in your hands:
   cancelling issues a credit note, records the refund and appends a reversing
   journal entry — the original sale is never touched — and the items go back in
@@ -155,8 +161,11 @@ rather than to a rolling minor.
 ## Setting it up
 
 1. **Enable the plugin** on your event, under *Settings → Plugins*.
-2. **Make products sellable at the till.** On each product, under *Availability*,
-   tick the **Open POS** sales channel.
+2. **Decide what is sellable at the till.** pretix puts a product on every sales
+   channel unless you say otherwise, so everything shows up at the till to begin
+   with. To split the two catalogues, set a product's *Availability* to specific
+   channels and pick from there — including products that exist *only* on
+   **Open POS**.
 3. **Set the on-site prices** under *Open POS → On-site prices*. Leave a field
    empty to charge the same as the online shop.
 4. **Choose the check-in list** under *Open POS → Settings*, so tickets are
@@ -196,12 +205,8 @@ docker compose up --build                                   # pretix on :8000
 docker compose exec pretix python -m pretix shell < dev/seed.py   # demo data
 ```
 
-The seed prints a device pairing code. The backend can then be exercised
-end-to-end without a browser:
-
-```bash
-python3 dev/smoke_test.py <pairing-code>
-```
+The seed prints a device pairing code. Sign in to the backend at
+http://localhost:8000/control/ with `admin@localhost` / `admin`.
 
 The frontend is built into the plugin's static directory:
 
@@ -212,8 +217,45 @@ npm run build      # writes pretix_openpos/static/pretix_openpos/pwa/
 npm run dev        # or: Vite on :5174, proxying /api to :8000
 ```
 
-Sign in to the backend at http://localhost:8000/control/ with
-`admin@localhost` / `admin`.
+### Tests
+
+Two suites run on every push, and a third is run by hand.
+
+**The backend suite** talks to the plugin over HTTP through a real pretix — real
+ORM, real order pipeline, real check-in service, real device authentication —
+on SQLite with pretix' own test settings. It needs pretix installed:
+
+```bash
+pip install pretix && pip install --no-deps -e . && pip install pytest pytest-django
+pytest
+```
+
+Or, without touching your machine, inside the dev stack:
+
+```bash
+docker compose exec pretix sh -c "pip install -q pytest pytest-django && cd /plugin && pytest"
+```
+
+**The frontend suite** covers the logic that decides where money goes — the
+queue-replay rules, the offline door verdicts, integer-cent arithmetic, the
+change due on an order corrected against a credit:
+
+```bash
+cd frontend && npm test
+```
+
+**The end-to-end scripts in `dev/`** are run by hand against the docker compose
+stack. They are not redundant with the suites above: they exercise the things
+that only exist in a whole running system — a real network cut, the back-office
+pages rendered by a browser session, and the journal's savepoint handling under
+concurrent tills, which is forgiving on SQLite and unforgiving on PostgreSQL.
+
+```bash
+python3 dev/smoke_test.py <pairing-code>
+python3 dev/concurrency_test.py <pairing-code>
+docker compose exec -T pretix python -m pretix shell < dev/backoffice_test.py
+docker compose exec -T pretix python -m pretix shell < dev/arrivals_test.py
+```
 
 ## Roadmap
 
@@ -223,11 +265,12 @@ Roughly in the order they would earn their keep:
    Reader S700 or WisePOS E through the Stripe API and the app watches for the
    result. This keeps the PWA a PWA — no native app, no LAN requirement — and is
    the only realistic path to integrated card payments here.
-2. **Refunds and cancellations**, with a permission model so not every volunteer
-   can void a sale.
+2. **A permission model for cancelling.** Reversing a sale works today and is
+   scoped to the till that made it; what is missing is a way to say that not
+   every volunteer may do it.
 3. **A real cash session**: opening float, blind count at close, Z report.
-4. **Offline queueing**, which needs quota pre-allocation per till and conflict
-   resolution on sync. Large piece of work; only worth it with a real use case.
+4. **Partial refunds**, so two of three beers can be given back without
+   cancelling the sale whole and ringing it up again.
 5. **Receipt printing** over Star CloudPRNT or Epson ePOS, both of which work
    from iOS because they are network protocols rather than Bluetooth.
 

@@ -553,6 +553,7 @@ export default function App() {
           online={online}
           syncing={syncing}
           report={lastSync}
+          event={pairing.event}
           onSync={() => void sync()}
           onClose={() => setSyncOpen(false)}
         />

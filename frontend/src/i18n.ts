@@ -124,6 +124,8 @@ const MESSAGES = {
     "offline.badgeOffline": "Offline · {n}",
     "offline.badgePending": "{n} to send",
     "offline.nothingPending": "Nothing waiting to be sent.",
+    "offline.stranded":
+      "{n} kept for another event ({events}). They will be sent when this till is switched back to it.",
     "offline.pending": "{sales} sales and {checkins} check-ins waiting.",
     "offline.aSale": "Sale",
     "offline.aCheckin": "Admission",
@@ -320,6 +322,8 @@ const MESSAGES = {
     "offline.badgeOffline": "Hors ligne · {n}",
     "offline.badgePending": "{n} à envoyer",
     "offline.nothingPending": "Rien en attente d’envoi.",
+    "offline.stranded":
+      "{n} en attente pour un autre événement ({events}). Elles partiront quand cette caisse y sera revenue.",
     "offline.pending": "{sales} ventes et {checkins} entrées en attente.",
     "offline.aSale": "Vente",
     "offline.aCheckin": "Entrée",

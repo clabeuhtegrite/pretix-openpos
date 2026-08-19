@@ -43,11 +43,19 @@ def app_name() -> str:
 #: 'unsafe-inline' because React writes style attributes; scripts get no such
 #: allowance.
 #:
-#: pretix' CSP middleware re-parses this header and refuses directives outside
-#: its own whitelist — with a 500, found by serving the page, not by reading
-#: the docs. So no ``frame-ancestors`` and no ``base-uri`` here: framing is
-#: already denied by the global X-Frame-Options, and the page carries no
-#: ``<base>`` for the latter to police.
+#: This is a request, not the final answer. pretix' CSP middleware re-parses the
+#: header and merges its own instance-wide policy into it, so what reaches the
+#: browser is wider than what is written here — the site URL joins several
+#: directives, and ``form-action`` ends up allowing ``http:`` and ``https:``
+#: outright. What survives the merge is the part that matters: no
+#: ``'unsafe-inline'`` and no ``'unsafe-eval'`` in ``script-src``. The test suite
+#: asserts that on the header actually sent rather than on this constant.
+#:
+#: The middleware also refuses directives outside its own whitelist — with a
+#: 500, found by serving the page, not by reading the docs. So no
+#: ``frame-ancestors`` and no ``base-uri`` here: framing is already denied by the
+#: global X-Frame-Options, and the page carries no ``<base>`` for the latter to
+#: police.
 SHELL_CSP = (
     "default-src 'self'; "
     "script-src 'self'; "

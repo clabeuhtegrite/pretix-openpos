@@ -290,14 +290,24 @@ class PosSale(models.Model):
         call verified — so the back-office page does not re-hash a whole
         festival's journal on every load.
 
-        The checkpoint is an anchor, not a shortcut past scrutiny: rows are
-        only skipped while the checkpoint row still carries the hash recorded
-        *outside* the journal, and any consistent rewrite of history has to
-        propagate new hashes through that row — so it is still caught here.
-        What a checkpointed walk cannot see is an edit behind the anchor that
-        never bothered to fix the hashes; the full walk exists for that, and
-        ``manage.py openpos_verify_journal`` runs it. A cold or evicted cache
-        simply pays for one full walk and checkpoints again.
+        What this is, exactly: a way to skip work, not a second witness. Rows up
+        to the anchor are not re-hashed, so nothing at or behind it is examined
+        — an amount edited straight in the database with its hash left alone is
+        invisible here, and so is a rewrite that recomputed the hashes as it
+        went. Everything after the anchor is checked in full, which is what the
+        page is asking about: whether the journal has held since it was last
+        looked at.
+
+        A mismatched checkpoint is deliberately *not* treated as tampering
+        either. It is stored in the cache, and a cache is evicted for a hundred
+        ordinary reasons — a restart, memory pressure, a deploy. Reporting a
+        broken journal every time Redis came back would be an alarm nobody
+        would keep listening to. So a checkpoint that no longer matches simply
+        buys one full walk and is written again.
+
+        The audit that misses none of this is the full walk from row one, which
+        ``manage.py openpos_verify_journal`` runs — from a cron job, or on the
+        day somebody doubts the journal.
         """
         key = cls.CHAIN_CHECKPOINT_KEY.format(event.pk)
         checkpoint = cache.get(key)

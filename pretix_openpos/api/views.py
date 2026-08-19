@@ -354,14 +354,24 @@ class OpenPosViewSet(viewsets.ViewSet):
 
         channel = get_pos_channel(event.organizer)
         overrides = pos_price_overrides(event)
-        sellable = {
-            item.pk: item
-            for item in event.items.all()
-            .filter_available(channel=channel)
-            .prefetch_related("variations")
-        }
-
         offline = data.get("offline")
+
+        # What may be sold — and, for a replay, what may be *recorded*, which is
+        # not the same question.
+        #
+        # An online sale is refused unless the product is on the till's channel
+        # right now: nothing has been taken, so refusing costs a tap. A sale
+        # replayed from a till that was cut off has already been paid for and
+        # the ticket is in somebody's hand; the catalogue may well have moved in
+        # the meantime — the product pulled from the channel at the end of the
+        # evening, an option deactivated. Refusing then does not undo the sale,
+        # it strands it in a browser, outside pretix and outside the journal.
+        # So a replay is resolved against everything the event still knows.
+        items = event.items.all()
+        if not offline:
+            items = items.filter_available(channel=channel)
+        sellable = {item.pk: item for item in items.prefetch_related("variations")}
+
         api_positions = []
         journal_positions = []
         total = Decimal("0.00")
@@ -378,7 +388,10 @@ class OpenPosViewSet(viewsets.ViewSet):
             variation = None
             if line["variation"] is not None:
                 variation = next((v for v in variations if v.pk == line["variation"]), None)
-                if variation is None or not variation.active:
+                # Same reasoning as the catalogue above: an option that has been
+                # switched off since the sale was rung up is still the option the
+                # customer paid for.
+                if variation is None or (not variation.active and not offline):
                     raise ValidationError(
                         {"positions": [_("Unknown option for product {name}.").format(name=str(item.name))]}
                     )
@@ -468,6 +481,14 @@ class OpenPosViewSet(viewsets.ViewSet):
         payload = {
             "status": "p",
             "testmode": event.testmode,
+            # Quota is checked for a sale being rung up now — that is what stops
+            # a till overselling the room — and deliberately not for one being
+            # replayed. The money is in the drawer and the holder is already
+            # inside; a quota that ran out while the till was cut off is a fact
+            # to reconcile afterwards, not a reason to leave a paid sale with no
+            # order behind it. The journal marks the row `offline`, so exactly
+            # these sales can be found again.
+            "force": bool(offline),
             "payment_provider": CASH if data["payment_type"] == PosSale.PAYMENT_CASH else CARD,
             # When the money was taken. For a sale replayed from a till that was
             # offline that is not now — the order is created late, but it was
@@ -564,23 +585,25 @@ class OpenPosViewSet(viewsets.ViewSet):
 
         with scopes_disabled():
             positions = (
-                clist.positions.select_related("item")
-                .only("secret", "item_id", "attendee_name_cached", "order_id")
+                clist.positions.only("secret", "item_id", "attendee_name_cached")
                 .order_by("pk")[: OFFLINE_SNAPSHOT_LIMIT + 1]
             )
             rows = list(positions)
             truncated = len(rows) > OFFLINE_SNAPSHOT_LIMIT
             rows = rows[:OFFLINE_SNAPSHOT_LIMIT]
-            entered = set(
-                Checkin.objects.filter(
-                    list=clist, position__in=rows, type=Checkin.TYPE_ENTRY
-                ).values_list("position_id", flat=True)
-            )
+            entered = self._entry_scans_between(clist, rows)
             tickets = [
                 {
                     "secret": p.secret,
                     "item": p.item_id,
-                    "name": p.attendee_name or "",
+                    # The cached column, never the `attendee_name` property:
+                    # that one reads `attendee_name_parts` and, failing a name
+                    # scheme in it, the event's settings — both deferred here,
+                    # so every ticket would cost two extra queries and a full
+                    # guest list would cost forty thousand. pretix rewrites this
+                    # column on every save of the position, so it is the same
+                    # string, fetched with the row.
+                    "name": p.attendee_name_cached or "",
                     # So a second scan of the same ticket is refused offline too,
                     # rather than discovered hours later at reconciliation.
                     "used": p.pk in entered,
@@ -800,14 +823,18 @@ class OpenPosViewSet(viewsets.ViewSet):
         # which is append-only and survives the orders being purged — and is
         # reported separately rather than silently dropped.
         real = sales.filter(testmode=False)
-        test = sales.filter(testmode=True)
+        # Computed rather than probed with a prior exists(): totals() already
+        # counts the rows per kind, so the emptiness is in the answer it hands
+        # back and a second round trip to ask about it buys nothing.
+        test = totals(sales.filter(testmode=True))
+        had_test = bool(test["count"] or test["cancellations"])
 
         return Response(
             {
                 "since": since.isoformat(),
                 "device": totals(real.filter(device=device)) if device else None,
                 "event": totals(real),
-                "testmode": totals(test) if test.exists() else None,
+                "testmode": test if had_test else None,
             }
         )
 
@@ -909,6 +936,32 @@ class OpenPosViewSet(viewsets.ViewSet):
         except (TypeError, ValueError):
             return None
         return request.event.checkin_lists.filter(pk=pk).first()
+
+    def _entry_scans_between(self, clist, rows):
+        """
+        Which of ``rows`` already carry an entry scan on ``clist``.
+
+        Bounded by primary key rather than by an ``IN`` over the rows: the
+        snapshot carries up to twenty thousand of them, and naming each one
+        would send a query with twenty thousand bound parameters — well past
+        what older SQLite builds accept at all, and a needlessly large plan
+        everywhere else. ``rows`` is the first N positions of the list in ``pk``
+        order, so every position it contains lies inside that range and none is
+        missed.
+
+        The result may name a position outside ``rows``; that is harmless, since
+        it is only ever asked whether a given row is in the set.
+        """
+        if not rows:
+            return set()
+        return set(
+            Checkin.objects.filter(
+                list=clist,
+                type=Checkin.TYPE_ENTRY,
+                position_id__gte=rows[0].pk,
+                position_id__lte=rows[-1].pk,
+            ).values_list("position_id", flat=True)
+        )
 
     def _with_entry_scan(self, positions, clist):
         """Narrow a position queryset to the ones let in through ``clist``."""

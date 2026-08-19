@@ -12,9 +12,7 @@ from django.utils.translation import gettext_lazy as _
 from django.views.generic import ListView, TemplateView
 from pretix.base.models import Event
 from pretix.control.permissions import EventPermissionRequiredMixin
-from pretix.control.views.event import (
-    EventSettingsFormView, EventSettingsViewMixin,
-)
+from pretix.control.views.event import EventSettingsFormView, EventSettingsViewMixin
 
 from .forms import OpenPosSettingsForm
 from .models import PosPrice, PosSale
@@ -96,27 +94,40 @@ class PricesView(EventPermissionRequiredMixin, TemplateView):
                 }
         return rows
 
-    def get_context_data(self, **kwargs):
+    def get_context_data(self, submitted=None, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        ctx["rows"] = list(self._rows().values())
+        rows = list(self._rows().values())
+        if submitted is not None:
+            # A refused form is re-rendered from what the organiser typed, not
+            # from the database: nothing was written, and showing the stored
+            # tariff instead would quietly throw away every other edit they made
+            # alongside the one that was wrong.
+            for row in rows:
+                row["pos_price"] = submitted.get(f"price_{row['key']}", "")
+        ctx["rows"] = rows
         ctx["currency"] = self.request.event.currency
         return ctx
 
-    @transaction.atomic
     def post(self, request, *args, **kwargs):
+        """
+        Read the whole form, then write it — in that order, and never mixed.
+
+        The two halves used to be one loop inside a transaction that was still
+        committed when errors were reported, so a single mistyped price saved
+        every other line while telling the organiser nothing had been saved.
+        Parsing everything first makes the page mean what it says: either the
+        tariff is what the form shows, or it is exactly what it was.
+        """
         rows = self._rows()
-        changed = 0
         errors = []
+        #: (row, price or None) — None meaning "charge the online price".
+        parsed = []
 
         for key, row in rows.items():
             raw = (request.POST.get(f"price_{key}") or "").strip().replace(",", ".")
-            item, variation = row["item"], row["variation"]
 
             if raw == "":
-                deleted, _details = PosPrice.objects.filter(
-                    event=request.event, item=item, variation=variation
-                ).delete()
-                changed += 1 if deleted else 0
+                parsed.append((row, None))
                 continue
 
             try:
@@ -129,18 +140,35 @@ class PricesView(EventPermissionRequiredMixin, TemplateView):
             if price < Decimal("0.00"):
                 errors.append(_("{label}: the price cannot be negative.").format(label=row["label"]))
                 continue
-
-            obj, created = PosPrice.objects.update_or_create(
-                event=request.event, item=item, variation=variation,
-                defaults={"price": price},
-            )
-            if created or row["pos_price"] != price:
-                changed += 1
+            parsed.append((row, price))
 
         if errors:
             for error in errors:
                 messages.error(request, error)
-            return self.render_to_response(self.get_context_data())
+            # Nothing has been written, so the form is re-rendered from what the
+            # organiser typed rather than from the database — which still holds
+            # the old tariff and would silently discard the rest of their edits.
+            return self.render_to_response(
+                self.get_context_data(submitted=request.POST)
+            )
+
+        changed = 0
+        with transaction.atomic():
+            for row, price in parsed:
+                item, variation = row["item"], row["variation"]
+                if price is None:
+                    deleted, _details = PosPrice.objects.filter(
+                        event=request.event, item=item, variation=variation
+                    ).delete()
+                    changed += 1 if deleted else 0
+                    continue
+
+                obj, created = PosPrice.objects.update_or_create(
+                    event=request.event, item=item, variation=variation,
+                    defaults={"price": price},
+                )
+                if created or row["pos_price"] != price:
+                    changed += 1
 
         request.event.log_action(
             "pretix_openpos.prices.changed", user=request.user, data={"changed": changed}

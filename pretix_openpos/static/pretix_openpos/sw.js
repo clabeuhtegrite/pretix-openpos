@@ -1,10 +1,15 @@
 /*
  * Service worker for the Open POS shell.
  *
- * The till is online-only by design, so this worker exists for one reason: to
- * make the app open instantly and survive a brief wifi dropout on the way to the
- * login screen. It never caches anything under /api/, because a cached
- * catalogue would show stale prices and a cached sale would be a disaster.
+ * It caches the shell and the bundle, and nothing else. That is a smaller job
+ * than it sounds, and deliberately so: the till survives a dropout through its
+ * own queue and the catalogue it holds in localStorage, not through this. What
+ * this adds is that the app still *starts* with no network — a tablet whose
+ * battery ran out mid-evening, a tab reloaded by mistake — instead of coming
+ * back as a blank screen.
+ *
+ * It never caches anything under /api/. A cached catalogue would show stale
+ * prices, and a cached sale would be a disaster.
  */
 const CACHE = "openpos-shell-v2";
 

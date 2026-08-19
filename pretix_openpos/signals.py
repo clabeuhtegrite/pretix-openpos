@@ -2,9 +2,7 @@ from django.dispatch import receiver
 from django.urls import resolve, reverse
 from django.utils.translation import gettext_lazy as _
 from pretix.api.signals import register_device_security_profile
-from pretix.base.signals import (
-    register_payment_providers, register_sales_channel_types,
-)
+from pretix.base.signals import register_payment_providers, register_sales_channel_types
 from pretix.control.signals import nav_organizer
 
 from .channels import PosSalesChannelType
