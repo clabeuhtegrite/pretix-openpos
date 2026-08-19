@@ -1,7 +1,8 @@
 import { useState } from "react";
 
 import { t } from "../i18n";
-import { formatMoney, fromCents, toCents } from "../money";
+import { formatMoney, toCents } from "../money";
+import { settle } from "../settlement";
 import type { PaymentType } from "../types";
 
 interface Props {
@@ -25,22 +26,15 @@ export default function PaymentPanel({
   const [entry, setEntry] = useState("");
 
   const creditCents = credit?.amountCents ?? 0;
-  /**
-   * What actually has to change hands.
-   *
-   * The order is still worth its full total and is recorded as such — the
-   * credit is a drawer matter, not an order one. But nobody hands 20 € back
-   * across the counter only to be given 17 € straight back: the operator wants
-   * the difference, in the direction it goes.
-   */
-  const netCents = totalCents - creditCents;
-  const dueCents = Math.max(netCents, 0);
-  /** Credit left over once the new order is covered: money going back out. */
-  const backCents = Math.max(-netCents, 0);
-
   const given = entry === "" ? null : parseInt(entry, 10);
-  const change = given === null ? null : given - dueCents;
-  const short = change !== null && change < 0;
+  // Every figure on this panel — and the one the server is told — comes from
+  // settlement.ts, which is where the arithmetic is pinned down by tests.
+  const { dueCents, backCents, changeCents: change, short, cashGiven } = settle({
+    totalCents,
+    creditCents,
+    tenderedCents: given,
+    method,
+  });
 
   const press = (digit: string) => setEntry((current) => (current + digit).replace(/^0+/, "").slice(0, 8));
 
@@ -174,17 +168,7 @@ export default function PaymentPanel({
               className="btn success"
               style={{ flex: 2 }}
               disabled={busy || (method === "cash" && short)}
-              onClick={() => {
-                if (method !== "cash") return onConfirm(method, null);
-                if (!credit) {
-                  return onConfirm(method, given !== null ? fromCents(given) : null);
-                }
-                // The order is funded by the credit plus whatever was handed over,
-                // so that is what the server is told was received: it then works
-                // out the same change the operator is about to count out, and the
-                // journal reads as what happened — a refund applied to a new sale.
-                return onConfirm(method, fromCents(creditCents + (given ?? dueCents)));
-              }}
+              onClick={() => onConfirm(method, cashGiven)}
             >
               {busy
                 ? t("payment.working")

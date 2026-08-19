@@ -282,6 +282,14 @@ export interface SyncReport {
   sales: number;
   checkins: number;
   failed: number;
+  /**
+   * Entries left in the queue because they belong to another event.
+   *
+   * Not a failure and not a refusal: this till was switched, and they will go
+   * when it is switched back. Counted so the badge that keeps showing them has
+   * something to say for itself.
+   */
+  stranded: number;
   /** Sales the server would have priced differently from what was charged. */
   offTariff: { order: string; item_name: string; charged: string; tariff: string }[];
   /** Tickets refused on replay — admitted at the door, contested afterwards. */

@@ -1,8 +1,8 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { locale, t } from "../i18n";
 import { loadFailures, loadQueue, saveFailures } from "../storage";
-import type { SyncReport } from "../types";
+import type { QueueEntry, SyncReport } from "../types";
 
 /**
  * What the till is still holding, and what happened when it last let go.
@@ -18,6 +18,8 @@ interface Props {
   online: boolean;
   syncing: boolean;
   report: SyncReport | null;
+  /** The event this till is selling for; the queue may hold entries for others. */
+  event: string;
   onSync: () => void;
   onClose: () => void;
 }
@@ -26,12 +28,42 @@ function time(iso: string): string {
   return new Date(iso).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
 }
 
-export default function SyncPanel({ online, syncing, report, onSync, onClose }: Props) {
-  const [queue] = useState(() => loadQueue());
+/** One queued entry, whichever list it is in. */
+function queued(entry: QueueEntry) {
+  return (
+    <div key={entry.id} className="history-row is-cancellation">
+      <span className="history-row-main">
+        <span className="history-row-order">
+          {time(entry.at)} · {entry.kind === "sale" ? t("offline.aSale") : t("offline.aCheckin")}
+        </span>
+        <span className="history-row-meta">
+          {entry.kind === "sale" ? entry.label : entry.name || entry.secret.slice(0, 8)}
+        </span>
+      </span>
+      <span className="history-row-total">
+        {entry.kind === "sale" ? entry.chargedTotal : "→"}
+      </span>
+    </div>
+  );
+}
+
+export default function SyncPanel({ online, syncing, report, event, onSync, onClose }: Props) {
+  const [queue, setQueue] = useState(() => loadQueue());
   const [failures, setFailures] = useState(() => loadFailures());
 
-  const sales = queue.filter((entry) => entry.kind === "sale");
-  const checkins = queue.filter((entry) => entry.kind === "checkin");
+  // Re-read whenever a drain starts or finishes. Read once, this panel went on
+  // listing sales that had just been sent from the button right below it —
+  // which is the exact thing it exists to make visible.
+  useEffect(() => {
+    setQueue(loadQueue());
+    setFailures(loadFailures());
+  }, [syncing, report]);
+
+  const mine = queue.filter((entry) => entry.event === event);
+  const elsewhere = queue.filter((entry) => entry.event !== event);
+  const sales = mine.filter((entry) => entry.kind === "sale");
+  const checkins = mine.filter((entry) => entry.kind === "checkin");
+  const otherEvents = [...new Set(elsewhere.map((entry) => entry.event))].join(", ");
 
   return (
     <div className="overlay overlay-top" onClick={onClose}>
@@ -42,31 +74,26 @@ export default function SyncPanel({ online, syncing, report, onSync, onClose }: 
           {online ? t("offline.online") : t("offline.offline")}
         </div>
 
-        {queue.length === 0 ? (
+        {mine.length === 0 ? (
           <div className="attendance-note">{t("offline.nothingPending")}</div>
         ) : (
           <>
             <div className="attendance-note">
               {t("offline.pending", { sales: sales.length, checkins: checkins.length })}
             </div>
-            <div className="history-list">
-              {queue.map((entry) => (
-                <div key={entry.id} className="history-row is-cancellation">
-                  <span className="history-row-main">
-                    <span className="history-row-order">
-                      {time(entry.at)} ·{" "}
-                      {entry.kind === "sale" ? t("offline.aSale") : t("offline.aCheckin")}
-                    </span>
-                    <span className="history-row-meta">
-                      {entry.kind === "sale" ? entry.label : entry.name || entry.secret.slice(0, 8)}
-                    </span>
-                  </span>
-                  <span className="history-row-total">
-                    {entry.kind === "sale" ? entry.chargedTotal : "→"}
-                  </span>
-                </div>
-              ))}
+            <div className="history-list">{mine.map(queued)}</div>
+          </>
+        )}
+
+        {elsewhere.length > 0 && (
+          // Neither pending nor refused: they belong to an event this till is no
+          // longer on. Said plainly, because the badge in the topbar counts them
+          // and "send now" will not shift them however often it is pressed.
+          <>
+            <div className="attendance-note">
+              {t("offline.stranded", { n: elsewhere.length, events: otherEvents })}
             </div>
+            <div className="history-list">{elsewhere.map(queued)}</div>
           </>
         )}
 
@@ -130,7 +157,7 @@ export default function SyncPanel({ online, syncing, report, onSync, onClose }: 
         <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 20 }}>
           <button
             className="btn primary"
-            disabled={!online || syncing || queue.length === 0}
+            disabled={!online || syncing || mine.length === 0}
             onClick={onSync}
           >
             {syncing ? t("offline.syncing") : t("offline.sync")}

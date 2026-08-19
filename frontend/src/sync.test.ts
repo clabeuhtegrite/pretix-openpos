@@ -131,16 +131,48 @@ describe("drainQueue", () => {
     expect(failures[0].message).toBe("not on sale at the till");
   });
 
-  it("does not send another event's entries", async () => {
-    saveQueue([sale("a", "other-event"), sale("b")]);
+  it("never posts an entry to the event it was not rung up on", async () => {
+    saveQueue([sale("a", "other-event")]);
 
     const report = await drainQueue(pairing);
 
-    // The head belongs to another event: the drain stops rather than posting
-    // it to the wrong one, and the queue is left exactly as it was.
     expect(checkout).not.toHaveBeenCalled();
     expect(report.sales).toBe(0);
-    expect(loadQueue().map((entry) => entry.id)).toEqual(["a", "b"]);
+    expect(loadQueue().map((entry) => entry.id)).toEqual(["a"]);
+  });
+
+  it("steps over another event's entry instead of stopping behind it", async () => {
+    // The exact shape that used to freeze a till: one entry for an event this
+    // device has since left, sitting in front of the night's real sales. The
+    // badge counted them, "send now" sent nothing, and nothing said why.
+    saveQueue([sale("a", "other-event"), sale("b"), sale("c")]);
+
+    const report = await drainQueue(pairing);
+
+    expect(checkout).toHaveBeenCalledTimes(2);
+    expect(report.sales).toBe(2);
+    // Left exactly where it was, and counted so the panel can explain itself.
+    expect(loadQueue().map((entry) => entry.id)).toEqual(["a"]);
+    expect(report.stranded).toBe(1);
+  });
+
+  it("keeps this event's entries in order across a foreign one", async () => {
+    saveQueue([sale("first"), sale("skipped", "other-event"), sale("second")]);
+
+    await drainQueue(pairing);
+
+    expect(
+      checkout.mock.calls.map(([, payload]) => payload.idempotency_key),
+    ).toEqual(["first", "second"]);
+  });
+
+  it("reports nothing stranded when the whole queue is this event's", async () => {
+    saveQueue([sale("a"), sale("b")]);
+
+    const report = await drainQueue(pairing);
+
+    expect(report.stranded).toBe(0);
+    expect(loadQueue()).toEqual([]);
   });
 
   it("reports off-tariff sales instead of smoothing them away", async () => {

@@ -13,12 +13,23 @@ door right, and a staffing decision needs a chart, not a form.
 
 from collections import defaultdict
 
+from django.core.cache import cache
 from django.core.exceptions import PermissionDenied
 from django.db.models import Exists, OuterRef, Q
 from django.utils.timezone import now
 from django.views.generic import TemplateView
 from pretix.base.models import Checkin, SubEvent
 from pretix.control.views.organizer import OrganizerDetailViewMixin
+
+#: How long a computed histogram is reused.
+#:
+#: The page reads every entry scan of every *past* event, which on an organizer
+#: with a few years of history is the one expensive thing it does — and the
+#: answer barely moves, because an event that is over stops being scanned. The
+#: only churn is an event crossing into the past, which a quarter of an hour
+#: late is nobody's problem. Only the counts are cached: plain integers, so
+#: nothing here can hand back a stale Event.
+HISTOGRAM_TTL = 900
 
 
 def _past_q(prefix=""):
@@ -188,12 +199,25 @@ class ArrivalsView(OrganizerDetailViewMixin, TemplateView):
         # Each event counts in its own timezone: "21:00" must mean 21:00 on
         # the clock at that door, or the histogram answers nothing.
         timezones = {pk: event.timezone for pk, event in events.items()}
-        by_hour = [0] * 24
-        per_event = defaultdict(lambda: [0] * 24)
-        for event_id, scanned_at in scans.iterator(chunk_size=5000):
-            hour = scanned_at.astimezone(timezones[event_id]).hour
-            by_hour[hour] += 1
-            per_event[event_id][hour] += 1
+
+        # Keyed on exactly the events that were counted, so a team whose
+        # permissions cover a different set gets its own figures rather than
+        # somebody else's, and an event turning into a past one produces a new
+        # key instead of a stale entry.
+        cache_key = "pretix_openpos:arrivals:{}:{}".format(
+            self.request.organizer.pk, ",".join(str(pk) for pk in sorted(events))
+        )
+        counted = cache.get(cache_key)
+        if counted is None:
+            by_hour = [0] * 24
+            per_event = defaultdict(lambda: [0] * 24)
+            for event_id, scanned_at in scans.iterator(chunk_size=5000):
+                hour = scanned_at.astimezone(timezones[event_id]).hour
+                by_hour[hour] += 1
+                per_event[event_id][hour] += 1
+            cache.set(cache_key, (by_hour, dict(per_event)), HISTOGRAM_TTL)
+        else:
+            by_hour, per_event = counted
 
         total = sum(by_hour)
         ctx["total"] = total

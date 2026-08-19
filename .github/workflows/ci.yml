@@ -1,6 +1,14 @@
-# What a push must not break. The full end-to-end story — a pretix stack, a
-# seeded event, real sales and a real network cut — lives in dev/ and runs
-# against docker compose; this here is the fast half that needs no stack.
+# What a push must not break.
+#
+# The backend suite runs against a real pretix: real ORM, real order pipeline,
+# real check-in service, real device authentication, over HTTP. It is fast
+# because it runs on SQLite with pretix' own test settings and its migrations
+# switched off — the schema is built straight from the models.
+#
+# What still lives in dev/ and is still run by hand: the same story against
+# PostgreSQL and a whole docker compose stack, including the concurrency test,
+# which exists precisely because the journal's savepoint handling is forgiving
+# on SQLite and unforgiving on PostgreSQL.
 name: CI
 
 on:
@@ -23,19 +31,55 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
-      # The queue-replay rules, the offline door verdicts, the money handling.
+      # The queue-replay rules, the offline door verdicts, the money handling,
+      # the change that comes out of the drawer on a corrected order.
       - run: npm test
       # tsc -b runs first inside the build script, so this is the typecheck too.
       - run: npm run build
 
-  backend:
-    name: "Backend: syntax"
+  lint:
+    name: "Backend: lint"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-      # The plugin only imports inside a running pretix, which CI does not
-      # have; compileall at least refuses a push that does not parse.
-      - run: python -m compileall -q pretix_openpos
+          python-version: "3.13"
+      # Neither tool imports the code, so neither needs pretix installed.
+      - run: pip install flake8 flake8-pyproject isort
+      - run: flake8 pretix_openpos tests
+      - run: isort --check-only --diff pretix_openpos tests
+
+  backend:
+    name: "Backend: tests (Python ${{ matrix.python }})"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor the package claims, and the version the production image
+        # actually runs. Claiming a floor without testing it is how it stops
+        # being true.
+        python: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      # Named rather than assumed to be on the runner: libsass, which pretix
+      # pulls in, publishes no wheel for either version here and is compiled
+      # from source. The first run pays for that; later ones take the built
+      # wheel from the pip cache above.
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential gettext
+      - run: pip install pretix
+      # --no-deps: the plugin declares no runtime dependencies of its own, and
+      # letting pip resolve again here risks pulling a different pretix.
+      - run: pip install --no-deps -e . && pip install "pytest<9" pytest-django
+      # The plugin's own migrations are the ones that matter, since the suite
+      # builds the schema from the models: this is what catches a model changed
+      # without one.
+      - run: python -m django makemigrations --check --dry-run pretix_openpos
+        env:
+          DJANGO_SETTINGS_MODULE: tests.settings_migrations
+      - run: pytest

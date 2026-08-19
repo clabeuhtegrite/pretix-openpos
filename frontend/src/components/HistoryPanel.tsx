@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, ApiError } from "../api";
+import { api, ApiError, isRetryable } from "../api";
+import { cancellationKeys } from "../cancellation";
 import { locale, t } from "../i18n";
 import { formatMoney, toCents } from "../money";
-import { newNonce } from "../nonce";
 import type { CancelResult, JournalLine, JournalPosition, Pairing } from "../types";
 
 /**
@@ -48,6 +48,9 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<CancelResult | null>(null);
+  // One idempotency key per sale, kept across retries — see cancellation.ts for
+  // what goes wrong when it is minted per press instead.
+  const keys = useRef(cancellationKeys()).current;
 
   const load = useCallback(async () => {
     try {
@@ -73,15 +76,23 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
     try {
       const result = await api.cancelSale(pairing, {
         seq: line.seq,
-        // Minted per attempt and reused on retry, so a timeout cannot cancel twice.
-        idempotency_key: newNonce(),
+        // The key of this sale's cancellation, not of this attempt: a request
+        // that times out after the server committed must come back as the same
+        // cancellation, which is how the operator still gets the credit note
+        // and the corrected basket instead of "already cancelled".
+        idempotency_key: keys.for(line.seq),
         cashier,
         reason: reason.trim(),
       });
+      keys.settle(line.seq);
       setDone(result);
       setReason("");
       await load();
     } catch (e) {
+      // A refusal is final, so the key has been spent; a network failure or a
+      // server fault means we still do not know, and the next press has to
+      // carry the same key to find out.
+      if (!isRetryable(e)) keys.settle(line.seq);
       setError(e instanceof ApiError ? e.message : String(e));
     } finally {
       setBusy(false);

@@ -5,24 +5,25 @@ import react from "@vitejs/plugin-react";
 // `vite build` reads this file exactly as before.
 import { defineConfig } from "vitest/config";
 
-const pkg = JSON.parse(
-  readFileSync(new URL("./package.json", import.meta.url), "utf8"),
-) as { version: string };
-
 // The version baked into the bundle is the plugin's own, read from the Python
 // package: it is what /config/ reports back, and the two being one number is
 // what lets a running till detect that the server was upgraded under it. A
-// release therefore bumps pretix_openpos/__init__.py and nothing else;
-// package.json only serves as a fallback for a tree that moved.
-let version = pkg.version;
-try {
-  const initPy = readFileSync(
-    new URL("../pretix_openpos/__init__.py", import.meta.url),
-    "utf8",
+// release therefore bumps pretix_openpos/__init__.py and nothing else.
+//
+// There used to be a fallback to package.json's own version for "a tree that
+// moved". Nothing ever moved, and the fallback quietly drifted three releases
+// behind — so a build that cannot read the real version now fails here rather
+// than shipping a till that will offer an update no reload can ever apply.
+const initPy = readFileSync(
+  new URL("../pretix_openpos/__init__.py", import.meta.url),
+  "utf8",
+);
+const version = /__version__\s*=\s*"([^"]+)"/.exec(initPy)?.[1];
+if (!version) {
+  throw new Error(
+    "Could not read __version__ from pretix_openpos/__init__.py; the bundle " +
+      "would carry a version the server does not recognise.",
   );
-  version = /__version__\s*=\s*"([^"]+)"/.exec(initPy)?.[1] ?? pkg.version;
-} catch {
-  // Building outside the plugin checkout: keep the package.json version.
 }
 
 // The bundle is served by Django as a static file and referenced from a
