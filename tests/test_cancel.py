@@ -167,3 +167,72 @@ def test_a_till_only_sees_its_own_history(till, another_till, ticket):
     # minutes ago on the tablet in their hand.
     assert len(till.get("history").json()["results"]) == 1
     assert another_till.get("history").json()["results"] == []
+
+
+@pytest.mark.django_db
+def test_a_sale_whose_order_has_been_purged_is_refused_in_words(till, event, ticket):
+    # Test-mode orders are deleted when test mode is switched off, and the
+    # journal outlives them on purpose. Cancelling one has to say so rather
+    # than raise.
+    sell(till, [{"item": ticket.pk, "count": 1}])
+    sale = PosSale.objects.get(event=event, kind=PosSale.KIND_SALE)
+    # What the purge leaves behind: the journal row, with nothing to point at.
+    PosSale.objects.filter(pk=sale.pk).update(order=None)
+
+    response = cancel(till, sale.seq)
+
+    assert response.status_code == 400
+    assert "no longer exists" in str(response.json())
+
+
+@pytest.mark.django_db
+def test_an_order_pretix_will_not_cancel_is_refused_with_its_status(till, event, ticket):
+    # Cancelled in the back office while the till still lists it. The reason
+    # has to name the status, or the operator is left pressing a button.
+    sell(till, [{"item": ticket.pk, "count": 1}])
+    sale = PosSale.objects.get(event=event, kind=PosSale.KIND_SALE)
+    Order.objects.filter(pk=sale.order_id).update(status=Order.STATUS_CANCELED)
+
+    response = cancel(till, sale.seq)
+
+    assert response.status_code == 400
+    assert "pretix will not let this order be cancelled" in str(response.json())
+
+
+@pytest.mark.django_db
+def test_pretix_refusing_mid_cancellation_is_reported_not_swallowed(
+    till, event, ticket, monkeypatch
+):
+    from pretix.base.services.orders import OrderError
+
+    from pretix_openpos.api import views
+
+    sell(till, [{"item": ticket.pk, "count": 1}])
+    sale = PosSale.objects.get(event=event, kind=PosSale.KIND_SALE)
+
+    def refuse(*args, **kwargs):
+        raise OrderError("Quota is gone.")
+
+    monkeypatch.setattr(views, "cancel_order", refuse)
+
+    response = cancel(till, sale.seq)
+
+    assert response.status_code == 400
+    assert "Quota is gone." in str(response.json())
+    # Nothing half-done: no reversing line, and the sale still stands.
+    assert PosSale.objects.filter(event=event, kind=PosSale.KIND_CANCELLATION).count() == 0
+
+
+@pytest.mark.django_db
+def test_a_sale_with_no_confirmed_payment_is_still_cancelled(till, event, ticket):
+    # There is nothing to refund — the books already agree with the drawer —
+    # and refusing here would leave an order nobody can cancel from the till.
+    sell(till, [{"item": ticket.pk, "count": 1}])
+    sale = PosSale.objects.get(event=event, kind=PosSale.KIND_SALE)
+    Order.objects.get(pk=sale.order_id).payments.all().delete()
+
+    response = cancel(till, sale.seq)
+
+    assert response.status_code == 201
+    assert response.json()["refunded"] is False
+    assert OrderRefund.objects.filter(order__event=event).count() == 0

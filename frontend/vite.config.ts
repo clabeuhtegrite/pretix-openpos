@@ -59,9 +59,46 @@ export default defineConfig({
     },
   },
   test: {
-    // Plain Node plus a localStorage shim: the tested modules are pure logic,
-    // and the one browser API they touch is the Storage contract.
-    environment: "node",
+    // jsdom rather than plain Node. Most of this app is screens, and a till's
+    // worst bugs have been in what a cashier could actually press — so the
+    // suite has to be able to render one. The pure-logic modules do not care
+    // which environment they run in.
+    //
+    // jsdom is pinned to 26 in package.json: from 27 it is ESM-only, and
+    // `require`-ing it fails on Node 20.18, which is what this is developed on
+    // even though CI runs 22. A suite that only runs in CI is not a suite.
+    environment: "jsdom",
     setupFiles: ["./src/test/setup.ts"],
+    // Call history is dropped between tests. Without it a test that counts
+    // presses inherits the previous one's, which is a failure that looks like
+    // a bug in the component and is not.
+    clearMocks: true,
+    coverage: {
+      provider: "v8",
+      reporter: ["text", "html", "lcov"],
+      // Measured over the whole app, not only the files a test happened to
+      // import: a component nobody tests must show up as the zero it is.
+      include: ["src/**/*.{ts,tsx}"],
+      exclude: [
+        "src/**/*.test.{ts,tsx}",
+        "src/test/**",
+        "src/vite-env.d.ts",
+        // Three lines of createRoot, and mounting it under test would prove
+        // nothing that rendering App directly does not.
+        "src/main.tsx",
+        // Type declarations only.
+        "src/types.ts",
+      ],
+      // A floor, set just under what the suite actually reaches, so an
+      // ordinary refactor does not fail the build but deleting a test's worth
+      // of coverage does. Raise it when the real number rises; never lower it
+      // to make a run go green.
+      thresholds: {
+        statements: 96,
+        branches: 92,
+        functions: 94,
+        lines: 98,
+      },
+    },
   },
 });

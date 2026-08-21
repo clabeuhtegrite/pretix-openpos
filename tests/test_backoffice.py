@@ -232,3 +232,57 @@ def test_turning_till_invoicing_off_takes_the_channel_out_of_pretix_own_list(
     assert "openpos" not in event.settings.get(
         "invoice_generate_sales_channels", as_type=list
     )
+
+
+@pytest.mark.django_db
+def test_test_mode_takings_are_kept_off_the_figure_the_drawer_is_counted_against(
+    backoffice, till, event, ticket
+):
+    # A rehearsal sale and a real one are the same shape in the journal, and a
+    # volunteer counting the drawer at 2am against a total that quietly
+    # includes yesterday's testing would come up short for no reason.
+    from .conftest import sell
+
+    sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="reelle-01")
+    event.testmode = True
+    event.save()
+    sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="essai-001")
+
+    context = backoffice.get(sales_url(event)).context
+
+    assert context["totals"]["count"] == 1
+    assert context["totals"]["total"] == Decimal("10.00")
+    assert context["testmode_totals"]["count"] == 1
+    assert context["testmode_totals"]["total"] == Decimal("10.00")
+
+
+@pytest.mark.django_db
+def test_an_event_that_never_ran_a_rehearsal_says_nothing_about_test_mode(
+    backoffice, till, event, ticket
+):
+    # A line reading "test mode: 0.00" on every event's page is noise that
+    # trains people to skip the section that matters.
+    from .conftest import sell
+
+    sell(till, [{"item": ticket.pk, "count": 1}])
+
+    assert backoffice.get(sales_url(event)).context["testmode_totals"] is None
+
+
+@pytest.mark.django_db
+def test_a_sale_from_a_till_that_has_since_been_deleted_is_still_counted(
+    backoffice, till, event, ticket, device
+):
+    # The journal outlives the device: the row carries the serial and the name
+    # it was written with, and a deleted till must not take its takings with it.
+    from pretix_openpos.models import PosSale
+
+    from .conftest import sell
+
+    sell(till, [{"item": ticket.pk, "count": 1}])
+    PosSale.objects.filter(event=event).update(device=None, device_name="", device_serial="")
+
+    context = backoffice.get(sales_url(event)).context
+
+    assert context["totals"]["count"] == 1
+    assert len(context["by_device"]) == 1

@@ -215,3 +215,47 @@ def test_the_axis_reads_as_counting_rather_than_measuring():
 def test_an_hour_label_needs_no_translation():
     assert hour_label(21) == "21:00–22:00"
     assert hour_label(23) == "23:00–00:00"
+
+
+def test_a_bar_too_short_to_round_is_drawn_square():
+    # One arrival against a peak of a hundred is two pixels tall; a rounded cap
+    # on it would be a rounding of nothing, and the path renders as a blob.
+    by_hour = [0] * 24
+    by_hour[21] = 100
+    by_hour[3] = 1
+
+    geometry = chart_geometry(by_hour, total=101)
+
+    assert "Q" in geometry["bars"][21]["d"]
+    assert "Q" not in geometry["bars"][3]["d"]
+
+
+def test_an_hour_with_nobody_in_it_is_drawn_as_nothing_at_all():
+    by_hour = [0] * 24
+    by_hour[21] = 10
+
+    geometry = chart_geometry(by_hour, total=10)
+
+    assert geometry["bars"][0]["d"] is None
+
+
+def test_the_axis_counts_in_round_numbers_rather_than_measuring():
+    by_hour = [0] * 24
+    by_hour[21] = 12
+
+    geometry = chart_geometry(by_hour, total=12)
+
+    # 12 arrivals, in steps of five: an axis topping out at 15, not at 12.
+    assert [tick["label"] for tick in geometry["yticks"]] == [5, 10, 15]
+
+
+def test_an_evening_bigger_than_any_step_still_gets_a_scale():
+    # Past the largest step in the table the axis has to be worked out rather
+    # than looked up, or the chart divides by a step that is None.
+    by_hour = [0] * 24
+    by_hour[21] = 120_000
+
+    geometry = chart_geometry(by_hour, total=120_000)
+
+    assert geometry["yticks"][-1]["label"] >= 120_000
+    assert geometry["bars"][21]["d"] is not None

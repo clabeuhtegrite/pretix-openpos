@@ -125,3 +125,36 @@ def test_a_sale_at_the_till_shows_up_in_the_count(till, event, ticket, checkin_l
 @pytest.mark.django_db
 def test_an_unknown_list_is_refused(till, event, ticket, checkin_list):
     assert till.get("attendance", list=checkin_list.pk + 999).status_code == 400
+
+
+@pytest.mark.django_db
+def test_the_count_falls_back_to_the_event_s_own_list(till, event, ticket, checkin_list):
+    # The till asks without naming one on the screens that only ever have one
+    # door; the list configured for immediate check-in is the answer.
+    event.settings.set("openpos_checkin_list", str(checkin_list.pk))
+
+    response = till.get("attendance")
+
+    assert response.status_code == 200
+    assert response.json()["list"]["id"] == checkin_list.pk
+
+
+@pytest.mark.django_db
+def test_a_list_that_is_not_a_number_is_refused_rather_than_crashing(
+    till, event, ticket, checkin_list
+):
+    # It reaches this endpoint from a query string, so it can be anything.
+    response = till.get("attendance", list="porte")
+
+    assert response.status_code == 400
+
+
+@pytest.mark.django_db
+def test_the_guest_list_for_a_dropout_is_refused_for_an_unknown_door(
+    till, event, ticket, checkin_list
+):
+    # Carrying the wrong door's guest list is how a door admits the wrong
+    # people for the whole length of an outage.
+    response = till.get("offline", list=checkin_list.pk + 999)
+
+    assert response.status_code == 400

@@ -1,5 +1,4 @@
 import { api, ApiError, isRetryable } from "./api";
-import { isOnline } from "./connectivity";
 import { loadFailures, loadQueue, saveFailures, saveQueue } from "./storage";
 import type { Pairing, QueueEntry, SyncReport } from "./types";
 
@@ -120,13 +119,4 @@ export async function drainQueue(pairing: Pairing): Promise<SyncReport> {
 
   report.stranded = loadQueue().filter((queued) => queued.event !== pairing.event).length;
   return report;
-}
-
-/** True when there is something to send and somewhere to send it. */
-export function hasPending(): boolean {
-  return loadQueue().length > 0;
-}
-
-export function canSync(): boolean {
-  return isOnline() && hasPending();
 }

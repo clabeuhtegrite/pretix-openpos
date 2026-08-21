@@ -1,14 +1,21 @@
 # What a push must not break.
 #
-# The backend suite runs against a real pretix: real ORM, real order pipeline,
-# real check-in service, real device authentication, over HTTP. It is fast
-# because it runs on SQLite with pretix' own test settings and its migrations
-# switched off — the schema is built straight from the models.
+# Five jobs, and between them they cover everything that goes to production.
 #
-# What still lives in dev/ and is still run by hand: the same story against
-# PostgreSQL and a whole docker compose stack, including the concurrency test,
-# which exists precisely because the journal's savepoint handling is forgiving
-# on SQLite and unforgiving on PostgreSQL.
+#   frontend      the till's own code, from integer-cent arithmetic to what a
+#                 cashier can actually press, under a coverage floor
+#   lint          style, on code neither tool has to import
+#   backend       the plugin against a real pretix, over HTTP, under a
+#                 coverage floor, plus "is there a migration for that model?"
+#   integration   the same thing on PostgreSQL, in a whole running system:
+#                 concurrent tills on one journal, the back-office pages, the
+#                 arrivals histogram, the offline replay
+#   image         the artifact that actually ships, built the way it ships
+#
+# The unit suites run on SQLite with pretix' own test settings and its
+# migrations switched off — the schema is built straight from the models — which
+# is what makes them fast. The integration job is where migrations, PostgreSQL
+# and the savepoint handling are exercised for real.
 name: CI
 
 on:
@@ -31,9 +38,9 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
       - run: npm ci
-      # The queue-replay rules, the offline door verdicts, the money handling,
-      # the change that comes out of the drawer on a corrected order.
-      - run: npm test
+      # Every screen and every module, under the thresholds in vite.config.ts.
+      # A component nobody tests shows up as the zero it is and fails the run.
+      - run: npm run test:coverage
       # tsc -b runs first inside the build script, so this is the typecheck too.
       - run: npm run build
 
@@ -75,11 +82,47 @@ jobs:
       - run: pip install pretix
       # --no-deps: the plugin declares no runtime dependencies of its own, and
       # letting pip resolve again here risks pulling a different pretix.
-      - run: pip install --no-deps -e . && pip install "pytest<9" pytest-django
+      - run: pip install --no-deps -e . && pip install "pytest<9" pytest-django pytest-cov
       # The plugin's own migrations are the ones that matter, since the suite
       # builds the schema from the models: this is what catches a model changed
       # without one.
       - run: python -m django makemigrations --check --dry-run pretix_openpos
         env:
           DJANGO_SETTINGS_MODULE: tests.settings_migrations
-      - run: pytest
+      # --cov with no argument reads [tool.coverage.run] from pyproject.toml,
+      # including the floor the run fails under.
+      - run: pytest --cov
+
+  integration:
+    name: "End to end: PostgreSQL, concurrency, back office"
+    runs-on: ubuntu-latest
+    # Building pretix from source and replaying its whole migration history
+    # takes minutes; failing the job at ten is better than hanging for six
+    # hours on a runner.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      # Boots the stack, seeds it, and runs every script in dev/ against it.
+      # The same command that is run by hand on a laptop.
+      - run: dev/integration.sh
+      - name: Container logs, if it did not pass
+        if: failure()
+        run: docker compose -f dev/compose.integration.yml logs --tail=200
+
+  image:
+    name: "Production image builds"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      # Not pushed anywhere: the point is that it builds at all. Two things in
+      # here fail nowhere else — the PWA bundle, which the image builds from
+      # this tree, and `pretix rebuild`, which does not fail the build when it
+      # is skipped but leaves the till 500ing on its own JavaScript.
+      - run: docker build --platform linux/amd64 -f deploy/Dockerfile -t pretix-openpos:ci .
+      # Prove the bundle is in there and collected, rather than assuming the
+      # COPY landed where the template looks for it.
+      - name: The till's own JavaScript is in the image
+        run: |
+          docker run --rm --entrypoint sh pretix-openpos:ci -c \
+            'ls /pretix/src/pretix/static.dist/pretix_openpos/pwa/app.js'

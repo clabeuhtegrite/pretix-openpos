@@ -154,3 +154,54 @@ def test_the_till_is_told_which_events_it_may_sell_for(till, event, organizer):
     # Access to an event is not the same thing as the organizer having opened a
     # till on it; offering one would pair the device onto endpoints that refuse it.
     assert [entry["slug"] for entry in results] == [event.slug]
+
+
+@pytest.mark.django_db
+def test_an_option_with_no_price_of_its_own_inherits_the_product_s(till, event, channel):
+    # pretix' own resolution order, which the till has to mirror or the door
+    # quotes a different figure from the webshop.
+    item = Item.objects.create(
+        event=event, name="Badge", default_price=Decimal("7.00"), all_sales_channels=False
+    )
+    item.limit_sales_channels.add(channel)
+    plain = item.variations.create(value="Standard", default_price=None)
+    quota = Quota.objects.create(event=event, name="Badges", size=10)
+    quota.items.add(item)
+    quota.variations.add(plain)
+
+    badge = catalogue(till)["Badge"]
+
+    assert badge["variations"][0]["price"] == "7.00"
+
+
+@pytest.mark.django_db
+def test_an_option_priced_at_the_door_beats_both(till, event, channel, shirt):
+    item, small, _large = shirt
+    PosPrice.objects.create(event=event, item=item, variation=small, price=Decimal("12.00"))
+
+    options = {v["name"]: v for v in catalogue(till)["T-shirt"]["variations"]}
+
+    assert options["S"]["price"] == "12.00"
+    # The other option is untouched by an override aimed at one of them.
+    assert options["L"]["price"] == "18.00"
+
+
+@pytest.mark.django_db
+def test_an_option_that_is_switched_off_is_not_offered(till, shirt):
+    item, small, _large = shirt
+    small.active = False
+    small.save()
+
+    options = {v["name"] for v in catalogue(till)["T-shirt"]["variations"]}
+
+    assert options == {"L"}
+
+
+@pytest.mark.django_db
+def test_a_product_whose_every_option_is_off_disappears_with_them(till, shirt):
+    # Not a button that cannot be pressed: a button that is not there. An empty
+    # product on a grid is a tap that does nothing, mid-queue.
+    item, small, large = shirt
+    item.variations.update(active=False)
+
+    assert "T-shirt" not in catalogue(till)
