@@ -9,11 +9,13 @@ backed by a pretix Enterprise plugin, and for a self-hosted installation that
 licence is the expensive part. This is a smaller, narrower alternative for
 people who need a till, run pretix themselves, and would rather not pay for one.
 
-**Status: alpha.** The whole flow works and is covered by tests — the backend
-against a real pretix, the app's money handling on its own, and an end-to-end
-run against a live stack including a network dropout exercised by actually
-stopping the server. It has not yet been through a real event. Read the scope
-section before deciding it fits.
+**Status: alpha.** The whole flow works and is covered by tests that all run on
+every push — the backend against a real pretix, the till's own code from
+integer-cent arithmetic up to what a cashier can press, and an end-to-end run
+against a live stack on PostgreSQL with several tills writing to one journal at
+once. Both suites are held to a coverage floor, so a screen nobody tests fails
+the build rather than shipping. It has not yet been through a real event. Read
+the scope section before deciding it fits.
 
 ## What it does
 
@@ -219,36 +221,59 @@ npm run dev        # or: Vite on :5174, proxying /api to :8000
 
 ### Tests
 
-Two suites run on every push, and a third is run by hand.
+Everything runs on every push, and everything runs from one command on a laptop:
+
+```bash
+scripts/preflight.sh          # the lot: the same checks CI runs, in the same order
+scripts/preflight.sh --fast   # all but the end-to-end run and the image build
+```
+
+Only Docker is needed for the backend halves of it; nothing has to be installed
+on the machine.
+
+**The frontend suite** covers the till itself — the queue-replay rules, the
+offline door verdicts, integer-cent arithmetic, the change due on an order
+corrected against a credit, and every screen a cashier can press: what is
+greyed out at the quota, what cannot be confirmed short, what the door does
+with a T-shirt on an all-products list. It runs on jsdom under a coverage floor
+set in `frontend/vite.config.ts`, so a component nobody tests shows up as the
+zero it is and fails the run.
+
+```bash
+cd frontend && npm test              # or npm run test:coverage
+```
 
 **The backend suite** talks to the plugin over HTTP through a real pretix — real
-ORM, real order pipeline, real check-in service, real device authentication —
-on SQLite with pretix' own test settings. It needs pretix installed:
+ORM, real order pipeline, real check-in service, real device authentication — on
+SQLite with pretix' own test settings. It has its own coverage floor, in
+`pyproject.toml`. It needs pretix installed:
 
 ```bash
-pip install pretix && pip install --no-deps -e . && pip install pytest pytest-django
-pytest
+pip install pretix && pip install --no-deps -e . && pip install pytest pytest-django pytest-cov
+pytest --cov
 ```
 
-Or, without touching your machine, inside the dev stack:
+Or, without touching your machine:
 
 ```bash
-docker compose exec pretix sh -c "pip install -q pytest pytest-django && cd /plugin && pytest"
+docker build -f dev/Dockerfile.test -t pretix-openpos-test .
+docker run --rm -v "$PWD:/plugin" pretix-openpos-test
 ```
 
-**The frontend suite** covers the logic that decides where money goes — the
-queue-replay rules, the offline door verdicts, integer-cent arithmetic, the
-change due on an order corrected against a credit:
+**The end-to-end run** boots pretix on PostgreSQL, seeds it and fires every
+script in `dev/` at it. It is not redundant with the two suites above: it
+exercises what only exists in a whole running system — the journal's savepoint
+handling under concurrent tills, which is forgiving on SQLite and unforgiving on
+PostgreSQL; the back-office pages rendered through a real session; the arrivals
+histogram over three seeded events; and the offline replay over real HTTP.
 
 ```bash
-cd frontend && npm test
+dev/integration.sh                       # boots, runs, tears down
+OPENPOS_KEEP_STACK=1 dev/integration.sh  # leave it up on :8001 to poke at
 ```
 
-**The end-to-end scripts in `dev/`** are run by hand against the docker compose
-stack. They are not redundant with the suites above: they exercise the things
-that only exist in a whole running system — a real network cut, the back-office
-pages rendered by a browser session, and the journal's savepoint handling under
-concurrent tills, which is forgiving on SQLite and unforgiving on PostgreSQL.
+The individual scripts still take a running stack and a pairing code, which is
+what to reach for when one of them fails:
 
 ```bash
 python3 dev/smoke_test.py <pairing-code>
@@ -256,6 +281,11 @@ python3 dev/concurrency_test.py <pairing-code>
 docker compose exec -T pretix python -m pretix shell < dev/backoffice_test.py
 docker compose exec -T pretix python -m pretix shell < dev/arrivals_test.py
 ```
+
+**The production image** is built in CI too, and checked for the one thing that
+fails nowhere else: that the PWA bundle is in it and collected. An image whose
+`pretix rebuild` was skipped builds perfectly and then 500s on its own
+JavaScript.
 
 ## Roadmap
 

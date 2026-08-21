@@ -206,3 +206,32 @@ def test_the_installed_app_can_be_given_the_venue_s_name(client):
     GlobalSettingsObject().settings.set("openpos_app_name", "Salle des fêtes")
 
     assert client.get("/openpos/manifest.webmanifest").json()["name"] == "Salle des fêtes"
+
+
+@pytest.mark.django_db
+def test_a_caller_that_is_not_a_till_gets_no_till_history(backoffice, till, event, ticket):
+    # The journal is per-device by design. Answering a session-authenticated
+    # user with the whole event's would quietly widen an endpoint whose whole
+    # point is being narrow.
+    from .conftest import sell
+
+    sell(till, [{"item": ticket.pk, "count": 1}])
+
+    response = backoffice.get(
+        f"/api/v1/organizers/{event.organizer.slug}/events/{event.slug}/openpos/history/"
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"device": None, "results": [], "truncated": False}
+
+
+@pytest.mark.django_db
+def test_a_caller_that_is_not_a_till_still_sees_which_events_run_one(
+    backoffice, event, organizer
+):
+    # Same endpoint, no device: the answer comes from the organizer's events
+    # rather than from a device's permissions.
+    response = backoffice.get(f"/api/v1/organizers/{organizer.slug}/openpos/")
+
+    assert response.status_code == 200
+    assert [e["slug"] for e in response.json()["results"]] == [event.slug]

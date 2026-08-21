@@ -24,6 +24,14 @@ frontend/tsconfig.tsbuildinfo
 # Built PWA bundle is generated from frontend/ by `npm run build`
 pretix_openpos/static/pretix_openpos/pwa/
 
+# Coverage reports. The floors that matter are in pyproject.toml and
+# frontend/vite.config.ts; these are the artifacts a run leaves behind.
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+frontend/coverage/
+
 # Tooling
 .pytest_cache/
 .ruff_cache/

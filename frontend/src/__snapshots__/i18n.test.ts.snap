@@ -1,0 +1,11 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`the French catalogue > leaves no string untranslated by copying the English one 1`] = `
+[
+  "app.title",
+  "checkin.open",
+  "history.badgeTestmode",
+  "sale.total",
+  "summary.total",
+]
+`;

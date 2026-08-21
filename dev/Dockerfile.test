@@ -1,0 +1,32 @@
+# Image for running the backend suite: pretix, the plugin's test dependencies,
+# and nothing else. The tree is bind-mounted rather than copied, so a test run
+# never needs a rebuild — only a change to pretix or to the test dependencies
+# below does.
+#
+#   docker build -f dev/Dockerfile.test -t pretix-openpos-test .
+#   docker run --rm -v "$PWD:/plugin" pretix-openpos-test
+FROM python:3.13-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        gettext \
+        git \
+        libffi-dev \
+        libjpeg-dev \
+        libopenjp2-7-dev \
+        libssl-dev \
+        libxml2-dev \
+        libxslt1-dev \
+        zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir pretix \
+    && pip install --no-cache-dir "pytest<9" pytest-django pytest-cov
+
+WORKDIR /plugin
+ENTRYPOINT ["/bin/sh", "-c"]
+CMD ["pip install --no-deps -q -e . && pytest"]

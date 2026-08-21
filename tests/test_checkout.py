@@ -277,3 +277,93 @@ def test_an_unpaired_caller_gets_nothing(event, ticket):
     )
 
     assert response.status_code in (401, 403)
+
+
+@pytest.mark.django_db
+def test_an_invoice_that_will_not_generate_does_not_lose_the_sale(
+    till, event, ticket, monkeypatch
+):
+    # The money is in the drawer. Failing the sale because the PDF renderer
+    # fell over would be the wrong trade every time — and the failure is
+    # written into the order's own log so it can be picked up afterwards.
+    from pretix_openpos.api import views
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("no fonts")
+
+    monkeypatch.setattr(views, "generate_invoice", explode)
+
+    response = sell(till, [{"item": ticket.pk, "count": 1}])
+
+    assert response.status_code == 201
+    order = Order.objects.get(event=event)
+    assert order.invoices.count() == 0
+    assert order.all_logentries().filter(
+        action_type="pretix.event.order.invoice.failed"
+    ).exists()
+
+
+@pytest.mark.django_db
+def test_a_check_in_that_fails_unexpectedly_is_reported_not_swallowed(
+    till, event, ticket, checkin_list, monkeypatch
+):
+    # The customer is standing there. The sale stands, and the screen says the
+    # ticket has to be waved through by hand.
+    from pretix_openpos.api import views
+
+    event.settings.set("openpos_checkin_list", str(checkin_list.pk))
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("the check-in service is having a moment")
+
+    monkeypatch.setattr(views, "perform_checkin", explode)
+
+    response = sell(till, [{"item": ticket.pk, "count": 1}])
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["checked_in"] == 0
+    assert "having a moment" in " ".join(body["checkin_errors"])
+
+
+@pytest.mark.django_db
+def test_a_ticket_pretix_refuses_at_the_door_is_named_in_the_answer(
+    till, event, ticket, checkin_list, monkeypatch
+):
+    from pretix.base.services.checkin import CheckInError
+
+    from pretix_openpos.api import views
+
+    event.settings.set("openpos_checkin_list", str(checkin_list.pk))
+
+    def refuse(*args, **kwargs):
+        raise CheckInError("Ticket blocked.", "blocked")
+
+    monkeypatch.setattr(views, "perform_checkin", refuse)
+
+    body = sell(till, [{"item": ticket.pk, "count": 1}]).json()
+
+    assert body["checked_in"] == 0
+    assert body["checkin_errors"]
+
+
+@pytest.mark.django_db
+def test_a_till_cannot_say_it_received_a_negative_amount(till, ticket):
+    response = sell(
+        till, [{"item": ticket.pk, "count": 1}], cash_given="-10.00"
+    )
+
+    assert response.status_code == 400
+    assert "negative" in str(response.json())
+
+
+@pytest.mark.django_db
+def test_a_card_sale_cannot_carry_an_amount_received(till, ticket):
+    # There is no drawer in a card payment, so an amount there is either a bug
+    # in the app or a till reporting cash it never took.
+    response = sell(
+        till, [{"item": ticket.pk, "count": 1}], payment_type="card", cash_given="10.00"
+    )
+
+    assert response.status_code == 400
+    assert "cash" in str(response.json()).lower()

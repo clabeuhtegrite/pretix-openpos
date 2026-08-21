@@ -278,3 +278,134 @@ def test_cancelled_seqs_answers_from_the_journal(till, event, ticket):
     assert PosSale.cancelled_seqs(event, [first["journal_seq"], second["journal_seq"]]) == {
         first["journal_seq"]
     }
+
+
+@pytest.mark.django_db
+def test_a_row_names_itself_by_sequence_order_and_amount(till, event, ticket):
+    # What an admin sees in a list of these; a row nobody can identify is a
+    # row nobody can look into.
+    sell(till, [{"item": ticket.pk, "count": 1}])
+    sale = PosSale.objects.get(event=event, kind=PosSale.KIND_SALE)
+
+    assert str(sale) == f"#{sale.seq} {sale.order_code} {sale.total}"
+
+
+@pytest.mark.django_db
+def test_an_on_site_price_names_the_line_it_applies_to(event, ticket, shirt):
+    from decimal import Decimal
+
+    from pretix_openpos.models import PosPrice
+
+    item, small, _large = shirt
+    plain = PosPrice.objects.create(event=event, item=ticket, price=Decimal("12.00"))
+    varied = PosPrice.objects.create(
+        event=event, item=item, variation=small, price=Decimal("13.00")
+    )
+
+    assert str(plain) == f"{ticket}: 12.00"
+    assert str(varied) == f"{item} – {small}: 13.00"
+
+
+@pytest.mark.django_db
+def test_recording_the_same_sale_twice_hands_back_the_first_row(
+    till, event, ticket, device
+):
+    # The idempotency case, seen from below: the unique constraint fires and
+    # that is a success, not a retry.
+    sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="sale-0001")
+    first = PosSale.objects.get(event=event, kind=PosSale.KIND_SALE)
+
+    again = PosSale.record(
+        event=event,
+        order=first.order,
+        device=device,
+        cashier="",
+        payment_type=first.payment_type,
+        total=first.total,
+        positions=first.positions,
+        idempotency_key=first.idempotency_key,
+    )
+
+    assert again.pk == first.pk
+    assert PosSale.objects.filter(event=event).count() == 1
+
+
+@pytest.mark.django_db
+def test_a_sequence_number_claimed_by_another_till_is_simply_claimed_again(
+    till, event, ticket, device, monkeypatch
+):
+    # Two tills commit at once and the unique constraint arbitrates. This is
+    # forgiving on SQLite and unforgiving on PostgreSQL, which is why each
+    # attempt runs in its own savepoint — see dev/concurrency_test.py.
+    from django.db import IntegrityError
+
+    sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="sale-0001")
+    order = PosSale.objects.get(event=event).order
+    original = PosSale.save
+    collisions = {"left": 1}
+
+    def collide_once(self, *args, **kwargs):
+        if collisions["left"]:
+            collisions["left"] -= 1
+            raise IntegrityError("UNIQUE constraint failed: openpos_sale.seq")
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(PosSale, "save", collide_once)
+
+    recorded = PosSale.record(
+        event=event, order=order, device=device, cashier="", payment_type="openpos_cash",
+        total=order.total, positions=[], idempotency_key="sale-0002",
+    )
+
+    assert recorded.seq == 2
+    assert collisions["left"] == 0
+
+
+@pytest.mark.django_db
+def test_a_journal_that_will_not_take_a_row_fails_loudly(
+    till, event, ticket, device, monkeypatch
+):
+    # Never seen in practice. If it ever is, a sale silently missing from the
+    # journal is the one outcome that must not happen quietly.
+    from django.db import IntegrityError
+
+    sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="sale-0001")
+    order = PosSale.objects.get(event=event).order
+
+    def always_collide(self, *args, **kwargs):
+        raise IntegrityError("UNIQUE constraint failed: openpos_sale.seq")
+
+    monkeypatch.setattr(PosSale, "save", always_collide)
+
+    with pytest.raises(RuntimeError, match="Could not append"):
+        PosSale.record(
+            event=event, order=order, device=device, cashier="",
+            payment_type="openpos_cash", total=order.total, positions=[],
+            idempotency_key="sale-0003", attempts=2,
+        )
+
+
+@pytest.mark.django_db
+def test_a_row_cannot_be_edited_or_deleted_after_the_fact(till, event, ticket):
+    # Append-only is enforced in the model, not only by the hash chain: the
+    # chain makes tampering detectable, this makes it inconvenient.
+    sell(till, [{"item": ticket.pk, "count": 1}])
+    sale = PosSale.objects.get(event=event)
+
+    with pytest.raises(ValueError):
+        sale.save()
+    with pytest.raises(ValueError):
+        sale.delete()
+
+
+@pytest.mark.django_db
+def test_a_reversal_negates_a_line_whose_count_never_arrived(till, event, ticket):
+    # Journal rows are JSON and outlive the code that wrote them; a line from
+    # an older shape must not take the cancellation down with it.
+    from pretix_openpos.api.views import OpenPosViewSet
+
+    reversed_lines = OpenPosViewSet()._reversed_positions(
+        [{"item_name": "Bière", "count": None, "line_total": None}]
+    )
+
+    assert reversed_lines == [{"item_name": "Bière", "count": None, "line_total": None}]

@@ -3,8 +3,13 @@
  *
  * Deliberately not a full i18n library: a till has a few dozen strings, and a
  * dependency-free lookup keeps the bundle small and the build trivial.
+ *
+ * Exported so the suite can check that the two catalogues line up: a string
+ * added to English and forgotten in French neither fails the build nor throws —
+ * it just puts an English word on a French till, mid-sale, where nobody is
+ * going to report it.
  */
-const MESSAGES = {
+export const MESSAGES = {
   en: {
     "app.title": "Open POS",
     "pairing.title": "Pair this till",

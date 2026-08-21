@@ -1,0 +1,51 @@
+# The stack the end-to-end scripts run against.
+#
+# Deliberately not the dev stack: this one is on PostgreSQL, which is what
+# production runs and what the journal's savepoint handling actually has to
+# survive. Driven by dev/integration.sh — locally and in CI, the same way, so a
+# failure on a laptop is the failure CI saw.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: pretix
+      POSTGRES_USER: pretix
+      POSTGRES_PASSWORD: pretix
+    healthcheck:
+      # pretix' entrypoint runs migrations the moment it boots; starting it
+      # against a database still initialising is a flake nobody could reproduce.
+      test: ["CMD-SHELL", "pg_isready -U pretix -d pretix"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    tmpfs:
+      # Nothing here outlives the run, and this makes the migrations a good
+      # deal faster than they are on a disk-backed volume.
+      - /var/lib/postgresql/data
+
+  pretix:
+    build:
+      context: ..
+      dockerfile: dev/Dockerfile
+    environment:
+      PRETIX_CONFIG_FILE: /etc/pretix/pretix.integration.cfg
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      # 8001, so an integration run and a dev stack can be up at once.
+      - "8001:8000"
+    volumes:
+      - ..:/plugin
+      - ./pretix.integration.cfg:/etc/pretix/pretix.integration.cfg:ro
+      - ./entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
+    healthcheck:
+      # The login page, not /healthcheck/: pretix' own probe also wants Redis
+      # and a celery worker, neither of which this stack has or needs. A login
+      # page that renders means Django is up and the database is reachable,
+      # which is the whole readiness question here.
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/control/login')\""]
+      interval: 3s
+      timeout: 5s
+      retries: 60
+      start_period: 60s
