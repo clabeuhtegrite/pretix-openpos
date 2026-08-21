@@ -36,6 +36,28 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# The PWA bundle is generated, not committed, so a fresh checkout has none —
+# and pretix serves the shell through a hashed staticfiles manifest, which does
+# not contain what was never collected. The back-office script renders that
+# shell, so without this the run fails on a missing manifest entry rather than
+# on anything it was testing. Built in a container so this script needs nothing
+# but Docker; preflight sets OPENPOS_SKIP_BUNDLE because it has just built the
+# same bundle from the same tree.
+if [ "${OPENPOS_SKIP_BUNDLE:-}" = "1" ]; then
+    echo "==> reusing the bundle preflight just built"
+else
+    echo "==> building the till's own JavaScript"
+    # The anonymous volume over node_modules matters: without it, npm ci
+    # installs Linux binaries straight into the host's frontend/node_modules
+    # and every `npm test` on the machine afterwards fails on the wrong
+    # architecture. The bundle itself is written to the mounted tree, which is
+    # the point.
+    docker run --rm \
+        -v "$PWD:/src" -v /src/frontend/node_modules \
+        -w /src/frontend node:22-slim \
+        sh -c "npm ci --silent && npm run build" >/dev/null
+fi
+
 echo "==> building and starting pretix on PostgreSQL"
 $COMPOSE up -d --build
 

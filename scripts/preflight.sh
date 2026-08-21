@@ -64,7 +64,8 @@ if [ "$FAST" = "1" ]; then
 fi
 
 step "end to end: PostgreSQL, concurrent tills, back office, arrivals"
-dev/integration.sh
+# The bundle was built two steps ago, out of this same tree.
+OPENPOS_SKIP_BUNDLE=1 dev/integration.sh
 
 step "the production image builds, with the till's own JavaScript in it"
 # --platform linux/amd64 is not optional on an Apple Silicon Mac: an arm64
