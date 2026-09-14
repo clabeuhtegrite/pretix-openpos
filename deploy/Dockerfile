@@ -39,6 +39,15 @@ FROM pretix/standalone:${PRETIX_VERSION}
 
 USER root
 
+# The upstream image is rebuilt on pretix releases, not on Debian security
+# updates: the 2026.7 base shipped with perl, glib, ImageMagick and libraw
+# builds that Debian had since patched, and Trivy flagged 40 criticals on an
+# image nothing in this repo could fix by rebuilding. Upgrading at build time
+# picks up whatever Debian has published, so a rebuild is always enough.
+RUN apt-get update \
+    && apt-get -y --no-install-recommends upgrade \
+    && rm -rf /var/lib/apt/lists/*
+
 # Installing from the source tree keeps the plugin version in lockstep with the
 # commit that produced the bundle copied in beside it.
 COPY --chown=pretixuser:pretixuser . /plugin
