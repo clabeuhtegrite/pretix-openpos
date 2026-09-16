@@ -310,8 +310,10 @@ saisi par réflexe n'est pas quelque chose qu'on met à un geste de distance.
    restent visibles en toutes circonstances.
 4. **Paiement** — l'ouverture du panneau **frappe la clé d'idempotence**. Le pavé
    numérique se lit en centimes : taper 1-2-3-4 signifie 12,34 €, il n'y a pas de
-   virgule à rater dans la file. Boutons d'appoint : *Compte juste*, 5, 10, 20, 50.
-   Le rendu de monnaie s'affiche en direct.
+   virgule à rater dans la file. Boutons rapides : *Appoint*, 5, 10, 20, 50 ;
+   celui dont le montant est celui reçu passe au vert, pour qu'un appui se voie
+   même quand il n'y a pas de monnaie à rendre. Le rendu de monnaie s'affiche en
+   direct.
 5. **Envoi** — `POST checkout/` avec la clé, les lignes, le type de paiement, le
    montant reçu, le nom du caissier et `expected_total`.
 
