@@ -78,8 +78,16 @@ def quota_availability(quotas, cache):
     Remaining places across a set of quotas, or ``None`` when unlimited.
 
     Returns 0 as soon as any quota reports something other than "available",
-    because a position needs every one of its quotas to have room.
+    because a position needs every one of its quotas to have room — and 0 for
+    a product attached to no quota at all. pretix' own shop treats that as
+    unavailable and its order pipeline refuses it ("not assigned to a quota"),
+    so a till showing it as unlimited would let it into a basket only to be
+    refused at payment, in front of the customer. Sold out is what the
+    organiser sees at once; a quota, unlimited if need be, is the fix.
     """
+    quotas = list(quotas)
+    if not quotas:
+        return 0
     remaining = None
     for quota in quotas:
         state, available = quota.availability(_cache=cache)
@@ -467,7 +475,7 @@ class OpenPosViewSet(viewsets.ViewSet):
         if data["payment_type"] == PosSale.PAYMENT_CASH and cash_given is not None:
             if cash_given < total:
                 raise ValidationError(
-                    {"cash_given": _("The amount received is less than the total due.")}
+                    {"cash_given": [_("The amount received is less than the total due.")]}
                 )
             cash_change = cash_given - total
 

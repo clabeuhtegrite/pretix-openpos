@@ -5,11 +5,10 @@ import { useConnectivity } from "../connectivity";
 import { t, type MessageKey } from "../i18n";
 import { newNonce } from "../nonce";
 import { indexSnapshot, offlineVerdict } from "../offline";
-import { enqueue, loadQueue, loadSnapshot, saveSnapshot } from "../storage";
-import type {
-  Attendance, CheckinListInfo, OfflineSnapshot, Pairing, RedeemResult,
-} from "../types";
+import { enqueue, loadQueue } from "../storage";
+import type { Attendance, CheckinListInfo, Pairing, RedeemResult } from "../types";
 import { useBackClose } from "../useBackClose";
+import { useOfflineSnapshot } from "../useOfflineSnapshot";
 import AttendancePanel from "./AttendancePanel";
 import AttendeeSearch from "./AttendeeSearch";
 import QrScanner from "./QrScanner";
@@ -45,14 +44,6 @@ const ATTENDANCE_REFRESH_MS = 60_000;
  * that the count has moved by the time the operator looks up from the verdict.
  */
 const ATTENDANCE_SETTLE_MS = 1200;
-/**
- * How often the guest list carried for a dropout is refreshed.
- *
- * Tickets are still being sold — online, and at the other tills — while this
- * door scans. A snapshot an hour old would start refusing people who bought
- * their ticket during the evening.
- */
-const SNAPSHOT_REFRESH_MS = 300_000;
 
 /**
  * Buzz on a refusal.
@@ -99,11 +90,16 @@ interface Props {
   defaultListId: number | null;
   /** Ids of the products that admit a person; everything else is merchandise. */
   admissionItems: number[];
+  /**
+   * Told when the operator switches lists, so the app can go on carrying the
+   * guest list of this door after the screen is closed, and reopen it here.
+   */
+  onListChange?: (listId: number) => void;
   onClose: () => void;
 }
 
 export default function CheckinScreen({
-  pairing, lists, defaultListId, admissionItems, onClose,
+  pairing, lists, defaultListId, admissionItems, onListChange, onClose,
 }: Props) {
   const [listId, setListId] = useState<number | null>(
     defaultListId ?? (lists.length ? lists[0].id : null),
@@ -119,7 +115,9 @@ export default function CheckinScreen({
   const [attendanceError, setAttendanceError] = useState<string | null>(null);
 
   const online = useConnectivity();
-  const [snapshot, setSnapshot] = useState<OfflineSnapshot | null>(() => loadSnapshot());
+  // Kept fresh for the list on screen while there is a network, because it is
+  // the only thing that will answer a scan once there is not.
+  const snapshot = useOfflineSnapshot(pairing, listId, online);
   // Indexed once per snapshot, not per scan; also carries which list it is
   // for, so a door switched mid-dropout is answered with "no guest list"
   // rather than with the other door's.
@@ -175,31 +173,6 @@ export default function CheckinScreen({
     const timer = window.setInterval(() => void loadAttendance(), ATTENDANCE_REFRESH_MS);
     return () => window.clearInterval(timer);
   }, [listId, loadAttendance]);
-
-  // Kept fresh while there is a network, because it is the only thing that will
-  // answer a scan once there is not.
-  useEffect(() => {
-    if (!listId || !online) return;
-    let cancelled = false;
-    const pull = () => {
-      api
-        .offlineSnapshot(pairing, listId)
-        .then((data) => {
-          if (cancelled) return;
-          saveSnapshot(data);
-          setSnapshot(data);
-        })
-        .catch(() => {
-          // A stale snapshot beats none; the previous one stays.
-        });
-    };
-    pull();
-    const timer = window.setInterval(pull, SNAPSHOT_REFRESH_MS);
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [listId, online, pairing]);
 
   useBackClose(searchOpen, () => setSearchOpen(false));
   useBackClose(attendanceOpen, () => setAttendanceOpen(false));
@@ -326,7 +299,11 @@ export default function CheckinScreen({
             <select
               className="scanner-select"
               value={listId ?? ""}
-              onChange={(e) => setListId(Number(e.target.value))}
+              onChange={(e) => {
+                const next = Number(e.target.value);
+                setListId(next);
+                onListChange?.(next);
+              }}
               aria-label={t("checkin.list")}
             >
               {lists.map((list) => (
@@ -409,6 +386,12 @@ export default function CheckinScreen({
                 ? t("checkin.ok")
                 : t("checkin.noEntry")}
           </div>
+          {verdict.status !== "ok" && verdict.reason_explanation && (
+            // pretix' own words for a refusal by rule — which window the ticket
+            // is valid in, for instance. The label above names the kind of
+            // refusal; this is the part the operator can actually explain.
+            <div className="verdict-note">{verdict.reason_explanation}</div>
+          )}
           {verdict.status === "ok" && !admitted && (
             <div className="verdict-note">{t("checkin.noEntryHint")}</div>
           )}

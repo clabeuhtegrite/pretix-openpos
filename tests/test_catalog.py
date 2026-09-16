@@ -205,3 +205,26 @@ def test_a_product_whose_every_option_is_off_disappears_with_them(till, shirt):
     item.variations.update(active=False)
 
     assert "T-shirt" not in catalogue(till)
+
+
+@pytest.mark.django_db
+def test_a_product_with_no_quota_at_all_is_shown_as_sold_out(till, event):
+    # pretix' own shop treats a product attached to no quota as unavailable,
+    # and its order pipeline refuses it outright. Shown as unlimited, the till
+    # would let it into a basket and only be refused at payment, in front of
+    # the customer; shown as sold out, it is a configuration mistake the
+    # organiser sees at once — and a quota, unlimited if need be, is the fix.
+    Item.objects.create(event=event, name="Tombola", default_price=2)
+
+    assert catalogue(till)["Tombola"]["available"] == 0
+
+
+@pytest.mark.django_db
+def test_an_option_left_out_of_every_quota_is_shown_as_sold_out(till, shirt):
+    item, small, large = shirt
+    Quota.objects.get(items=item).variations.remove(large)
+
+    variations = {v["name"]: v for v in catalogue(till)["T-shirt"]["variations"]}
+
+    assert variations["S"]["available"] == 50
+    assert variations["L"]["available"] == 0

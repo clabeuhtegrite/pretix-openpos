@@ -25,22 +25,43 @@ export class ApiError extends Error {
 }
 
 /**
- * Turn a DRF error body into something a cashier can act on.
+ * The human-readable part of a DRF error body.
+ *
+ * Field errors are lists of messages, and stay lists however deep they sit: a
+ * refused position arrives as {"positions": [{}, {"item": ["…"]}]}, and every
+ * one of those strings is something a cashier can act on. A plain string under
+ * a field, on the other hand, is data rather than prose — that is how the
+ * checkout's "code" and "total" travel alongside its message, and reading
+ * them out produced "… price_changed 17.00" on the payment panel. Before
+ * this descended into lists, the position case came out as "[object Object]".
+ */
+function fieldMessages(value: unknown, inList = false): string[] {
+  if (typeof value === "string") return inList && value.trim() ? [value] : [];
+  if (Array.isArray(value)) return value.flatMap((item) => fieldMessages(item, true));
+  if (value && typeof value === "object") {
+    return Object.values(value).flatMap((item) => fieldMessages(item, inList));
+  }
+  return [];
+}
+
+/**
+ * Turn an error body into something a cashier can act on.
  *
  * Errors arrive either as {"detail": "..."} or as {"field": ["msg", ...]}; the
  * second shape is what validation failures look like, and it is the one that
- * actually matters at the till ("this product is not on sale here").
+ * actually matters at the till ("this product is not on sale here"). A body
+ * that is not JSON is a page — a gateway or a CDN answering for pretix — and
+ * markup is no message for anyone: the status stands in for it.
  */
 function describe(body: unknown, fallback: string): string {
-  if (typeof body === "string" && body.trim()) return body;
+  if (typeof body === "string") {
+    const text = body.trim();
+    return text && !text.startsWith("<") ? text : fallback;
+  }
   if (body && typeof body === "object") {
     const record = body as Record<string, unknown>;
     if (typeof record.detail === "string") return record.detail;
-    const parts: string[] = [];
-    for (const value of Object.values(record)) {
-      if (Array.isArray(value)) parts.push(value.map(String).join(" "));
-      else if (typeof value === "string") parts.push(value);
-    }
+    const parts = fieldMessages(record);
     if (parts.length) return parts.join(" ");
   }
   return fallback;

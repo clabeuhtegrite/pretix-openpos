@@ -118,11 +118,11 @@ class CheckoutSerializer(serializers.Serializer):
         if data["payment_type"] == PosSale.PAYMENT_CASH:
             if cash_given is not None and cash_given < Decimal("0.00"):
                 raise serializers.ValidationError(
-                    {"cash_given": _("The amount received cannot be negative.")}
+                    {"cash_given": [_("The amount received cannot be negative.")]}
                 )
         elif cash_given is not None:
             raise serializers.ValidationError(
-                {"cash_given": _("The amount received only applies to cash payments.")}
+                {"cash_given": [_("The amount received only applies to cash payments.")]}
             )
         return data
 
