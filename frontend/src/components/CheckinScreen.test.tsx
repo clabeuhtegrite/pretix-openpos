@@ -394,6 +394,29 @@ describe("a refusal", () => {
     expect(screen.getByText(t("reason.incomplete"))).toBeDefined();
   });
 
+  it("passes on pretix' own explanation of a refusal by rule", async () => {
+    // "Refused by the rules" names the kind of refusal; which rule is what
+    // the operator has to be able to say to the person in front of them.
+    redeem.mockResolvedValue({
+      status: "error", reason: "rules", reason_explanation: "Entry only after 20:00.",
+    });
+    show();
+
+    await scan();
+
+    expect(screen.getByText(t("reason.rules"))).toBeDefined();
+    expect(screen.getByText("Entry only after 20:00.")).toBeDefined();
+  });
+
+  it("names a ticket presented outside the window it is valid in", async () => {
+    redeem.mockResolvedValue({ status: "error", reason: "invalid_time" });
+    show();
+
+    await scan();
+
+    expect(screen.getByText(t("reason.invalid_time"))).toBeDefined();
+  });
+
   it("buzzes, because looking up at the right moment is not a given", async () => {
     const vibrate = vi.fn();
     Object.defineProperty(navigator, "vibrate", { value: vibrate, configurable: true });
@@ -822,5 +845,16 @@ describe("leaving", () => {
     const { container } = show({ lists: [lists[0]] });
 
     expect(within(container).queryByLabelText(t("checkin.list"))).toBeNull();
+  });
+
+  it("tells the app which list it was switched to", async () => {
+    // So the guest list for a dropout goes on being carried for this door
+    // once the screen is closed, and the door reopens on it.
+    const onListChange = vi.fn();
+    const { user } = show({ onListChange });
+
+    await user.selectOptions(screen.getByLabelText(t("checkin.list")), "8");
+
+    expect(onListChange).toHaveBeenCalledWith(8);
   });
 });

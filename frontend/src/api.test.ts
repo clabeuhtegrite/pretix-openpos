@@ -195,7 +195,7 @@ describe("the message a cashier is shown", () => {
   });
 
   it("joins several field errors rather than showing one", async () => {
-    respondWith({ positions: ["Sold out."], payment_type: "Unknown." }, 400);
+    respondWith({ positions: ["Sold out."], payment_type: ["Unknown."] }, 400);
 
     const error = await api.config(pairing).catch((e: unknown) => e);
 
@@ -214,11 +214,44 @@ describe("the message a cashier is shown", () => {
     await expect(api.config(pairing)).rejects.toThrow("HTTP 418");
   });
 
-  it("survives a body that is not JSON at all", async () => {
-    // An nginx error page, which is what a real outage looks like.
+  it("digs a position's error out of the list it comes in", async () => {
+    // What a product pretix cannot sell looks like from its order pipeline —
+    // and what used to reach the payment panel as "[object Object]".
+    respondWith(
+      { positions: [{}, { item: ["The product is not assigned to a quota."] }] },
+      400,
+    );
+
+    await expect(api.config(pairing)).rejects.toThrow(
+      "The product is not assigned to a quota.",
+    );
+  });
+
+  it("leaves the fields that are data, not prose, out of the message", async () => {
+    // The checkout's price_changed refusal travels with its code and the new
+    // total beside the sentence; only the sentence is for the cashier.
+    respondWith(
+      { expected_total: ["Prices changed."], code: "price_changed", total: "17.00" },
+      400,
+    );
+
+    const error = await api.config(pairing).catch((e: unknown) => e);
+
+    expect((error as Error).message).toBe("Prices changed.");
+  });
+
+  it("takes a plain-text body that is not JSON as the message", async () => {
+    respondRaw("Down for maintenance", 503);
+
+    await expect(api.config(pairing)).rejects.toThrow("Down for maintenance");
+  });
+
+  it("shows the status rather than the markup of an error page", async () => {
+    // An nginx page, or a CDN's challenge: what a real outage looks like, and
+    // kilobytes nobody at a till can read.
     respondRaw("<html>502 Bad Gateway</html>", 502);
 
-    await expect(api.config(pairing)).rejects.toThrow("<html>502 Bad Gateway</html>");
+    await expect(api.config(pairing)).rejects.toThrow("HTTP 502");
   });
 });
 

@@ -24,13 +24,15 @@ vi.mock("./api", async (importOriginal) => {
   return { ...actual, api: apiMock };
 });
 
-// No camera in jsdom, and the door has its own tests.
+// No camera in jsdom, and the door has its own tests. What is kept is the
+// way out, so a test can close the door again.
 vi.mock("./components/QrScanner", () => ({
-  default: ({ title, footer, children }: {
-    title: string; footer?: React.ReactNode; children?: React.ReactNode;
+  default: ({ title, footer, children, onClose }: {
+    title: string; footer?: React.ReactNode; children?: React.ReactNode; onClose: () => void;
   }) => (
     <div>
       <h2>{title}</h2>
+      <button onClick={onClose}>close-scanner</button>
       {footer}
       {children}
     </div>
@@ -220,14 +222,75 @@ describe("getting to the till", () => {
     expect(await screen.findByText(t("error.offline"))).toBeDefined();
   });
 
-  it("goes back to pairing when the device has been revoked", async () => {
-    // An operator staring at "403" cannot fix it; a pairing screen they can.
+  it("says so, and keeps the pairing, when the server refuses the till", async () => {
+    // A 403 is what a revoked device gets — and what a CDN or a firewall in
+    // front of pretix answers with when it challenges a request. A till that
+    // unpaired itself on the second kind could not be brought back without
+    // somebody at the back office minting a new code.
     apiMock.config.mockRejectedValue(new ApiError(403, "Unknown device."));
     apiMock.catalog.mockRejectedValue(new ApiError(403, "Unknown device."));
     show();
 
-    expect(await screen.findByText(t("pairing.title"))).toBeDefined();
+    expect(
+      await screen.findByText(t("error.refused", { detail: "Unknown device." })),
+    ).toBeDefined();
+    expect(loadPairing()).not.toBeNull();
+  });
+
+  it("does not open on the cached catalogue when the till has been refused", async () => {
+    // A revoked device selling from a stale catalogue would only be refused
+    // again at the first sale, in front of a customer.
+    const { user } = show();
+    await ready();
+    apiMock.config.mockRejectedValue(new ApiError(401, "Invalid token."));
+    apiMock.catalog.mockRejectedValue(new ApiError(401, "Invalid token."));
+
+    await user.click(screen.getByRole("button", { name: "settings" }));
+    await user.click(await screen.findByRole("button", { name: t("settings.refresh") }));
+
+    expect(
+      await screen.findByText(t("error.refused", { detail: "Invalid token." })),
+    ).toBeDefined();
+    expect(screen.queryByRole("button", { name: /Bière/ })).toBeNull();
+  });
+
+  it("lets a refused till try again", async () => {
+    apiMock.config.mockRejectedValueOnce(new ApiError(403, "Unknown device."));
+    apiMock.catalog.mockRejectedValueOnce(new ApiError(403, "Unknown device."));
+    const { user } = show();
+    await screen.findByText(t("error.refused", { detail: "Unknown device." }));
+
+    await user.click(screen.getByRole("button", { name: t("error.retry") }));
+
+    expect(await screen.findByRole("button", { name: /Bière/ })).toBeDefined();
+  });
+
+  it("lets a refused till be unpaired, once the operator has confirmed", async () => {
+    apiMock.config.mockRejectedValue(new ApiError(401, "Invalid token."));
+    apiMock.catalog.mockRejectedValue(new ApiError(401, "Invalid token."));
+    const confirmed = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const { user } = show();
+    await screen.findByText(t("error.refused", { detail: "Invalid token." }));
+
+    await user.click(screen.getByRole("button", { name: t("settings.unpair") }));
+
+    expect(screen.getByText(t("pairing.title"))).toBeDefined();
     expect(loadPairing()).toBeNull();
+    confirmed.mockRestore();
+  });
+
+  it("keeps a refused till paired when the operator thinks again", async () => {
+    apiMock.config.mockRejectedValue(new ApiError(401, "Invalid token."));
+    apiMock.catalog.mockRejectedValue(new ApiError(401, "Invalid token."));
+    const declined = vi.spyOn(window, "confirm").mockReturnValue(false);
+    const { user } = show();
+    await screen.findByText(t("error.refused", { detail: "Invalid token." }));
+
+    await user.click(screen.getByRole("button", { name: t("settings.unpair") }));
+
+    expect(screen.queryByText(t("pairing.title"))).toBeNull();
+    expect(loadPairing()).not.toBeNull();
+    declined.mockRestore();
   });
 
   it("opens on what it was last told when the server is unreachable", async () => {
@@ -917,6 +980,117 @@ describe("the door", () => {
 
     expect(apiMock.catalog).not.toHaveBeenCalled();
     vi.useRealTimers();
+  });
+});
+
+describe("the guest list carried for a dropout", () => {
+  const twoDoors = () =>
+    config({
+      checkin: {
+        enabled: true, list_id: 7, list_name: "Porte",
+        lists: [
+          { id: 7, name: "Porte", all_products: true, include_pending: false },
+          { id: 8, name: "VIP", all_products: false, include_pending: false },
+        ],
+      },
+    });
+
+  it("is fetched before the door has ever been opened", async () => {
+    // A phone that lost the wifi before anyone had opened the scanner used
+    // to have no guest list at all, and its door stayed shut for the dropout.
+    show();
+    await ready();
+
+    await waitFor(() => expect(apiMock.offlineSnapshot).toHaveBeenCalledWith(pairing, 7));
+  });
+
+  it("is fetched for the event's first list when sales do not check in", async () => {
+    apiMock.config.mockResolvedValue(config({
+      checkin: {
+        enabled: false, list_id: null, list_name: null,
+        lists: [{ id: 9, name: "Entrée", all_products: true, include_pending: false }],
+      },
+    }));
+    show();
+    await ready();
+
+    await waitFor(() => expect(apiMock.offlineSnapshot).toHaveBeenCalledWith(pairing, 9));
+  });
+
+  it("is not fetched at all for an event with no list", async () => {
+    apiMock.config.mockResolvedValue(config({
+      checkin: { enabled: false, list_id: null, list_name: null, lists: [] },
+    }));
+    show();
+    await ready();
+
+    expect(apiMock.offlineSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("is left to the door screen while that is open", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { user } = show();
+    await ready();
+    await waitFor(() => expect(apiMock.offlineSnapshot).toHaveBeenCalledOnce());
+    apiMock.offlineSnapshot.mockClear();
+
+    await user.click(screen.getByRole("button", { name: t("checkin.open") }));
+    await waitFor(() => expect(apiMock.offlineSnapshot).toHaveBeenCalledOnce());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300_000);
+    });
+
+    // One fetcher at a time: the door's own refresh, not the app's on top of it.
+    expect(apiMock.offlineSnapshot).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
+  });
+
+  it("follows the door to the list it was switched to, and reopens on it", async () => {
+    apiMock.config.mockResolvedValue(twoDoors());
+    const { user } = show();
+    await ready();
+    await user.click(screen.getByRole("button", { name: t("checkin.open") }));
+    await user.selectOptions(screen.getByLabelText(t("checkin.list")), "8");
+    apiMock.offlineSnapshot.mockClear();
+
+    await user.click(screen.getByRole("button", { name: "close-scanner" }));
+    await waitFor(() => expect(apiMock.offlineSnapshot).toHaveBeenCalledWith(pairing, 8));
+    await user.click(screen.getByRole("button", { name: t("checkin.open") }));
+
+    expect(screen.getByLabelText(t("checkin.list"))).toHaveProperty("value", "8");
+  });
+
+  it("forgets the door's list when the till is switched to another event", async () => {
+    // The lists belong to the event; the other event's door is its own.
+    apiMock.posEvents.mockResolvedValue({
+      results: [
+        { slug: "festival", organizer: "demo", name: "Festival", currency: "EUR", testmode: false, date_from: null },
+        { slug: "gala", organizer: "demo", name: "Gala", currency: "EUR", testmode: false, date_from: null },
+      ],
+    });
+    apiMock.config.mockImplementation(async (p: { event: string }) =>
+      p.event === "gala"
+        ? config({
+            event: { ...config().event, slug: "gala", name: "Gala" },
+            checkin: {
+              enabled: true, list_id: 21, list_name: "Gala",
+              lists: [{ id: 21, name: "Gala", all_products: true, include_pending: false }],
+            },
+          })
+        : twoDoors(),
+    );
+    const { user } = show();
+    await ready();
+    await user.click(screen.getByRole("button", { name: t("checkin.open") }));
+    await user.selectOptions(screen.getByLabelText(t("checkin.list")), "8");
+    await user.click(screen.getByRole("button", { name: "close-scanner" }));
+
+    await user.click(screen.getByRole("button", { name: "settings" }));
+    await user.selectOptions(await screen.findByLabelText(t("settings.event")), "gala");
+
+    await waitFor(() =>
+      expect(apiMock.offlineSnapshot).toHaveBeenCalledWith({ ...pairing, event: "gala" }, 21),
+    );
   });
 });
 

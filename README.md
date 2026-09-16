@@ -167,7 +167,8 @@ rather than to a rolling minor.
    channel unless you say otherwise, so everything shows up at the till to begin
    with. To split the two catalogues, set a product's *Availability* to specific
    channels and pick from there — including products that exist *only* on
-   **Open POS**.
+   **Open POS**. Every product needs a quota, unlimited if need be: one attached
+   to none shows as sold out at the till, as it would in the shop.
 3. **Set the on-site prices** under *Open POS → On-site prices*. Leave a field
    empty to charge the same as the online shop.
 4. **Choose the check-in list** under *Open POS → Settings*, so tickets are

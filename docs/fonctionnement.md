@@ -184,7 +184,10 @@ depuis `/static/` :
 - **`/openpos/sw.js`** — un service worker ne peut contrôler que les URL situées
   à son niveau ou en dessous. Servi depuis `/static/…`, il ne pourrait jamais
   contrôler `/openpos/`. Servi avec `no-cache` : un worker périmé est la façon
-  classique de rester bloqué sur un vieux build.
+  classique de rester bloqué sur un vieux build. Un CDN placé devant pretix peut
+  réécrire cet en-tête — Cloudflare, par exemple, impose un `max-age` de 12 h et
+  garde le fichier en cache de bordure : après un déploiement qui touche `sw.js`,
+  purger ce chemin.
 
 ---
 
@@ -300,8 +303,15 @@ saisi par réflexe n'est pas quelque chose qu'on met à un geste de distance.
    l'organisateur y ait ouvert de caisse). Un seul résultat → sélection
    automatique. Le tout est rangé dans `localStorage` sous `openpos.pairing.v1`.
 2. **Chargement** — `config/` et `catalog/` en parallèle. Un 401/403 (device
-   révoqué ou supprimé) renvoie l'opérateur à l'écran d'appairage plutôt que de
-   le laisser devant une erreur qu'il ne peut pas résoudre.
+   révoqué ou supprimé, plugin désactivé sur l'événement) affiche le motif du
+   serveur avec deux issues, *Réessayer* et *Dépairer* — sans jamais effacer
+   l'appairage de lui-même. Une version antérieure le faisait ; or un CDN ou un
+   pare-feu devant pretix répond avec ces mêmes codes quand il conteste une
+   requête, et une caisse qui se serait dépairée là-dessus en pleine soirée ne
+   se récupère qu'avec un nouveau code frappé au back-office. Le catalogue en
+   cache n'est pas utilisé non plus dans ce cas : un device révoqué qui
+   vendrait sur un vieux catalogue serait refusé à la première vente, devant
+   le client.
 3. **Panier** — les montants sont manipulés en **centimes entiers** côté client,
    jamais en flottants. Les quantités sont plafonnées par le stock restant quand
    le quota est fini. L'affichage suit ce qu'il y a dedans : en écran étroit le
@@ -425,6 +435,9 @@ une liste. C'est [CheckinScreen.tsx](../frontend/src/components/CheckinScreen.ts
 - **L'appel est celui de pretix** (`checkinrpc/redeem`), pas un endpoint maison :
   le moteur de règles, les secrets révoqués ou bloqués et les motifs de refus
   exacts viennent de pretix plutôt que d'une réimplémentation qui dériverait.
+  L'explication que pretix joint à un refus par règle (une plage horaire, par
+  exemple) est affichée sous le motif ; un motif que cette version ne connaît
+  pas s'affiche « Refusé », jamais sous forme de clé technique.
 - **`questions_supported: false`** : la caisse n'a pas d'écran de questions, donc
   pretix refuse avec un motif explicite au lieu de renvoyer un « incomplet »
   inexploitable.
@@ -616,7 +629,7 @@ aller vérifier.
 |---|---|
 | Vendre | Oui, au tarif embarqué ; la vente part en file d'attente |
 | Rendre la monnaie | Oui, calculé localement |
-| Scanner un billet | Oui, contre la **liste embarquée** (`openpos/offline/`), rafraîchie toutes les 5 min tant qu'il y a du réseau |
+| Scanner un billet | Oui, contre la **liste embarquée** (`openpos/offline/`), chargée dès l'appairage pour la liste de la porte — pas seulement à l'ouverture du scan — et rafraîchie toutes les 5 min tant qu'il y a du réseau |
 | Redémarrer la caisse | Oui : catalogue et configuration du dernier chargement sont conservés par événement |
 | Historique, annulation, effectif | Non — ils demandent le serveur, et l'écran le dit |
 
@@ -798,8 +811,8 @@ relevé sur lequel on compte le tiroir, et sont affichées sur une ligne à part
 
 Voir §2.3. En complément : le token est dans `localStorage`, l'app se dépaire
 depuis *Réglages* (bouton rouge, avec la série affichée), et le device se révoque
-côté organisateur — ce qui renvoie la tablette à l'écran d'appairage au prochain
-chargement.
+côté organisateur — la tablette affiche alors le refus au prochain chargement,
+avec *Dépairer* à portée de main ; elle ne s'efface jamais toute seule (§4.1).
 
 ---
 
@@ -976,7 +989,7 @@ le tarif d'hier.
 | 400 `price_changed` | Les prix ont bougé sous le panier | Recharge le catalogue, re-tarife, garde le panneau ouvert |
 | 400 `positions` | Produit non vendable au guichet / variante inconnue | Affiche le message tel quel |
 | 400 `cash_given` | Reçu inférieur au dû | Affiche le message |
-| 401 / 403 | Device révoqué, ou plugin désactivé sur l'événement | Retour à l'écran d'appairage |
+| 401 / 403 | Device révoqué, ou plugin désactivé sur l'événement | Affiche le motif, avec *Réessayer* et *Dépairer* ; l'appairage n'est jamais effacé tout seul |
 
 ---
 
@@ -1073,6 +1086,8 @@ entier.
 | 500 sur le JavaScript de la caisse après déploiement | Image construite sans `npm run build` préalable |
 | L'image refuse de démarrer sur le cluster | Image arm64 sur un nœud amd64 : rebâtir avec `--platform linux/amd64` |
 | Aucun produit dans le catalogue | Canal **Open POS** non coché sur les produits, ou produits sans quota disponible |
+| Un produit reste « Épuisé » alors qu'aucune limite n'est atteinte | Il n'est rattaché à aucun quota : pretix ne peut pas le vendre, et la caisse le montre comme épuisé plutôt que de le laisser au panier pour être refusé au paiement. Créer un quota (illimité au besoin) et l'y rattacher |
+| « Une erreur est survenue » avec un 401 ou 403 au lancement | Device révoqué ou supprimé, plugin désactivé sur l'événement — ou un CDN / pare-feu qui conteste la requête. *Réessayer* d'abord ; *Dépairer* seulement si le device a bien été révoqué |
 | L'événement n'apparaît pas au moment de l'appairage | Plugin non activé sur l'événement, ou événement non *live*, ou device sans accès |
 | « Faites entrer » ne s'affiche jamais | Aucune liste de contrôle choisie dans *Open POS → Réglages*, ou aucun produit d'admission dans la vente |
 | Un billet refuse de se scanner | Code-barres non-QR : passer par la recherche par nom ou une douchette clavier |

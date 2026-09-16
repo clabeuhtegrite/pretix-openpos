@@ -26,6 +26,7 @@ import type {
   SaleResult, SyncReport,
 } from "./types";
 import { useBackClose } from "./useBackClose";
+import { useOfflineSnapshot } from "./useOfflineSnapshot";
 import { useWakeLock } from "./useWakeLock";
 
 /**
@@ -41,6 +42,22 @@ const CATALOG_REFRESH_MS = 60_000;
 function describeError(err: unknown): string {
   if (err instanceof ApiError) return err.isNetwork ? t("error.offline") : err.message;
   return String(err);
+}
+
+/**
+ * The check-in list this device scans on.
+ *
+ * The one it was last switched to at the door, as long as the event still has
+ * it; else the list sales check into; else the event's first. Decided here
+ * rather than in the door screen because it matters before that screen has
+ * ever been opened: the guest list carried for a dropout is fetched for it
+ * from the moment the till is paired.
+ */
+function doorListFor(config: PosConfig | null, chosen: number | null): number | null {
+  if (!config) return null;
+  const lists = config.checkin.lists;
+  if (chosen !== null && lists.some((list) => list.id === chosen)) return chosen;
+  return config.checkin.list_id ?? lists[0]?.id ?? null;
 }
 
 /**
@@ -110,6 +127,15 @@ export default function App() {
   // to evict it.
   useEffect(requestPersistence, []);
 
+  /** The list last chosen at the door, so the door reopens on it — see doorListFor. */
+  const [doorListId, setDoorListId] = useState<number | null>(null);
+  const doorList = doorListFor(config, doorListId);
+  // The guest list for a dropout, fetched from the moment the till is paired
+  // rather than the first time somebody opens the scanner. The door screen
+  // fetches for the list on screen while it is open, and this stands down for
+  // that time, so the two never run side by side.
+  useOfflineSnapshot(pairing, doorList, online && !checkinOpen);
+
   // A ref, not the state above: the automatic drain and a tap on "send now" can
   // land in the same tick, and a state flag would not have flipped yet. The
   // server would survive it — every entry is idempotent — but the report would
@@ -158,13 +184,18 @@ export default function App() {
       saveCached("config", p.event, nextConfig);
       saveCached("catalog", p.event, nextCatalog);
     } catch (err) {
-      // A revoked or deleted device should send the operator back to pairing
-      // rather than leave them staring at an error they cannot fix.
+      // A 401 or 403 is the server refusing this till: revoked, deleted, or
+      // Open POS switched off on its event. It is said on screen with the way
+      // out next to it — retry, or unpair — and never acted on by clearing the
+      // pairing. An earlier version did exactly that, and the same two status
+      // codes are what a CDN or a firewall in front of pretix answers with
+      // when it challenges a request: a till that unpaired itself on one of
+      // those at nine in the evening cannot be brought back without somebody
+      // at the back office minting a new code. Nor does it fall back on the
+      // cache below: a revoked device selling from a stale catalogue would
+      // only be refused again at the first sale, in front of a customer.
       if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
-        clearPairing();
-        setPairing(null);
-        setConfig(null);
-        setCatalog(null);
+        setLoadError(t("error.refused", { detail: err.message }));
         return;
       }
 
@@ -428,7 +459,13 @@ export default function App() {
           <button className="btn primary" onClick={() => void load(pairing)}>
             {t("error.retry")}
           </button>
-          <button className="btn ghost" style={{ marginTop: 10 }} onClick={unpair}>
+          <button
+            className="btn ghost"
+            style={{ marginTop: 10 }}
+            onClick={() => {
+              if (confirm(t("settings.unpairConfirm"))) unpair();
+            }}
+          >
             {t("settings.unpair")}
           </button>
         </div>
@@ -542,8 +579,9 @@ export default function App() {
         <CheckinScreen
           pairing={pairing}
           lists={config.checkin.lists}
-          defaultListId={config.checkin.list_id}
+          defaultListId={doorList}
           admissionItems={config.admission_items}
+          onListChange={setDoorListId}
           onClose={() => setCheckinOpen(false)}
         />
       )}
@@ -597,6 +635,8 @@ export default function App() {
             savePairing(next);
             setCart([]);
             setCredit(null);
+            // So does the door: its lists belong to the event too.
+            setDoorListId(null);
             setPairing(next);
             setSettingsOpen(false);
           }}
