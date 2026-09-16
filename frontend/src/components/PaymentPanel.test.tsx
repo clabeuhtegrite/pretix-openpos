@@ -49,6 +49,10 @@ function show(props: Partial<Parameters<typeof PaymentPanel>[0]> = {}) {
   return { user, type, confirm, row, onConfirm, onCancel, container };
 }
 
+/** Whether a quick-tender button is lit: it is while its amount is the one received. */
+const lit = (name: string) =>
+  screen.getByRole("button", { name }).getAttribute("aria-pressed") === "true";
+
 describe("the keypad", () => {
   it("reads digits as cents, the way a till does", async () => {
     // 1-2-3-4 is 12.34. There is no decimal point to fumble mid-queue.
@@ -111,6 +115,56 @@ describe("the keypad", () => {
 
     const change = screen.getByText(t("payment.change")).parentElement as HTMLElement;
     expect(within(change).getByText(formatMoney(766, "EUR"))).toBeDefined();
+  });
+
+  it("lights the exact-amount button once tapped", async () => {
+    // Nothing else on the panel moves when the change is nil, so the button
+    // itself has to say the tap landed.
+    const { user } = show();
+    expect(lit(t("payment.exact"))).toBe(false);
+
+    await user.click(screen.getByRole("button", { name: t("payment.exact") }));
+
+    expect(lit(t("payment.exact"))).toBe(true);
+  });
+
+  it("lights the note that was tapped, and no other", async () => {
+    const { user } = show();
+
+    await user.click(screen.getByRole("button", { name: formatMoney(2000, "EUR") }));
+
+    expect(lit(formatMoney(2000, "EUR"))).toBe(true);
+    expect(lit(formatMoney(1000, "EUR"))).toBe(false);
+    expect(lit(t("payment.exact"))).toBe(false);
+  });
+
+  it("lights the note that is the exact price, and the exact button with it", async () => {
+    // A 10 € beer paid with a 10 € note: both buttons stand for the amount
+    // received, so both say so.
+    const { user } = show({ totalCents: 1000 });
+
+    await user.click(screen.getByRole("button", { name: formatMoney(1000, "EUR") }));
+
+    expect(lit(formatMoney(1000, "EUR"))).toBe(true);
+    expect(lit(t("payment.exact"))).toBe(true);
+  });
+
+  it("puts the light out as soon as the amount is changed", async () => {
+    const { user, type } = show();
+    await user.click(screen.getByRole("button", { name: formatMoney(2000, "EUR") }));
+
+    await type("0");
+
+    expect(lit(formatMoney(2000, "EUR"))).toBe(false);
+  });
+
+  it("lights the exact-amount button when the keys spell that amount too", async () => {
+    // The light describes the amount, not the finger: 12.34 typed out is exact.
+    const { type } = show();
+
+    await type("1234");
+
+    expect(lit(t("payment.exact"))).toBe(true);
   });
 });
 

@@ -102,13 +102,21 @@ export default function PaymentPanel({
                     <span className="value">{formatMoney(given ?? 0, currency)}</span>
                   </div>
 
+                  {/* Each button stays lit while the amount it stands for is the
+                      amount received, so a tap can be seen to land even when
+                      there is no change to read off: a 10 € note for a 10 € beer. */}
                   <div className="quick-tender">
-                    <button onClick={() => setEntry(String(dueCents))} disabled={busy}>
+                    <button
+                      aria-pressed={given === dueCents}
+                      onClick={() => setEntry(String(dueCents))}
+                      disabled={busy}
+                    >
                       {t("payment.exact")}
                     </button>
                     {denominations.map((denomination) => (
                       <button
                         key={denomination}
+                        aria-pressed={given === toCents(denomination)}
                         onClick={() => setEntry(String(toCents(denomination)))}
                         disabled={busy}
                       >

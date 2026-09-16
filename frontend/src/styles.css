@@ -531,6 +531,13 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
+/* The one whose amount is the amount received. A tap has to be seen to land,
+   and when the note is the exact price there is no change figure to show it. */
+.quick-tender button[aria-pressed="true"] {
+  background: var(--success);
+  color: #06240f;
+}
+
 /*
  * The panel that has to fit on a phone.
  *
