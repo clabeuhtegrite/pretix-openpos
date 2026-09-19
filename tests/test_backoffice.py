@@ -235,6 +235,27 @@ def test_turning_till_invoicing_off_takes_the_channel_out_of_pretix_own_list(
 
 
 @pytest.mark.django_db
+def test_the_sales_column_counts_customers_served_and_nothing_else(
+    backoffice, till, event, beer, deposit
+):
+    # Money and count are read differently from the same rows. Four beers and
+    # three cups given back is one customer, nine euros: counting the payout
+    # as a sale would say two, and a volunteer reconciling a shift reads that
+    # column as "how many people did I serve".
+    from .conftest import sell
+
+    sell(till, [
+        {"item": beer.pk, "count": 4},
+        {"item": deposit.pk, "count": 3, "refund": True},
+    ])
+
+    context = backoffice.get(sales_url(event)).context
+
+    assert context["totals"]["count"] == 1
+    assert context["totals"]["total"] == Decimal("9.00")
+
+
+@pytest.mark.django_db
 def test_test_mode_takings_are_kept_off_the_figure_the_drawer_is_counted_against(
     backoffice, till, event, ticket
 ):

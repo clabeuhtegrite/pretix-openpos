@@ -1,8 +1,9 @@
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { t } from "../i18n";
+import { formatMoney } from "../money";
 import type { SaleResult } from "../types";
 import DoneScreen from "./DoneScreen";
 
@@ -175,5 +176,77 @@ describe("moving on by hand", () => {
     await user.click(screen.getByRole("button", { name: t("done.next") }));
 
     expect(onDismiss).toHaveBeenCalledOnce();
+  });
+});
+
+describe("a deposit handed back", () => {
+  it("names the amount to count out when nothing was sold", () => {
+    show({
+      order: { code: "", total: "0.00", url: null },
+      deposit_refund: "3.00",
+      net_total: "-3.00",
+      checked_in: 0,
+    });
+
+    expect(screen.getByText(t("done.giveBack"))).toBeDefined();
+    expect(screen.getByText(formatMoney(300, "EUR"))).toBeDefined();
+  });
+
+  it("says a deposit was returned rather than that a sale was recorded", () => {
+    show({
+      order: { code: "", total: "0.00", url: null },
+      deposit_refund: "3.00",
+      net_total: "-3.00",
+      checked_in: 0,
+    });
+
+    expect(screen.getByText(t("done.depositOnly"))).toBeDefined();
+    expect(screen.queryByText(t("done.sold"))).toBeNull();
+  });
+
+  it("waits for the operator, because money is still owed", () => {
+    vi.useFakeTimers();
+    const { onDismiss } = show({
+      order: { code: "", total: "0.00", url: null },
+      deposit_refund: "3.00",
+      net_total: "-3.00",
+      checked_in: 0,
+    });
+
+    act(() => {
+      vi.advanceTimersByTime(60_000);
+    });
+
+    expect(onDismiss).not.toHaveBeenCalled();
+  });
+
+  it("does not say the same thing three times over", () => {
+    // Headline, amount, and a line repeating both is noise on the one screen
+    // whose job is to be read at a glance.
+    show({
+      order: { code: "", total: "0.00", url: null },
+      deposit_refund: "3.00",
+      net_total: "-3.00",
+      checked_in: 0,
+    });
+
+    expect(
+      screen.queryByText(t("done.depositBack", { total: formatMoney(300, "EUR") })),
+    ).toBeNull();
+  });
+
+  it("mentions it on a sale that netted positive too", () => {
+    // The figures above are already net of it, and nothing else on the screen
+    // would say it happened.
+    show({
+      order: { code: "POS01", total: "12.00", url: null },
+      deposit_refund: "3.00",
+      net_total: "9.00",
+    });
+
+    expect(
+      screen.getByText(t("done.depositBack", { total: formatMoney(300, "EUR") })),
+    ).toBeDefined();
+    expect(screen.getByText(/POS01/)).toBeDefined();
   });
 });

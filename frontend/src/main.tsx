@@ -3,6 +3,11 @@ import { createRoot } from "react-dom/client";
 
 import App from "./App";
 import "./styles.css";
+import { applyTheme, loadTheme } from "./theme";
+
+// Before the first render rather than from inside it: a till told explicitly
+// to be light would otherwise open dark for as long as React takes to mount.
+applyTheme(loadTheme());
 
 const container = document.getElementById("root");
 if (!container) throw new Error("missing #root");

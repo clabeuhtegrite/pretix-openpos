@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 
+import { productKey } from "../basket";
 import { t } from "../i18n";
 import { formatMoney, toCents } from "../money";
 import type { Catalog, CartLine } from "../types";
@@ -21,7 +22,7 @@ function flatten(catalog: Catalog): { id: string; name: string; products: Sellab
     products: category.items.flatMap<Sellable>((item) =>
       item.variations.length
         ? item.variations.map((variation) => ({
-            key: `${item.id}:${variation.id}`,
+            key: productKey(item.id, variation.id),
             itemId: item.id,
             variationId: variation.id,
             label: `${item.name} · ${variation.name}`,
@@ -30,7 +31,7 @@ function flatten(catalog: Catalog): { id: string; name: string; products: Sellab
           }))
         : [
             {
-              key: `${item.id}:`,
+              key: productKey(item.id, null),
               itemId: item.id,
               variationId: null,
               label: item.name,
@@ -46,14 +47,20 @@ interface Props {
   catalog: Catalog;
   cart: CartLine[];
   currency: string;
+  /** The two buttons that are not products; absent unless the organiser set them up. */
+  customSale: { name: string } | null;
+  depositBack: { name: string; priceCents: number } | null;
   onAdd: (product: Sellable) => void;
+  onCustomSale: () => void;
+  onDepositBack: () => void;
   onSetCount: (key: string, count: number) => void;
   onClear: () => void;
   onCharge: () => void;
 }
 
 export default function SaleScreen({
-  catalog, cart, currency, onAdd, onSetCount, onClear, onCharge,
+  catalog, cart, currency, customSale, depositBack, onAdd, onCustomSale, onDepositBack,
+  onSetCount, onClear, onCharge,
 }: Props) {
   const categories = useMemo(() => flatten(catalog), [catalog]);
   const [active, setActive] = useState<string>("all");
@@ -87,6 +94,25 @@ export default function SaleScreen({
         </div>
 
         <div className="grid">
+          {/* Before the catalogue and outside the tabs, because neither of
+              these belongs to a category and both have to be one tap away
+              whichever one the operator is looking at. */}
+          {customSale && (
+            <button className="product is-action" onClick={onCustomSale}>
+              <span className="name">{t("custom.tile")}</span>
+              <span className="price">＋</span>
+              <span className="stock">{customSale.name}</span>
+            </button>
+          )}
+          {depositBack && (
+            <button className="product is-action is-refund" onClick={onDepositBack}>
+              <span className="name">{t("deposit.tile")}</span>
+              <span className="price">
+                −{formatMoney(depositBack.priceCents, currency)}
+              </span>
+              <span className="stock">{depositBack.name}</span>
+            </button>
+          )}
           {shown.map((category) => (
             <FragmentWithHeading
               key={category.id}
@@ -115,7 +141,10 @@ export default function SaleScreen({
             <div className="cart-empty">{t("sale.empty")}</div>
           ) : (
             cart.map((line) => (
-              <div className="line" key={line.key}>
+              <div
+                className={`line${line.unitPrice < 0 ? " is-refund" : ""}`}
+                key={line.key}
+              >
                 <div className="label">
                   {line.label}
                   <small>{formatMoney(line.unitPrice, currency)}</small>

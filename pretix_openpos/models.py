@@ -81,9 +81,20 @@ class PosSale(models.Model):
 
     KIND_SALE = "sale"
     KIND_CANCELLATION = "cancellation"
+    #: Money handed back over the counter for a returned cup, and nothing else.
+    #:
+    #: It is not a sale and it is not the reversal of one: no order stands
+    #: behind it, because pretix has no way to represent one — an order's total
+    #: cannot go below zero, and the queue at the end of the night is people
+    #: returning cups and buying nothing. So the deposit is sold as an ordinary
+    #: product and its return is written here, in the one ledger that reconciles
+    #: against the drawer. The amount is negative, like a cancellation's, which
+    #: is what keeps the takings the plain sum of the column.
+    KIND_DEPOSIT_REFUND = "deposit_refund"
     KIND_CHOICES = (
         (KIND_SALE, _("Sale")),
         (KIND_CANCELLATION, _("Cancellation")),
+        (KIND_DEPOSIT_REFUND, _("Deposit refund")),
     )
 
     event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name="openpos_sales")
@@ -354,12 +365,15 @@ class PosSale(models.Model):
                kind=KIND_SALE, cancels_seq=None, reason="", offline=False,
                recorded_at=None, attempts=5):
         """
-        Append a sale to the journal, chaining it onto the current tail.
+        Append a row to the journal, chaining it onto the current tail.
 
         Two tills can commit concurrently, so the sequence number is claimed
         optimistically and the unique constraint on ``(event, seq)`` arbitrates.
         Each attempt runs in its own savepoint so that a collision does not
         poison the surrounding transaction, which is also creating the order.
+
+        ``order`` may be ``None``: a deposit refund is money out of the drawer
+        with no order to hang it on.
         """
         for _attempt in range(attempts):
             last = cls.objects.filter(event=event).order_by("-seq").first()
@@ -376,7 +390,8 @@ class PosSale(models.Model):
                 device_name=(device.name or "") if device else "",
                 cashier=cashier or "",
                 order=order,
-                order_code=order.code,
+                # Blank for a row with no order behind it — a deposit refund.
+                order_code=order.code if order else "",
                 payment_type=payment_type,
                 total=total,
                 cash_given=cash_given,

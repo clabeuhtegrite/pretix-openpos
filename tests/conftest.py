@@ -136,6 +136,40 @@ def shirt(event, channel):
 
 
 @pytest.fixture
+def misc(event, channel):
+    """The product free amounts are booked against, and the setting naming it."""
+    item = Item.objects.create(
+        event=event,
+        name="Divers",
+        default_price=0,
+        admission=False,
+        all_sales_channels=False,
+    )
+    item.limit_sales_channels.add(channel)
+    quota = Quota.objects.create(event=event, name="Divers", size=None)
+    quota.items.add(item)
+    event.settings.set("openpos_custom_item", str(item.pk))
+    return item
+
+
+@pytest.fixture
+def deposit(event, channel):
+    """A one-euro cup deposit, with the till's return button switched on."""
+    item = Item.objects.create(
+        event=event,
+        name="Consigne gobelet",
+        default_price=1,
+        admission=False,
+        all_sales_channels=False,
+    )
+    item.limit_sales_channels.add(channel)
+    quota = Quota.objects.create(event=event, name="Gobelets", size=None)
+    quota.items.add(item)
+    event.settings.set("openpos_deposit_item", str(item.pk))
+    return item
+
+
+@pytest.fixture
 def checkin_list(event, ticket):
     return event.checkin_lists.create(name="Porte", all_products=True)
 

@@ -46,6 +46,20 @@ export interface PosConfig {
   /** Ids of the event's admission products — the ones that let a person in. */
   admission_items: number[];
   cash_denominations: string[];
+  /**
+   * The product free amounts are booked against, when the organiser named one.
+   *
+   * Absent on a server older than the feature, which is why every reader
+   * treats a missing block as "the button is off".
+   */
+  custom_sale?: { enabled: boolean; item: number | null; name: string | null };
+  /** The cup deposit product, and what one is worth at this till today. */
+  deposit?: {
+    enabled: boolean;
+    item: number | null;
+    name: string | null;
+    price: string | null;
+  };
 }
 
 /** An event this till is allowed to sell for, i.e. Open POS is enabled on it. */
@@ -113,7 +127,13 @@ export interface Catalog {
   categories: CatalogCategory[];
 }
 
-/** One line of the basket. Prices are held in integer cents throughout. */
+/**
+ * One line of the basket. Prices are held in integer cents throughout.
+ *
+ * ``unitPrice`` is negative on a deposit being handed back, which is what
+ * makes the basket total the net of the transaction and the arithmetic
+ * everywhere downstream the same arithmetic.
+ */
 export interface CartLine {
   key: string;
   itemId: number;
@@ -122,6 +142,10 @@ export interface CartLine {
   unitPrice: number;
   count: number;
   available: number | null;
+  /** Why this line costs what it costs. Set on a free amount, and only there. */
+  description?: string;
+  /** A deposit handed back rather than taken. */
+  refund?: boolean;
 }
 
 export type PaymentType = "cash" | "card";
@@ -140,6 +164,21 @@ export interface SaleResult {
   off_tariff?: { item_name: string; charged: string; tariff: string }[];
   /** Set by the app, not the server: this sale is queued, not recorded yet. */
   offline?: boolean;
+  /**
+   * Deposits handed back in the same breath, as a positive amount.
+   *
+   * They are not part of the order — pretix has nowhere to put money going
+   * out — so they travel beside it, with their own journal row.
+   */
+  deposit_refund?: string | null;
+  deposit_refund_seq?: number | null;
+  /**
+   * What changed hands: the order less the deposits given back with it.
+   *
+   * Negative when the drawer is the one paying out. Absent from an older
+   * server's answer, in which case the order's own total is the whole story.
+   */
+  net_total?: string;
 }
 
 /** One admission product's share of the room. */
@@ -179,6 +218,8 @@ export interface JournalPosition {
   count: number;
   unit_price: string;
   line_total: string;
+  /** What a free amount was for, as the cashier typed it. */
+  description?: string;
 }
 
 /**
@@ -189,7 +230,7 @@ export interface JournalPosition {
  */
 export interface JournalLine {
   seq: number;
-  kind: "sale" | "cancellation";
+  kind: "sale" | "cancellation" | "deposit_refund";
   datetime: string;
   order: string;
   total: string;
@@ -245,7 +286,14 @@ export interface QueuedSale {
   id: string;
   at: string;
   event: string;
-  positions: { item: number; variation: number | null; count: number; price: string }[];
+  positions: {
+    item: number;
+    variation: number | null;
+    count: number;
+    price: string;
+    description?: string;
+    refund?: boolean;
+  }[];
   chargedTotal: string;
   paymentType: PaymentType;
   cashGiven: string | null;
@@ -300,6 +348,8 @@ export interface Takings {
   count: number;
   /** Reversals recorded in the same window; their money is already netted off. */
   cancellations: number;
+  /** Deposits handed back; same story, and equally not a sale. */
+  deposit_refunds?: number;
   cash: string;
   card: string;
   total: string;

@@ -1,8 +1,10 @@
 {% load i18n %}
 {% load money %}
-{# cash_given / cash_change arrive as Decimals from payment_control_render, not as
-   the raw strings held in payment.info: the money filter raises TypeError on a
-   string, which 500s the whole backend order page. #}
+{% comment %}
+    cash_given / cash_change arrive as Decimals from payment_control_render, not
+    as the raw strings held in payment.info: the money filter raises TypeError on
+    a string, which 500s the whole backend order page.
+{% endcomment %}
 <dl class="dl-horizontal">
     {% if info.cashier %}
         <dt>{% trans "Cashier" %}</dt>

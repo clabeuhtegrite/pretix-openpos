@@ -5,12 +5,31 @@
     {# maximum-scale + user-scalable=no: a pinch-zoom mid-queue is always an accident. #}
     <meta name="viewport"
           content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-    <meta name="theme-color" content="#12161f">
+    {% comment %}
+        One per palette, so the status bar is right before any JavaScript has
+        run; theme.ts overrides both when the till is told which palette to
+        wear. The colour is --surface, not --bg: this band sits directly above
+        the topbar, and matching it makes the seam disappear.
+
+        A comment block rather than the hash form used above: Django's hash
+        comment is single-line only, and a multi-line one is not a comment at
+        all — it is rendered, which is how this file once served four lines of
+        prose above the till.
+    {% endcomment %}
+    <meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#1b2130" media="(prefers-color-scheme: dark)">
     <meta name="robots" content="noindex, nofollow">
 
     {# Standalone launch from the iOS home screen. #}
     <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    {% comment %}
+        "default", not "black-translucent": translucent means the page shows
+        through the status bar with its glyphs forced white, which is a white
+        clock on a white till the moment the light palette is on. With this iOS
+        gives the bar its own background and takes the colour from theme-color
+        above, so it follows the palette instead of fighting it.
+    {% endcomment %}
+    <meta name="apple-mobile-web-app-status-bar-style" content="default">
     {# Label shown under the home-screen icon on iOS. #}
     <meta name="apple-mobile-web-app-title" content="{{ app_name }}">
     <meta name="mobile-web-app-capable" content="yes">

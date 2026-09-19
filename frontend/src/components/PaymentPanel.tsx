@@ -6,6 +6,12 @@ import { settle } from "../settlement";
 import type { PaymentType } from "../types";
 
 interface Props {
+  /**
+   * What changes hands: the basket, deposits handed back included.
+   *
+   * Negative when the drawer is the one paying out — a customer returning
+   * cups and buying nothing, which is most of the queue at closing time.
+   */
   totalCents: number;
   currency: string;
   denominations: string[];
@@ -67,24 +73,30 @@ export default function PaymentPanel({
             </button>
           </div>
 
-          <div className="amount-display">
-            <span>{t("payment.due")}</span>
-            <span className="value">{formatMoney(totalCents, currency)}</span>
-          </div>
+          {/* A basket that nets out below zero has no amount due to state, and
+              showing one as a minus figure reads as a price rather than as
+              money going the other way. The row below says which direction. */}
+          {totalCents >= 0 && (
+            <div className="amount-display">
+              <span>{t("payment.due")}</span>
+              <span className="value">{formatMoney(totalCents, currency)}</span>
+            </div>
+          )}
 
           {credit && (
-            <>
-              <div className="amount-display credit">
-                <span>{t("payment.credit", { order: credit.order })}</span>
-                <span className="value">−{formatMoney(creditCents, currency)}</span>
-              </div>
-              <div className={`amount-display${backCents > 0 ? " change" : ""}`}>
-                <span>{backCents > 0 ? t("payment.giveBack") : t("payment.stillDue")}</span>
-                <span className="value">
-                  {formatMoney(backCents > 0 ? backCents : dueCents, currency)}
-                </span>
-              </div>
-            </>
+            <div className="amount-display credit">
+              <span>{t("payment.credit", { order: credit.order })}</span>
+              <span className="value">−{formatMoney(creditCents, currency)}</span>
+            </div>
+          )}
+
+          {(credit || backCents > 0) && (
+            <div className={`amount-display${backCents > 0 ? " change" : ""}`}>
+              <span>{backCents > 0 ? t("payment.giveBack") : t("payment.stillDue")}</span>
+              <span className="value">
+                {formatMoney(backCents > 0 ? backCents : dueCents, currency)}
+              </span>
+            </div>
           )}
 
           {method === "cash" ? (
@@ -93,7 +105,7 @@ export default function PaymentPanel({
                   the keypad would only invite an entry that means nothing. */}
               {dueCents === 0 ? (
                 <p style={{ lineHeight: 1.5, color: "var(--text-dim)" }}>
-                  {t("payment.coveredByCredit")}
+                  {credit ? t("payment.coveredByCredit") : t("payment.nothingToTake")}
                 </p>
               ) : (
                 <>
@@ -146,13 +158,11 @@ export default function PaymentPanel({
             </>
           ) : (
             <p style={{ lineHeight: 1.5 }}>
-              {credit
-                ? backCents > 0
-                  ? t("payment.cardRefundPrompt", {
-                      amount: formatMoney(backCents, currency),
-                    })
-                  : t("payment.cardChargePrompt", { amount: formatMoney(dueCents, currency) })
-                : t("payment.cardPrompt")}
+              {backCents > 0
+                ? t("payment.cardRefundPrompt", { amount: formatMoney(backCents, currency) })
+                : credit
+                  ? t("payment.cardChargePrompt", { amount: formatMoney(dueCents, currency) })
+                  : t("payment.cardPrompt")}
             </p>
           )}
         </div>

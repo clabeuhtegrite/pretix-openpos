@@ -1,6 +1,6 @@
 # Fonctionnement de pretix-openpos
 
-Documentation de fonctionnement du plugin, version 0.9.0. Elle couvre trois
+Documentation de fonctionnement du plugin, version 0.9.3. Elle couvre trois
 choses, dans cet ordre : ce que le plugin ajoute à pretix, comment le mettre en
 service, et ce qui se passe exactement quand un bénévole encaisse.
 
@@ -230,6 +230,14 @@ Deux pièges :
 4. **Choisir la liste de contrôle d'accès** — *Open POS → Réglages*. Les billets
    vendus sont pointés sur cette liste immédiatement. Laisser vide pour vendre
    sans pointer.
+5. **Boutons supplémentaires** — *Open POS → Réglages*, section du bas. Les deux
+   sont éteints tant qu'aucun produit ne leur est affecté :
+   - **Produit pour les ventes libres** : active le bouton *Montant libre*, où
+     le caissier saisit un montant et un motif. Créez un produit « Divers » à
+     0 €, avec un quota (illimité) et le canal Open POS.
+   - **Produit de consigne** : active le bouton *Retour consigne*. La consigne
+     elle-même se vend comme n'importe quel produit ; ce réglage n'ajoute que le
+     retour. Voir §5quater.
 
 ### 3.3 Créer une caisse
 
@@ -726,6 +734,92 @@ Un survendu reste un survendu : c'est un fait à réconcilier après la soirée,
 
 ---
 
+## 5quater. Montant libre et consigne
+
+Deux boutons qui n'existent pas tant qu'un produit ne leur est pas affecté dans
+*Open POS → Réglages*. Ils apparaissent alors en tête de la grille, avant le
+catalogue et hors des onglets : ni l'un ni l'autre n'appartient à une catégorie,
+et tous les deux doivent rester à un doigt quel que soit l'onglet ouvert. Ils
+sont dessinés en pointillés plutôt qu'en plein, pour qu'une main qui vise une
+bière ne tombe pas dessus.
+
+### Le montant libre
+
+Pour ce qui n'a pas de produit : un verre cassé, un don, une assiette à un
+stand. Le caissier tape un montant sur le même pavé que l'encaissement — 1-2-3-4
+donne 12,34 — et un **motif**, obligatoire. Le bouton *Ajouter au panier* reste
+éteint tant qu'il manque l'un des deux.
+
+La ligne va au panier comme une autre, avec le motif pour étiquette : « Divers »
+serait le même mot sur toutes et ne répondrait à rien. Deux montants libres font
+deux lignes, même au même prix, parce que ce sont deux choses différentes.
+
+Ce que ça produit côté serveur :
+
+- la position de commande est booquée sur le produit désigné, au montant tapé ;
+- le **motif est écrit sur la ligne du journal**, donc dans l'export CSV
+  (`3× Divers — verre cassé`), qui est le registre qui survit à la commande ;
+- il est aussi recopié dans le **commentaire de la commande** pretix, pour être
+  lisible depuis le back-office sans ouvrir le journal.
+
+Les garde-fous sont au §6.1. Le seul point de conception à retenir : une
+correction d'annulation reprend une ligne de montant libre **telle qu'elle a été
+écrite**, prix compris, au lieu de la re-tarifer depuis le catalogue comme les
+autres — il n'y a aucun tarif d'où la reprendre, et le prix du produit support
+est un zéro de convention.
+
+### La consigne
+
+La consigne **se vend comme n'importe quel produit** : créez « Consigne
+gobelet » à 1 €, canal Open POS, un quota, et elle est dans la grille. Rien de
+particulier là-dedans.
+
+Le retour, lui, ne peut pas être une commande pretix : **le total d'une commande
+ne peut pas passer sous zéro**, et la file de fin de soirée, ce sont des gens qui
+rendent leurs gobelets sans rien acheter. Il est donc enregistré comme une
+écriture de journal à part, de type `deposit_refund`, montant négatif, **sans
+commande**. C'est la seule chose de la caisse qui existe dans le journal et pas
+dans pretix.
+
+Ce que ça donne pour « deux bières et je rends trois gobelets » :
+
+| # | Type | Commande | Montant |
+|---|---|---|---|
+| 41 | `sale` | CMD8K | 6,00 € |
+| 42 | `deposit_refund` | — | −3,00 € |
+
+Le client pose 3 €. pretix voit une commande de deux bières à 6 €, ce qui est
+exact : deux bières ont bien été vendues, et 3 € sont sortis du tiroir pour des
+gobelets rendus. Ce sont deux événements économiques distincts, et les fondre en
+une commande à 3 € minorerait la recette du bar.
+
+Le tiroir, lui, reste la somme pure de la colonne `total` du journal — 6 − 3 = 3
+— comme il l'est déjà avec les annulations. C'est l'invariant sur lequel tout le
+reste tient.
+
+Trois conséquences à connaître :
+
+- **Le rendu de monnaie se calcule sur le net.** Un billet de 10 € contre 9 € à
+  payer, pas contre les 12 € que vaut la commande. Se tromper là-dessus rend le
+  mauvais montant, devant le client, à chaque fois.
+- **Un panier qui passe sous zéro n'encaisse rien.** Le pavé disparaît, le
+  panneau affiche *À rendre*, et `cash_given` part à `null` : aucun billet n'a
+  traversé le comptoir. En carte, c'est l'invite de remboursement sur le TPE.
+- **Un retour ne s'annule pas depuis la caisse.** Il n'y a pas de commande à
+  avoirer. Reprendre la consigne, c'est une consigne vendue, et c'est déjà un
+  appui sur la grille.
+
+Deux limites assumées :
+
+- **Rendre une consigne ne remet pas de stock.** Le quota du produit de consigne
+  est consommé à la vente et n'est pas rendu au retour : mettez-le en illimité.
+- **Annuler une vente mixte n'annule pas le retour qui l'accompagnait.**
+  L'annulation avoirie la commande — les deux bières — et laisse l'écriture de
+  décaissement telle quelle, ce qui est correct puisqu'elle n'en faisait pas
+  partie. Les gobelets, eux, sont chez le client.
+
+---
+
 ## 6. Les garde-fous
 
 ### 6.1 Le serveur est seul maître des prix
@@ -733,6 +827,20 @@ Un survendu reste un survendu : c'est un fait à réconcilier après la soirée,
 `CheckoutSerializer` n'accepte **pas** de champ prix
 ([api/serializers.py](../pretix_openpos/api/serializers.py)). Une app trafiquée ou
 simplement périmée ne peut pas vendre un billet à 40 € pour 4 €.
+
+Deux exceptions, et elles sont étroites :
+
+- **Une vente rejouée hors ligne** porte ses prix, parce que le client a déjà
+  payé et que le serveur n'a plus à décider, seulement à constater (§5ter).
+- **Une ligne de montant libre** porte le sien, parce que c'est toute la
+  fonction. Elle n'est acceptée que sur le produit unique désigné dans les
+  réglages, seulement accompagnée d'un motif, et seulement au-dessus de zéro ;
+  sur n'importe quel autre produit c'est un 400 (§5quater). Une caisse
+  compromise ne peut donc rien vendre d'autre que ce produit-là, et jamais un
+  billet à 10 centimes avec une note explicative.
+
+Le retour de consigne, lui, n'en est pas une : la caisse dit qu'une ligne est un
+retour, le serveur en tire le prix du tarif sur place et le passe en négatif.
 
 ### 6.2 …mais il ne peut pas facturer autre chose que ce qui a été annoncé
 
@@ -824,6 +932,12 @@ avec *Dépairer* à portée de main ; elle ne s'efface jamais toute seule (§4.1
 
 - le **choix de l'événement**, si le device en voit plusieurs ;
 - le **nom du caissier**, mémorisé sur l'appareil, joint à chaque vente ;
+- l'**apparence** : *Système*, *Clair* ou *Sombre*. Par défaut la caisse suit la
+  tablette. Le sombre n'éblouit pas dans une salle peu éclairée, le clair reste
+  lisible dehors en plein jour, et une tablette réglée sur bascule automatique
+  passera d'elle-même au sombre au coucher du soleil. Le choix est mémorisé par
+  appareil, écrit sur `<html data-theme>` ; les deux palettes sont des jeux de
+  variables CSS, donc changer d'avis ne coûte pas un rendu ;
 - le **relevé du jour** : nombre de ventes, espèces, carte, total — pour cette
   caisse et pour l'événement entier. La journée de caisse commence à **6 h du
   matin dans le fuseau de l'événement**, pas à minuit : une soirée traverse
@@ -865,7 +979,7 @@ Base : `/api/v1`. Authentification : `Authorization: Device <token>`.
 |---|---|---|
 | `POST` | `/device/initialize` | Appairage (endpoint pretix natif) |
 | `GET` | `/organizers/<org>/openpos/` | Événements vendables par cette caisse |
-| `GET` | `/organizers/<org>/events/<ev>/openpos/config/` | Événement, device, listes de contrôle, produits d'admission, coupures |
+| `GET` | `/organizers/<org>/events/<ev>/openpos/config/` | Événement, device, listes de contrôle, produits d'admission, coupures, boutons montant libre et consigne |
 | `GET` | `…/openpos/catalog/` | Catalogue par catégorie, prix sur place, stock restant |
 | `POST` | `…/openpos/checkout/` | Encaissement |
 | `GET` | `…/openpos/summary/` | Relevé du jour |
@@ -894,7 +1008,20 @@ un événement pour lequel l'organisateur n'a jamais ouvert de caisse.
 ```
 
 `variation` est optionnel (défaut `null`), `count` va de 1 à 999, au maximum 100
-lignes. `cash_given` n'est accepté que pour un paiement en espèces.
+lignes. `cash_given` n'est accepté que pour un paiement en espèces, et refusé
+dès que `expected_total` est négatif : c'est le tiroir qui paie, rien n'a été
+tendu.
+
+Une position peut aussi porter, l'une **ou** l'autre, jamais les deux (§5quater) :
+
+| Champ | Ce que ça veut dire |
+|---|---|
+| `price` + `description` | Montant libre. Refusé sur tout produit autre que celui désigné dans les réglages, refusé sans motif, refusé à zéro ou en dessous. |
+| `refund: true` | Retour de consigne. Le prix reste décidé par le serveur, en négatif. Refusé sur tout produit autre que le produit de consigne, et refusé avec une variante. |
+
+`expected_total` est le **net** : commande moins consignes rendues. C'est le
+seul chiffre que le client entend, donc le seul contre lequel il y ait un sens à
+vérifier.
 
 Une vente rejouée depuis une caisse qui était coupée porte en plus un bloc
 `offline`, et c'est **la seule chose qui débloque un prix envoyé par le
@@ -929,9 +1056,19 @@ tarif serveur diffère de ce qui a été encaissé. Voir §5ter.
   "replayed": false,
   "checked_in": 2,
   "checkin_errors": [],
-  "off_tariff": []
+  "off_tariff": [],
+  "deposit_refund": null,
+  "deposit_refund_seq": null,
+  "net_total": "17.00"
 }
 ```
+
+Sur une transaction qui rend une consigne, `deposit_refund` porte le montant
+rendu (positif) et `deposit_refund_seq` le numéro de l'écriture de journal qui
+le constate ; `net_total` est ce qui a changé de mains, négatif quand c'est le
+tiroir qui paie. Quand rien n'a été vendu, `order.code` est vide et
+`order.total` vaut `"0.00"` : il n'y a pas de commande, et en annoncer une à
+moins trois euros serait pire que de n'en annoncer aucune.
 
 `replayed` vaut `true` — avec un `200` au lieu d'un `201` — quand la clé
 d'idempotence désigne une vente déjà enregistrée. La réponse est alors celle de
@@ -988,7 +1125,7 @@ le tarif d'hier.
 |---|---|---|
 | 400 `price_changed` | Les prix ont bougé sous le panier | Recharge le catalogue, re-tarife, garde le panneau ouvert |
 | 400 `positions` | Produit non vendable au guichet / variante inconnue | Affiche le message tel quel |
-| 400 `cash_given` | Reçu inférieur au dû | Affiche le message |
+| 400 `cash_given` | Reçu inférieur au dû, ou montant reçu sur un panier qui paie | Affiche le message |
 | 401 / 403 | Device révoqué, ou plugin désactivé sur l'événement | Affiche le motif, avec *Réessayer* et *Dépairer* ; l'appairage n'est jamais effacé tout seul |
 
 ---

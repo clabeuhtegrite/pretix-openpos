@@ -36,6 +36,21 @@ the scope section before deciding it fits.
   door, kept off it, or made to exist *only* on site.
 - **On-site pricing**: a separate tariff per product, because pretix itself has
   no concept of a price per sales channel.
+- **A free amount**, for what has no product of its own — a broken glass, a
+  donation, a plate at a stand. The cashier types the figure and a reason; the
+  reason is kept on the journal line and on the order. Off unless the organiser
+  sets a product aside for it, which is what keeps the till's "never sends a
+  price" rule meaningful everywhere else.
+- **Cup deposits, taken and handed back.** The deposit is an ordinary product;
+  the return is a button that takes its price off the basket, so "two beers and
+  I am returning three cups" is one transaction and one amount to settle. A
+  return is not a pretix order — an order cannot total less than nothing, and
+  the queue at closing time is people returning cups and buying nothing — so it
+  is recorded in the till journal, where the takings and the drawer are
+  reconciled.
+- **A light palette as well as a dark one**, following the tablet unless told
+  otherwise. Dark does not glare in a dim room; light stays readable at an
+  outdoor bar at two in the afternoon.
 - **Cash** with change calculation, and **card** taken on a standalone terminal
   and recorded against the order.
 - Orders land in pretix as ordinary paid orders on the POS channel, with the
@@ -68,6 +83,13 @@ Being clear about this up front will save you an evaluation:
   wait for the network. Selling and scanning do not.
 - **No partial refunds** from the till. A sale is cancelled whole, then rung up
   again corrected; refunding two of three beers is a back-office job.
+- **A returned deposit is not in pretix.** It lives in the till journal and its
+  CSV export, and it is netted off the takings there. pretix sees the sale that
+  went with it and nothing else, which is also the honest reading: the beers
+  were sold for what they cost, and money went out for cups. Two consequences
+  follow — returning a cup does not put stock back (give the deposit product an
+  unlimited quota), and cancelling a mixed sale credits the order without
+  undoing the return that rode along with it.
 - **No receipt printing** and no ticket printing.
 - **No check-in questions.** Scanning sends `questions_supported: false`, so a
   product that requires answers at the door is refused with a clear reason
@@ -107,7 +129,11 @@ till this way:
 
 **The client never sends a price.** It sends product ids and quantities, and the
 server resolves what that costs. A tampered-with or simply out-of-date app
-cannot sell a 40 € ticket for 4 €.
+cannot sell a 40 € ticket for 4 €. The free-amount button is the one deliberate
+exception, and it is fenced in: the amount is only accepted on the single
+product the organiser set aside for it, only above zero, and only with a reason
+attached. A returned deposit is not an exception at all — the till says a line
+is a return, and the server takes the price from its own tariff and negates it.
 
 **Every checkout carries an idempotency key.** It is minted when the payment
 panel opens and reused for every retry, so a timeout that actually committed
@@ -177,10 +203,18 @@ rather than to a rolling minor.
    lets a cancellation from the till issue a credit note. It covers the Open POS
    channel only — your webshop keeps its own invoicing rules — and unticking it
    hands the decision back to them.
-5. **Create a device** under the organizer's *Devices*: give it access to the
+5. **Optionally, turn on the two extra buttons**, at the bottom of the same
+   screen. Both are off until you name a product for them, and each product
+   needs a quota and the Open POS channel like any other:
+   - *Product for free-amount sales* — a "Misc" product at 0.00, which every
+     free amount is booked against.
+   - *Cup deposit product* — the deposit itself, which you also sell from the
+     grid. Naming it here adds the **deposit back** button. Give it an
+     unlimited quota: a returned cup does not put stock back.
+6. **Create a device** under the organizer's *Devices*: give it access to the
    event and pick the **Open POS** security profile. pretix shows a pairing QR
    code.
-6. **Open `https://your-pretix/openpos/`** on the tablet, add it to the home
+7. **Open `https://your-pretix/openpos/`** on the tablet, add it to the home
    screen, then launch it from the icon and scan the pairing QR code.
 
 One device can sell for several events: any event with the plugin enabled shows

@@ -141,6 +141,42 @@ def checkin_list_for(event):
     return event.checkin_lists.filter(pk=pk).first()
 
 
+def configured_item(event, setting):
+    """
+    The product an organiser set aside for one of the till's extra buttons.
+
+    ``None`` when the setting is empty, and equally when it names a product
+    that has since been deleted — which is what keeps the button off rather
+    than pointing at nothing.
+    """
+    pk = event.settings.get(setting, as_type=int)
+    if not pk:
+        return None
+    return event.items.filter(pk=pk).first()
+
+
+def custom_sale_item(event):
+    """The product every free-amount sale is booked against, if enabled."""
+    return configured_item(event, "openpos_custom_item")
+
+
+def deposit_item(event):
+    """The product a cup deposit is sold as, if enabled."""
+    return configured_item(event, "openpos_deposit_item")
+
+
+def refund_key(idempotency_key: str) -> str:
+    """
+    The key of the payout row that goes with a sale.
+
+    One customer can produce two journal rows — the sale, and the deposit
+    handed back with it — and the journal's idempotency is per row. Derived
+    rather than sent, so a retry of the whole transaction still recognises both
+    halves of what it already committed.
+    """
+    return f"{idempotency_key}:refund"
+
+
 def plugin_enabled(event) -> bool:
     return "pretix_openpos" in event.get_plugins()
 
@@ -210,6 +246,13 @@ class OpenPosViewSet(viewsets.ViewSet):
         event = request.event
         device = request.auth if isinstance(request.auth, Device) else None
         clist = checkin_list_for(event)
+        custom = custom_sale_item(event)
+        deposit = deposit_item(event)
+        # Only when there is something to price: the tariff is one query, and
+        # most events run neither button.
+        deposit_price = (
+            resolve_price(pos_price_overrides(event), deposit) if deposit else None
+        )
         return Response(
             {
                 # The plugin's version, which is also the version the bundle is
@@ -260,6 +303,22 @@ class OpenPosViewSet(viewsets.ViewSet):
                 ),
                 # Quick-tender buttons on the cash keypad.
                 "cash_denominations": ["5.00", "10.00", "20.00", "50.00"],
+                # The two buttons that only exist when an organiser has named a
+                # product for them. Absent a product, the till shows nothing —
+                # which is also what a till running an older build does.
+                "custom_sale": {
+                    "enabled": custom is not None,
+                    "item": custom.pk if custom else None,
+                    "name": str(custom.name) if custom else None,
+                },
+                "deposit": {
+                    "enabled": deposit is not None,
+                    "item": deposit.pk if deposit else None,
+                    "name": str(deposit.name) if deposit else None,
+                    # So the till can show what a return takes off the basket,
+                    # and price one while it is cut off from the network.
+                    "price": str(deposit_price) if deposit else None,
+                },
             }
         )
 
@@ -271,6 +330,7 @@ class OpenPosViewSet(viewsets.ViewSet):
         channel = get_pos_channel(event.organizer)
         overrides = pos_price_overrides(event)
         quota_cache = {}
+        custom = custom_sale_item(event)
 
         items = (
             event.items.all()
@@ -282,6 +342,14 @@ class OpenPosViewSet(viewsets.ViewSet):
 
         categories = {}
         for item in items:
+            # The product free amounts are booked against is not a product
+            # anyone taps: its price is a placeholder, and a tile reading
+            # "Misc — 0.00" beside the free-amount button is an invitation to
+            # sell nothing for nothing. It has to stay on the channel all the
+            # same, because that is what the checkout resolves it against, so
+            # hiding it is this line rather than the organiser's problem.
+            if custom is not None and item.pk == custom.pk:
+                continue
             variations = list(item.variations.all())
             entry = {
                 "id": item.pk,
@@ -345,7 +413,7 @@ class OpenPosViewSet(viewsets.ViewSet):
             event=event, idempotency_key=idempotency_key
         ).first()
         if replay:
-            body = self._sale_payload(replay, replayed=True)
+            body = self._checkout_payload(event, replay, replayed=True)
             # The original attempt may have died between committing the order
             # and the best-effort tail: the connection that carried this very
             # retry is proof that connections die at the worst moment. Whatever
@@ -363,6 +431,8 @@ class OpenPosViewSet(viewsets.ViewSet):
         channel = get_pos_channel(event.organizer)
         overrides = pos_price_overrides(event)
         offline = data.get("offline")
+        custom_item = custom_sale_item(event)
+        deposit = deposit_item(event)
 
         # What may be sold — and, for a replay, what may be *recorded*, which is
         # not the same question.
@@ -382,8 +452,14 @@ class OpenPosViewSet(viewsets.ViewSet):
 
         api_positions = []
         journal_positions = []
-        total = Decimal("0.00")
+        refund_positions = []
+        #: What the pretix order is worth: everything but the deposits handed back.
+        sale_total = Decimal("0.00")
+        #: Negative, and outside any order — see PosSale.KIND_DEPOSIT_REFUND.
+        refund_total = Decimal("0.00")
         off_tariff = []
+        #: Free-amount reasons, for the order's comment in the back office.
+        notes = []
 
         for line in data["positions"]:
             item = sellable.get(line["item"])
@@ -408,14 +484,48 @@ class OpenPosViewSet(viewsets.ViewSet):
                     {"positions": [_("Product {name} requires an option to be chosen.").format(name=str(item.name))]}
                 )
 
+            description = line["description"].strip()
+            is_refund = line["refund"]
+
+            # The tariff, and then the three ways a line can end up costing
+            # something else. Everything below still resolves the tariff first,
+            # because it is what an offline replay is compared against.
             tariff = resolve_price(overrides, item, variation)
+            if is_refund:
+                # A deposit handed back is worth exactly what the deposit
+                # costs, negated here rather than sent: the till names the
+                # product, the server prices it, as everywhere else.
+                tariff = -tariff
+                if not offline and (deposit is None or item.pk != deposit.pk):
+                    # Not the product the organiser set aside for this. Refused
+                    # online, where nothing has been taken yet; a replay from a
+                    # till that was cut off is past arguing about — see below.
+                    raise ValidationError(
+                        {"positions": [_("This product is not the one deposits are taken on.")]}
+                    )
+            elif description and not offline:
+                if custom_item is None or item.pk != custom_item.pk:
+                    raise ValidationError(
+                        {"positions": [_("Free amounts can only be sold on the product set aside for them.")]}
+                    )
+                if line["price"] <= Decimal("0.00"):
+                    raise ValidationError(
+                        {"positions": [_("A free amount has to be more than nothing.")]}
+                    )
+                # The one price the till decides. It is not compared with the
+                # tariff and never reported as off-tariff: the product's own
+                # price is a placeholder that no free-amount sale is charged at.
+                tariff = line["price"]
+
             # A sale rung up offline was priced by the app from the tariff it had
             # cached, and the customer has already paid that. The order is
             # therefore created at what was charged — anything else would print
             # an invoice for a sum nobody handed over — and the divergence is
-            # reported rather than smoothed away.
+            # reported rather than smoothed away. A free amount offline is the
+            # same story with no tariff to diverge from, so it is left out of
+            # the comparison.
             price = line["price"] if offline else tariff
-            if offline and price != tariff:
+            if offline and price != tariff and not description:
                 off_tariff.append(
                     {
                         "item": item.pk,
@@ -425,8 +535,36 @@ class OpenPosViewSet(viewsets.ViewSet):
                     }
                 )
             count = line["count"]
-            total += price * count
 
+            journal_line = {
+                "item": item.pk,
+                "item_name": str(item.name),
+                "variation": variation.pk if variation else None,
+                "variation_name": str(variation.value) if variation else None,
+                "count": count,
+                "unit_price": str(price),
+                "line_total": str(price * count),
+            }
+            if description:
+                # What the money was actually for. In the journal because that
+                # is the record that outlives the order, and on the order too,
+                # a few lines further down.
+                journal_line["description"] = description
+                notes.append(f"{count}× {item.name} — {description}")
+            if offline and price != tariff and not description:
+                # Kept on the line itself, so the divergence survives in the
+                # journal even after the tariff has been edited again.
+                journal_line["tariff_price"] = str(tariff)
+
+            if is_refund:
+                refund_total += price * count
+                refund_positions.append(journal_line)
+                # Deliberately no order position: this is money leaving the
+                # drawer, and pretix has nowhere to put it.
+                continue
+
+            sale_total += price * count
+            journal_positions.append(journal_line)
             for _n in range(count):
                 api_positions.append(
                     {
@@ -438,23 +576,12 @@ class OpenPosViewSet(viewsets.ViewSet):
                     }
                 )
 
-            journal_line = {
-                "item": item.pk,
-                "item_name": str(item.name),
-                "variation": variation.pk if variation else None,
-                "variation_name": str(variation.value) if variation else None,
-                "count": count,
-                "unit_price": str(price),
-                "line_total": str(price * count),
-            }
-            if offline and price != tariff:
-                # Kept on the line itself, so the divergence survives in the
-                # journal even after the tariff has been edited again.
-                journal_line["tariff_price"] = str(tariff)
-            journal_positions.append(journal_line)
+        # What actually changes hands: the order, less the deposits given back
+        # with it. Every figure the customer is quoted is this one.
+        net_total = sale_total + refund_total
 
         expected = data["expected_total"]
-        if expected is not None and expected != total:
+        if expected is not None and expected != net_total:
             # Refuse rather than charge a different amount than the one the
             # customer was told. The app reloads its catalogue and shows the new
             # basket; nothing has been taken at this point.
@@ -462,22 +589,32 @@ class OpenPosViewSet(viewsets.ViewSet):
                 {
                     "expected_total": [
                         _("Prices changed: this basket now comes to {total}, not {expected}.").format(
-                            total=total, expected=expected
+                            total=net_total, expected=expected
                         )
                     ],
                     "code": "price_changed",
-                    "total": str(total),
+                    "total": str(net_total),
                 }
             )
 
         cash_given = data["cash_given"]
         cash_change = None
         if data["payment_type"] == PosSale.PAYMENT_CASH and cash_given is not None:
-            if cash_given < total:
+            if net_total < Decimal("0.00"):
+                # Nothing was tendered: the drawer is the one paying out. The
+                # till has nothing to record here and the operator counts out
+                # the net, which the answer below names.
+                raise ValidationError(
+                    {"cash_given": [_("Nothing is due: this transaction pays money out.")]}
+                )
+            if cash_given < net_total:
                 raise ValidationError(
                     {"cash_given": [_("The amount received is less than the total due.")]}
                 )
-            cash_change = cash_given - total
+            # Against the net, not against the order: with a deposit handed
+            # back, the order is worth more than the customer put on the
+            # counter, and the change is counted out of what they did.
+            cash_change = cash_given - net_total
 
         payment_info = {
             "cashier": data["cashier"],
@@ -511,57 +648,96 @@ class OpenPosViewSet(viewsets.ViewSet):
             "positions": api_positions,
             "fees": [],
         }
+        if notes:
+            # So a free amount is readable in the back office as well as in the
+            # journal: the order is otherwise n× a product called "Misc".
+            payload["comment"] = "\n".join(notes)
+
+        order = None
+        sale = None
+        refund = None
+        recorded_at = offline["recorded_at"] if offline else None
 
         with transaction.atomic():
-            order_serializer = OrderCreateSerializer(
-                data=payload,
-                context={
-                    "event": event,
-                    "auth": request.auth,
-                    "request": request,
-                    "pdf_data": False,
-                },
-            )
-            order_serializer.is_valid(raise_exception=True)
-            order = order_serializer.save()
+            # No order when the basket is nothing but returned cups, which is
+            # the whole of the queue at the end of an evening. There is nothing
+            # for pretix to hold: an order cannot be worth less than nothing.
+            if api_positions:
+                order_serializer = OrderCreateSerializer(
+                    data=payload,
+                    context={
+                        "event": event,
+                        "auth": request.auth,
+                        "request": request,
+                        "pdf_data": False,
+                    },
+                )
+                order_serializer.is_valid(raise_exception=True)
+                order = order_serializer.save()
 
-            order.log_action(
-                "pretix.event.order.placed",
-                user=request.user if request.user.is_authenticated else None,
-                auth=request.auth,
-            )
+                order.log_action(
+                    "pretix.event.order.placed",
+                    user=request.user if request.user.is_authenticated else None,
+                    auth=request.auth,
+                )
 
-            sale = PosSale.record(
-                event=event,
-                order=order,
-                device=device,
-                cashier=data["cashier"],
-                payment_type=data["payment_type"],
-                total=total,
-                positions=journal_positions,
-                idempotency_key=idempotency_key,
-                cash_given=cash_given,
-                cash_change=cash_change,
-                testmode=event.testmode,
-                offline=bool(offline),
-                recorded_at=offline["recorded_at"] if offline else None,
-            )
+                sale = PosSale.record(
+                    event=event,
+                    order=order,
+                    device=device,
+                    cashier=data["cashier"],
+                    payment_type=data["payment_type"],
+                    total=sale_total,
+                    positions=journal_positions,
+                    idempotency_key=idempotency_key,
+                    cash_given=cash_given,
+                    cash_change=cash_change,
+                    testmode=event.testmode,
+                    offline=bool(offline),
+                    recorded_at=recorded_at,
+                )
 
-            # Cross-reference the journal entry from the payment so the backend
-            # order view can point at it.
-            payment = order.payments.last()
-            if payment:
-                info = payment.info_data or {}
-                info["journal_seq"] = sale.seq
-                payment.info_data = info
-                payment.save(update_fields=["info"])
+                # Cross-reference the journal entry from the payment so the
+                # backend order view can point at it.
+                payment = order.payments.last()
+                if payment:
+                    info = payment.info_data or {}
+                    info["journal_seq"] = sale.seq
+                    payment.info_data = info
+                    payment.save(update_fields=["info"])
+
+            if refund_positions:
+                refund = PosSale.record(
+                    event=event,
+                    order=None,
+                    device=device,
+                    cashier=data["cashier"],
+                    payment_type=data["payment_type"],
+                    total=refund_total,
+                    positions=refund_positions,
+                    # Its own key, derived from the transaction's, so a retry
+                    # recognises this half too. The sale, when there is one,
+                    # keeps the key the till sent.
+                    idempotency_key=(
+                        refund_key(idempotency_key) if api_positions else idempotency_key
+                    ),
+                    # The cash figures belong to the transaction as a whole and
+                    # are recorded once, on the sale. Here they would claim a
+                    # note was handed over for money going the other way.
+                    testmode=event.testmode,
+                    kind=PosSale.KIND_DEPOSIT_REFUND,
+                    offline=bool(offline),
+                    recorded_at=recorded_at,
+                )
 
         # Everything below runs after the sale is durably committed: a failure
         # here must never undo an order the customer has already paid for.
-        self._post_commit(request, order)
-        checked_in, checkin_errors = self._check_in(request, order)
+        checked_in, checkin_errors = None, []
+        if order is not None:
+            self._post_commit(request, order)
+            checked_in, checkin_errors = self._check_in(request, order)
 
-        body = self._sale_payload(sale, replayed=False)
+        body = self._checkout_payload(event, sale or refund, replayed=False)
         body["checked_in"] = checked_in
         body["checkin_errors"] = checkin_errors
         # Empty on every online sale. When it is not, an operator has to be told:
@@ -815,11 +991,15 @@ class OpenPosViewSet(viewsets.ViewSet):
                 # served. Its money is another matter — see below.
                 "count": kinds.get(PosSale.KIND_SALE, 0),
                 "cancellations": kinds.get(PosSale.KIND_CANCELLATION, 0),
+                # Same reasoning: a returned cup is not a sale, and the money
+                # it took out of the drawer is already netted off below.
+                "deposit_refunds": kinds.get(PosSale.KIND_DEPOSIT_REFUND, 0),
             }
             grand = Decimal("0.00")
             for payment_type in (PosSale.PAYMENT_CASH, PosSale.PAYMENT_CARD):
-                # Cancellations carry a negative total, so the amounts net out
-                # here on their own: this is what the drawer should hold.
+                # Cancellations and deposit refunds carry a negative total, so
+                # the amounts net out here on their own: this is what the
+                # drawer should hold.
                 amount = amounts.get(payment_type, Decimal("0.00"))
                 result[payment_type] = str(amount)
                 grand += amount
@@ -835,7 +1015,9 @@ class OpenPosViewSet(viewsets.ViewSet):
         # counts the rows per kind, so the emptiness is in the answer it hands
         # back and a second round trip to ask about it buys nothing.
         test = totals(sales.filter(testmode=True))
-        had_test = bool(test["count"] or test["cancellations"])
+        had_test = bool(
+            test["count"] or test["cancellations"] or test["deposit_refunds"]
+        )
 
         return Response(
             {
@@ -1074,10 +1256,15 @@ class OpenPosViewSet(viewsets.ViewSet):
         return invoice.number if invoice else None
 
     def _sale_payload(self, sale, replayed):
+        # A deposit refund is a journal row with no order behind it. Its own
+        # total is money going out, so reporting it as an order total would
+        # have the till announce a sale worth minus three euros; the figures
+        # that describe the transaction are added by _checkout_payload.
+        orderless = sale.kind == PosSale.KIND_DEPOSIT_REFUND
         return {
             "order": {
                 "code": sale.order_code,
-                "total": str(sale.total),
+                "total": "0.00" if orderless else str(sale.total),
                 "url": (
                     f"/{sale.event.organizer.slug}/{sale.event.slug}/order/"
                     f"{sale.order_code}/{sale.order.secret}/"
@@ -1094,6 +1281,38 @@ class OpenPosViewSet(viewsets.ViewSet):
             "checked_in": None,
             "checkin_errors": [],
         }
+
+    def _checkout_payload(self, event, primary, replayed):
+        """
+        One customer, one answer — even when it took two journal rows.
+
+        A basket that both sells and hands a deposit back is a sale in pretix
+        and a payout in the journal, and the till has to be told about both:
+        what the order is worth, what went back out, and the difference, which
+        is the only figure the customer ever hears.
+
+        ``primary`` is whichever row the transaction is keyed on — the sale if
+        there is one, else the payout. The other half is looked up from it, so
+        a retry answers exactly as the first attempt did.
+        """
+        if primary.kind == PosSale.KIND_DEPOSIT_REFUND:
+            sale, refund = None, primary
+        else:
+            sale = primary
+            refund = PosSale.objects.filter(
+                event=event, idempotency_key=refund_key(primary.idempotency_key)
+            ).first()
+
+        body = self._sale_payload(primary, replayed)
+        # Positive, because it is an amount handed back and reads as one.
+        body["deposit_refund"] = str(-refund.total) if refund else None
+        body["deposit_refund_seq"] = refund.seq if refund else None
+        # What changed hands. Negative when the drawer is the one paying out.
+        body["net_total"] = str(
+            (sale.total if sale else Decimal("0.00"))
+            + (refund.total if refund else Decimal("0.00"))
+        )
+        return body
 
     def _post_commit(self, request, order):
         """Fire the signals and invoicing that pretix' own order API fires."""

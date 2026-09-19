@@ -232,10 +232,13 @@ class SalesView(EventPermissionRequiredMixin, ListView):
             journal = PosSale.objects.filter(event=event).order_by("seq").iterator()
             for sale in journal:
                 positions = " + ".join(
-                    "{}× {}{}".format(
+                    "{}× {}{}{}".format(
                         line.get("count"),
                         line.get("item_name"),
                         " ({})".format(line["variation_name"]) if line.get("variation_name") else "",
+                        # What a free amount was for. Without it the row reads
+                        # as "1× Misc, 12.00" and answers nothing.
+                        " — {}".format(line["description"]) if line.get("description") else "",
                     )
                     for line in sale.positions
                 )
@@ -283,7 +286,11 @@ class SalesView(EventPermissionRequiredMixin, ListView):
         # up. The result set here is one row per (till, cashier, payment type).
         rows = (
             all_sales.values(
-                "device_name", "device_serial", "cashier", "payment_type", "testmode"
+                "device_name", "device_serial", "cashier", "payment_type", "testmode",
+                # Grouped by kind as well, because the two halves of a row are
+                # counted differently: the money of every kind belongs in the
+                # takings, the *count* only of the ones that were a sale.
+                "kind",
             )
             .annotate(amount=Sum("total"), n=Count("pk"), first_seq=Min("seq"))
             .order_by()
@@ -297,9 +304,15 @@ class SalesView(EventPermissionRequiredMixin, ListView):
             # reconciled against, and shown on their own line instead. The rows
             # stay in the journal: it is append-only, and it outlives the orders
             # themselves, which get purged when test mode is switched off.
+            # A cancellation and a returned deposit are not customers served.
+            # Their money nets off the amounts below — that is what the drawer
+            # holds — but counting them as sales says six where four people
+            # were served.
+            sales = row["kind"] == PosSale.KIND_SALE
+
             if row["testmode"]:
                 testmode_totals[row["payment_type"]] += row["amount"]
-                testmode_totals["count"] += row["n"]
+                testmode_totals["count"] += row["n"] if sales else 0
                 continue
 
             label = row["device_name"] or row["device_serial"] or str(_("unknown till"))
@@ -315,10 +328,10 @@ class SalesView(EventPermissionRequiredMixin, ListView):
                 },
             )
             bucket[row["payment_type"]] += row["amount"]
-            bucket["count"] += row["n"]
+            bucket["count"] += row["n"] if sales else 0
             bucket["first_seq"] = min(bucket["first_seq"], row["first_seq"])
             totals[row["payment_type"]] += row["amount"]
-            totals["count"] += row["n"]
+            totals["count"] += row["n"] if sales else 0
 
         # In the order the tills first wrote to the journal, as the row-by-row
         # version showed them.
@@ -330,7 +343,12 @@ class SalesView(EventPermissionRequiredMixin, ListView):
 
         ctx["by_device"] = devices
         ctx["totals"] = totals
-        ctx["testmode_totals"] = testmode_totals if testmode_totals["count"] else None
+        # Shown whenever test money went through at all, count or no count: a
+        # night of nothing but cancelled test sales still has to be visible as
+        # money that never existed.
+        ctx["testmode_totals"] = (
+            testmode_totals if all_sales.filter(testmode=True).exists() else None
+        )
         ctx["currency"] = self.request.event.currency
         # Surfaced so a broken chain is visible rather than silently trusted.
         # Checked from an anchored checkpoint; `manage.py openpos_verify_journal`

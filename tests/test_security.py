@@ -6,10 +6,14 @@ should be assumed to leak eventually. The security profile is what decides how
 much a leaked one is worth — and a profile is only as good as the list in it,
 which is a list nothing else in the codebase checks.
 """
+import pathlib
+import re
+
 import pytest
 from pretix.base.models import Device
 from pretix.base.models.devices import generate_api_token
 
+import pretix_openpos
 from pretix_openpos.pwa import SHELL_CSP
 
 
@@ -140,6 +144,44 @@ def test_the_app_shell_is_served_to_anyone(client):
     # that does is obtained through pairing and kept in the browser.
     assert response.status_code == 200
     assert "Content-Security-Policy" in response
+
+
+def test_no_template_explains_itself_to_the_customer():
+    """
+    Comments stay comments, in every template this plugin ships.
+
+    Django's ``{#…#}`` is **single-line only**: written across several lines it
+    stops being a comment and is rendered as text. The failure is silent — the
+    page works, the markup is valid, the tests pass — and it had already put
+    three lines of prose on the back-office order page before this test
+    existed. Checked over the source rather than over one rendered page,
+    because the templates that are hardest to render under test are exactly
+    the ones nobody would notice.
+    """
+    templates = pathlib.Path(pretix_openpos.__file__).parent / "templates"
+    offenders = [
+        path.relative_to(templates)
+        for path in templates.rglob("*.html")
+        for comment in re.findall(r"\{#.*?#\}", path.read_text(), re.S)
+        if "\n" in comment
+    ]
+
+    assert offenders == [], (
+        "these comments span several lines and will be served as text; "
+        "use {% comment %}"
+    )
+
+
+@pytest.mark.django_db
+def test_the_shell_serves_no_prose_of_its_own(client):
+    """The same thing again, on the one page a customer's till loads."""
+    body = client.get("/openpos/").content.decode()
+
+    assert "{#" not in body
+    assert "{%" not in body
+    # The word every comment in that template is about, and the one nobody
+    # would put on screen on purpose.
+    assert "palette" not in body
 
 
 @pytest.mark.django_db

@@ -2,9 +2,22 @@
  * Styling for a till, not a website.
  *
  * Assumptions baked in: a tablet held in landscape, used at arm's length by
- * someone who is being talked at while they tap. So: dark surfaces that do not
- * glare in a dim venue, targets no smaller than 56px, prices set large enough to
- * read without leaning in, and absolutely no hover-only affordances.
+ * someone who is being talked at while they tap. So: targets no smaller than
+ * 56px, prices set large enough to read without leaning in, and absolutely no
+ * hover-only affordances.
+ *
+ * Two palettes, because a till is not always in a dim venue: dark for an
+ * evening room, light for a stall in the sun, where a dark screen is a mirror.
+ * Which one is decided in theme.ts and written to `data-theme` on <html>; with
+ * no attribute there the device decides. Every rule below is therefore written
+ * against the tokens and never against a literal colour.
+ *
+ * The split that matters among the tokens: a *fill* is a block of colour big
+ * enough to carry text of its own, and stays vivid in both palettes — the green
+ * of the confirm button, the amber of TEST MODE. A *text* token is the same
+ * idea used as ink on the page background, and that one has to change: amber
+ * lettering readable on #12161f is invisible on white. Anything that is read
+ * rather than pressed uses --success-text, --warning-text, --danger-text.
  */
 
 :root {
@@ -20,9 +33,102 @@
   --success-strong: #16a34a;
   --danger: #ef4444;
   --warning: #f59e0b;
+
+  /* Ink versions of the three above. On a dark surface the fill already reads
+     as text, so these are the same colour. */
+  --success-text: #22c55e;
+  --warning-text: #f59e0b;
+  --danger-text: #ef4444;
+  /* Ink on the red wash rather than on the page: the wash is already red. */
+  --danger-on-tint: #fecaca;
+
+  /* Washes behind a warning or a verdict, over the surface they sit on. */
+  --tint-success: rgba(34, 197, 94, 0.16);
+  --tint-warning: rgba(245, 158, 11, 0.16);
+  --tint-danger: rgba(239, 68, 68, 0.15);
+
+  /* Ink laid on a fill. Fixed, because the fills are. */
+  --on-fill: #fff;
+  --on-success: #06240f;
+  --on-warning: #1a1a1a;
+
+  /* Behind a panel. */
+  --overlay: rgba(8, 11, 17, 0.85);
+  /* What a pressed row does. Lighter on dark, darker on light — "brighter"
+     would wash a white row out rather than show the press. */
+  --press: brightness(1.2);
+
   --radius: 12px;
 
   color-scheme: dark;
+}
+
+/*
+ * The light palette.
+ *
+ * Written twice on purpose: once for a device set to light with the till left
+ * on "system", once for a till told explicitly to be light whatever the device
+ * says. The system rule excludes a till told explicitly to be dark, which is
+ * the case the media query would otherwise win.
+ */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f2f5f9;
+    --surface: #ffffff;
+    --surface-2: #e6ebf3;
+    --border: #cbd3e1;
+    --text: #131720;
+    --text-dim: #566074;
+    --accent: #2563eb;
+    --accent-strong: #1d4ed8;
+    --success: #22c55e;
+    --success-strong: #16a34a;
+    --danger: #ef4444;
+    --warning: #f59e0b;
+
+    --success-text: #15803d;
+    --warning-text: #a4600a;
+    --danger-text: #b42318;
+    --danger-on-tint: #8a1c13;
+
+    --tint-success: rgba(21, 128, 61, 0.12);
+    --tint-warning: rgba(180, 83, 9, 0.12);
+    --tint-danger: rgba(185, 28, 28, 0.1);
+
+    --overlay: rgba(17, 24, 39, 0.45);
+    --press: brightness(0.94);
+
+    color-scheme: light;
+  }
+}
+
+:root[data-theme="light"] {
+  --bg: #f2f5f9;
+  --surface: #ffffff;
+  --surface-2: #e6ebf3;
+  --border: #cbd3e1;
+  --text: #131720;
+  --text-dim: #566074;
+  --accent: #2563eb;
+  --accent-strong: #1d4ed8;
+  --success: #22c55e;
+  --success-strong: #16a34a;
+  --danger: #ef4444;
+  --warning: #f59e0b;
+
+  --success-text: #15803d;
+  --warning-text: #a4600a;
+  --danger-text: #b42318;
+  --danger-on-tint: #8a1c13;
+
+  --tint-success: rgba(21, 128, 61, 0.12);
+  --tint-warning: rgba(180, 83, 9, 0.12);
+  --tint-danger: rgba(185, 28, 28, 0.1);
+
+  --overlay: rgba(17, 24, 39, 0.45);
+  --press: brightness(0.94);
+
+  color-scheme: light;
 }
 
 * {
@@ -129,7 +235,7 @@ button {
   padding: 4px 8px;
   border-radius: 6px;
   background: var(--warning);
-  color: #1a1a1a;
+  color: var(--on-warning);
 }
 
 .badge.muted {
@@ -150,6 +256,7 @@ button {
 /* Lit, so the operator can tell at a glance in a dark doorway. */
 .icon-button.is-on {
   background: var(--warning);
+  color: var(--on-warning);
 }
 
 .workspace {
@@ -190,7 +297,7 @@ button {
 
 .tab[aria-selected="true"] {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-fill);
 }
 
 .grid {
@@ -256,7 +363,36 @@ button {
 }
 
 .product .stock.low {
-  color: var(--warning);
+  color: var(--warning-text);
+}
+
+/*
+ * The two buttons in the grid that are not products.
+ *
+ * Outlined rather than filled, so a row of identical product cards does not
+ * hide them and a thumb reaching for a beer does not land on one. They keep
+ * the product card's size and rhythm: same grid, same target, and the
+ * operator's aim does not have to change for them.
+ */
+.product.is-action {
+  background: transparent;
+  border: 1px dashed var(--border);
+}
+
+.product.is-action .price {
+  color: var(--accent);
+}
+
+/* Money going the other way, and the amber the till uses everywhere else for
+   it: the same colour as a reversal in the history and a credit at payment. */
+.product.is-action.is-refund .price {
+  color: var(--warning-text);
+}
+
+/* A returned deposit in the basket, for the same reason. */
+.line.is-refund .amount,
+.line.is-refund .label small {
+  color: var(--warning-text);
 }
 
 .section-title {
@@ -398,12 +534,12 @@ button {
 
 .btn.primary {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-fill);
 }
 
 .btn.success {
   background: var(--success);
-  color: #06240f;
+  color: var(--on-success);
 }
 
 .btn.ghost {
@@ -417,8 +553,8 @@ button {
 
 .btn.danger {
   background: transparent;
-  border: 1px solid var(--danger);
-  color: var(--danger);
+  border: 1px solid var(--danger-text);
+  color: var(--danger-text);
 }
 
 /* ---------- overlays ---------- */
@@ -426,7 +562,7 @@ button {
 .overlay {
   position: fixed;
   inset: 0;
-  background: rgba(8, 11, 17, 0.85);
+  background: var(--overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -464,7 +600,7 @@ button {
 
 .pay-toggle .btn[aria-pressed="true"] {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-fill);
 }
 
 .amount-display {
@@ -482,7 +618,7 @@ button {
 }
 
 .amount-display.change .value {
-  color: var(--success);
+  color: var(--success-text);
 }
 
 /* The credit is money the customer has already been granted, so it reads like
@@ -493,11 +629,11 @@ button {
 }
 
 .amount-display.credit .value {
-  color: var(--warning);
+  color: var(--warning-text);
 }
 
 .amount-display.short .value {
-  color: var(--danger);
+  color: var(--danger-text);
 }
 
 .keypad {
@@ -535,7 +671,7 @@ button {
    and when the note is the exact price there is no change figure to show it. */
 .quick-tender button[aria-pressed="true"] {
   background: var(--success);
-  color: #06240f;
+  color: var(--on-success);
 }
 
 /*
@@ -599,7 +735,7 @@ button {
     calc(32px + env(safe-area-inset-bottom)) calc(32px + env(safe-area-inset-left));
   text-align: center;
   background: var(--success-strong);
-  color: #fff;
+  color: var(--on-fill);
   z-index: 30;
 }
 
@@ -609,7 +745,7 @@ button {
 
 .done.warn {
   background: var(--warning);
-  color: #241a00;
+  color: var(--on-warning);
 }
 
 .done .headline {
@@ -647,10 +783,31 @@ button {
   margin-bottom: 16px;
 }
 
-.field label {
+.field label,
+.field .field-label {
   display: block;
   margin-bottom: 6px;
   font-weight: 600;
+}
+
+/* A row of mutually exclusive choices, pressed with a thumb. Buttons rather
+   than a select, because the answer has to be readable without opening
+   anything, and because three options do not deserve a picker. */
+.segmented {
+  display: flex;
+  gap: 8px;
+}
+
+.segmented .btn {
+  flex: 1;
+  min-height: 52px;
+  font-size: 16px;
+  background: var(--surface-2);
+}
+
+.segmented .btn[aria-pressed="true"] {
+  background: var(--accent);
+  color: var(--on-fill);
 }
 
 .field .help {
@@ -687,9 +844,9 @@ button {
 }
 
 .error-banner {
-  background: rgba(239, 68, 68, 0.15);
-  border: 1px solid var(--danger);
-  color: #fecaca;
+  background: var(--tint-danger);
+  border: 1px solid var(--danger-text);
+  color: var(--danger-on-tint);
   border-radius: var(--radius);
   padding: 12px 14px;
   margin-bottom: 16px;
@@ -741,7 +898,13 @@ table.takings thead th {
   letter-spacing: 0.05em;
 }
 
-/* ---------- scanner ---------- */
+/*
+ * ---------- scanner ----------
+ *
+ * Black in both palettes, and the literal colours below are deliberate: this
+ * screen is a camera preview with chrome floating on top of it. A white frame
+ * round the viewfinder is a white frame whatever the device is set to.
+ */
 
 .scanner {
   position: fixed;
@@ -948,7 +1111,7 @@ table.takings thead th {
 }
 
 .search-hit:active {
-  filter: brightness(1.2);
+  filter: var(--press);
 }
 
 .search-hit-name {
@@ -970,7 +1133,7 @@ table.takings thead th {
   padding: 2px 8px;
   border-radius: 6px;
   background: var(--warning);
-  color: #241a00;
+  color: var(--on-warning);
   font-size: 12px;
   font-weight: 700;
 }
@@ -1000,9 +1163,9 @@ table.takings thead th {
 .confirm-warn {
   margin-top: 14px;
   padding: 12px 14px;
-  border: 1px solid var(--warning);
+  border: 1px solid var(--warning-text);
   border-radius: var(--radius);
-  color: var(--warning);
+  color: var(--warning-text);
   font-weight: 600;
   line-height: 1.4;
 }
@@ -1034,7 +1197,7 @@ table.takings thead th {
   font-size: clamp(48px, 14vw, 72px);
   font-weight: 900;
   line-height: 1;
-  color: var(--success);
+  color: var(--success-text);
   font-variant-numeric: tabular-nums;
 }
 
@@ -1086,13 +1249,13 @@ table.takings thead th {
 }
 
 .flow-box.is-inside {
-  fill: rgba(34, 197, 94, 0.16);
-  stroke: var(--success);
+  fill: var(--tint-success);
+  stroke: var(--success-text);
 }
 
 .flow-box.is-exited {
-  fill: rgba(245, 158, 11, 0.14);
-  stroke: var(--warning);
+  fill: var(--tint-warning);
+  stroke: var(--warning-text);
 }
 
 /* Not here yet, so: outlined rather than filled. */
@@ -1116,7 +1279,7 @@ table.takings thead th {
 }
 
 .flow-value.is-inside {
-  fill: var(--success);
+  fill: var(--success-text);
 }
 
 .flow-link path {
@@ -1142,7 +1305,7 @@ table.takings thead th {
   display: block;
   height: 100%;
   border-radius: 999px;
-  background: var(--success);
+  background: var(--success-text);
 }
 
 /* ---------- offline & synchronisation ---------- */
@@ -1150,23 +1313,23 @@ table.takings thead th {
 /* Amber, not red: a till with no network is still working. Red is for a refused
    ticket, and the two must not look alike across a counter. */
 .sync-badge.is-offline {
-  border-color: var(--warning);
-  color: var(--warning);
+  border-color: var(--warning-text);
+  color: var(--warning-text);
 }
 
 .sync-state {
   padding: 12px 14px;
   border-radius: var(--radius);
-  background: rgba(245, 158, 11, 0.16);
-  border: 1px solid var(--warning);
+  background: var(--tint-warning);
+  border: 1px solid var(--warning-text);
   font-weight: 700;
   line-height: 1.4;
   margin-bottom: 14px;
 }
 
 .sync-state.is-online {
-  background: rgba(34, 197, 94, 0.14);
-  border-color: var(--success);
+  background: var(--tint-success);
+  border-color: var(--success-text);
 }
 
 .sync-report {
@@ -1177,8 +1340,8 @@ table.takings thead th {
   text-align: center;
   padding: 8px 10px;
   border-radius: 10px;
-  background: rgba(245, 158, 11, 0.18);
-  border: 1px solid var(--warning);
+  background: var(--tint-warning);
+  border: 1px solid var(--warning-text);
   font-size: 14px;
   font-weight: 700;
 }
@@ -1215,7 +1378,7 @@ table.takings thead th {
 }
 
 .history-row:active {
-  filter: brightness(1.2);
+  filter: var(--press);
 }
 
 /* A reversal reads as one at a glance, before any figure is compared. */
@@ -1239,7 +1402,7 @@ table.takings thead th {
   padding: 1px 7px;
   border-radius: 5px;
   background: var(--warning);
-  color: #1a1a1a;
+  color: var(--on-warning);
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.06em;
@@ -1247,7 +1410,7 @@ table.takings thead th {
 }
 
 .attendance-note.is-testmode {
-  color: var(--warning);
+  color: var(--warning-text);
 }
 
 .history-row-main {
@@ -1274,7 +1437,7 @@ table.takings thead th {
 }
 
 .history-row-total.is-negative {
-  color: var(--warning);
+  color: var(--warning-text);
 }
 
 .history-detail-head {
@@ -1301,7 +1464,7 @@ table.takings thead th {
 .history-done-headline {
   font-size: 26px;
   font-weight: 800;
-  color: var(--success);
+  color: var(--success-text);
   margin-bottom: 8px;
 }
 
@@ -1315,8 +1478,8 @@ table.takings thead th {
   margin-top: 14px;
   padding: 12px 14px;
   border-radius: var(--radius);
-  background: rgba(245, 158, 11, 0.16);
-  border: 1px solid var(--warning);
+  background: var(--tint-warning);
+  border: 1px solid var(--warning-text);
   font-weight: 700;
   line-height: 1.4;
 }
@@ -1337,24 +1500,24 @@ table.takings thead th {
 
 .verdict.ok {
   background: var(--success-strong);
-  color: #fff;
+  color: var(--on-fill);
 }
 
 .verdict.warn {
   background: var(--warning);
-  color: #241a00;
+  color: var(--on-warning);
 }
 
 .verdict.ko {
   background: var(--danger);
-  color: #fff;
+  color: var(--on-fill);
 }
 
 /* Accepted, but nobody walked in. The same blue the sale screen uses for a sale
    that admitted no one, so the two screens say the same thing the same way. */
 .verdict.info {
   background: var(--accent-strong);
-  color: #fff;
+  color: var(--on-fill);
 }
 
 .verdict-headline {

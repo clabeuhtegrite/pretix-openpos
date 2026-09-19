@@ -100,6 +100,14 @@ with scopes_disabled():
 
     beer = make_item(bar, "Bière", "3.00")
     soft = make_item(bar, "Soft", "2.00")
+    # A cup deposit, sold like anything else. Its return is the till's own
+    # button, switched on below, and is never a pretix order.
+    cup = make_item(bar, "Consigne gobelet", "1.00", pos_only=True)
+
+    # What a free amount is booked against. Priced at nothing on purpose: the
+    # figure always comes from the cashier, and a placeholder that looked like
+    # a price would be the one thing to mistake it for.
+    misc = make_item(bar, "Divers", "0.00", pos_only=True)
 
     tshirt = make_item(merch, "T-shirt", "18.00")
     for size in ("S", "M", "L"):
@@ -110,7 +118,7 @@ with scopes_disabled():
     quota, _ = Quota.objects.get_or_create(
         event=event, name="Général", defaults={"size": 500}
     )
-    quota.items.set([full, reduced, door, beer, soft, tshirt])
+    quota.items.set([full, reduced, door, beer, soft, tshirt, cup, misc])
     quota.variations.set(list(tshirt.variations.all()))
 
     # On-site tariff: pricier at the door than in advance, which is the whole
@@ -123,6 +131,10 @@ with scopes_disabled():
     PosPrice.objects.update_or_create(
         event=event, item=reduced, variation=None, defaults={"price": Decimal("10.00")}
     )
+
+    # The two buttons that only exist once a product is named for them.
+    event.settings.set("openpos_custom_item", str(misc.pk))
+    event.settings.set("openpos_deposit_item", str(cup.pk))
 
     checkin_list, _ = CheckinList.objects.get_or_create(
         event=event, name="Entrée", defaults={"all_products": True}
