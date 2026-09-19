@@ -107,6 +107,14 @@
                         {% else %}
                             {{ sale.order_code }}
                         {% endif %}
+                        {% comment %}
+                            A row that is not a plain sale says so. A deposit refund has
+                            no order at all — pretix cannot hold one — so without this it
+                            is a blank cell and a negative amount.
+                        {% endcomment %}
+                        {% if sale.kind != "sale" %}
+                            <span class="label label-default">{{ sale.get_kind_display }}</span>
+                        {% endif %}
                     </td>
                     <td>
                         {{ sale.device_name|default:sale.device_serial|default:"—" }}

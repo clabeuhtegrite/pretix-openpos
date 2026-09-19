@@ -357,6 +357,46 @@ describe("while the server is being asked", () => {
   });
 });
 
+describe("a basket that pays out", () => {
+  // Deposits handed back and nothing bought: the queue at closing time.
+  it("says what to hand over rather than an amount due", () => {
+    show({ totalCents: -300 });
+
+    expect(screen.queryByText(t("payment.due"))).toBeNull();
+    expect(
+      within(screen.getByText(t("payment.giveBack")).parentElement as HTMLElement)
+        .getByText(formatMoney(300, "EUR")),
+    ).toBeDefined();
+  });
+
+  it("puts the keypad away: there is nothing to take", () => {
+    show({ totalCents: -300 });
+
+    expect(screen.queryByRole("button", { name: "1" })).toBeNull();
+    expect(screen.getByText(t("payment.nothingToTake"))).toBeDefined();
+  });
+
+  it("can be confirmed straight away, with no amount received", async () => {
+    const { user, confirm, onConfirm } = show({ totalCents: -300 });
+
+    await user.click(confirm());
+
+    // null, not "0.00": nothing was tendered, and the server refuses an
+    // amount received on a transaction that pays money out.
+    expect(onConfirm).toHaveBeenCalledWith("cash", null);
+  });
+
+  it("tells the operator to refund on the terminal when it was a card sale", async () => {
+    const { user } = show({ totalCents: -300 });
+
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+
+    expect(
+      screen.getByText(t("payment.cardRefundPrompt", { amount: formatMoney(300, "EUR") })),
+    ).toBeDefined();
+  });
+});
+
 describe("when the server refuses", () => {
   it("says why, above the keypad, without clearing what was typed", () => {
     show({ error: "This product is not on sale here." });

@@ -18,6 +18,10 @@ import type { PaymentType } from "./types";
  * The credit comes from a sale cancelled in order to be corrected. It has
  * already been taken off the customer, so it funds the new order before any
  * cash does.
+ *
+ * ``totalCents`` may itself be negative: a basket of deposits handed back and
+ * nothing bought. That is the one case where money moves with nothing
+ * tendered at all, and it reads out of ``backCents`` like a credit does.
  */
 export interface Settlement {
   /** Cash the customer still has to hand over, after the credit is applied. */
@@ -64,7 +68,12 @@ export function settle({
   const short = changeCents !== null && changeCents < 0;
 
   let cashGiven: string | null;
-  if (creditCents > 0) {
+  if (totalCents < 0) {
+    // The basket itself pays out — deposits handed back and nothing bought.
+    // Nothing was received, so nothing is reported as received; the server
+    // refuses an amount here for the same reason.
+    cashGiven = null;
+  } else if (creditCents > 0) {
     // Funded by the credit plus whatever was handed over. An empty keypad with
     // a credit in play means the customer paid the difference exactly — which
     // is also the only sensible reading of "confirm" with nothing typed.

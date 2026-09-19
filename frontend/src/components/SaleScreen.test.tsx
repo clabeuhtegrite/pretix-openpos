@@ -66,15 +66,28 @@ function line(overrides: Partial<CartLine> = {}): CartLine {
   };
 }
 
-function show(cart: CartLine[] = []) {
+function show(
+  cart: CartLine[] = [],
+  extras: Partial<Pick<Parameters<typeof SaleScreen>[0], "customSale" | "depositBack">> = {},
+) {
   const handlers = {
     onAdd: vi.fn(),
+    onCustomSale: vi.fn(),
+    onDepositBack: vi.fn(),
     onSetCount: vi.fn(),
     onClear: vi.fn(),
     onCharge: vi.fn(),
   };
   const { container } = render(
-    <SaleScreen catalog={catalog} cart={cart} currency="EUR" {...handlers} />,
+    <SaleScreen
+      catalog={catalog}
+      cart={cart}
+      currency="EUR"
+      customSale={null}
+      depositBack={null}
+      {...extras}
+      {...handlers}
+    />,
   );
   // The same amount can appear both in the grid and in the basket, so the
   // basket's own assertions are scoped to it.
@@ -283,5 +296,61 @@ describe("the basket", () => {
     await user.click(screen.getByRole("button", { name: t("sale.charge") }));
 
     expect(onCharge).toHaveBeenCalledOnce();
+  });
+});
+
+describe("the buttons that are not products", () => {
+  it("shows neither until the organiser has set one up", () => {
+    show();
+
+    expect(screen.queryByRole("button", { name: new RegExp(t("custom.tile")) })).toBeNull();
+    expect(screen.queryByRole("button", { name: new RegExp(t("deposit.tile")) })).toBeNull();
+  });
+
+  it("opens the free-amount keypad", async () => {
+    const { user, onCustomSale } = show([], { customSale: { name: "Divers" } });
+
+    await user.click(screen.getByRole("button", { name: new RegExp(t("custom.tile")) }));
+
+    expect(onCustomSale).toHaveBeenCalledOnce();
+  });
+
+  it("shows what a deposit is worth, as money going out", async () => {
+    show([], { depositBack: { name: "Consigne", priceCents: 100 } });
+
+    expect(
+      screen.getByRole("button", { name: new RegExp(`−${formatMoney(100, "EUR")}`) }),
+    ).toBeDefined();
+  });
+
+  it("hands a cup back on one tap", async () => {
+    const { user, onDepositBack } = show([], {
+      depositBack: { name: "Consigne", priceCents: 100 },
+    });
+
+    await user.click(screen.getByRole("button", { name: new RegExp(t("deposit.tile")) }));
+
+    expect(onDepositBack).toHaveBeenCalledOnce();
+  });
+
+  it("shows a returned deposit in the basket as a negative line", () => {
+    const { firstLine } = show([
+      line({ key: "refund:30", itemId: 30, label: "Consigne · rendue", unitPrice: -100, count: 3, refund: true }),
+    ]);
+
+    // The total the customer settles is the net, so the line has to read as
+    // one: minus three euros, not three.
+    expect(firstLine().getByText(formatMoney(-300, "EUR"))).toBeDefined();
+    expect(firstLine().getByText(formatMoney(-100, "EUR"))).toBeDefined();
+  });
+
+  it("totals a mixed basket at what actually changes hands", () => {
+    const { basket } = show([
+      line({ count: 4 }),
+      line({ key: "refund:30", itemId: 30, label: "Consigne · rendue", unitPrice: -100, count: 3, refund: true }),
+    ]);
+
+    // 4 × 3 € sold, 3 × 1 € handed back.
+    expect(basket().getByText(formatMoney(900, "EUR"))).toBeDefined();
   });
 });

@@ -96,6 +96,34 @@ describe("an order corrected against a credit", () => {
   });
 });
 
+describe("a basket that pays out", () => {
+  // Deposits handed back and nothing bought: the total itself is negative,
+  // which is the one case where money moves with nothing tendered at all.
+  it("asks for nothing and says what to hand over", () => {
+    const s = settle({ totalCents: -300, method: "cash" });
+
+    expect(s.dueCents).toBe(0);
+    expect(s.backCents).toBe(300);
+    expect(s.short).toBe(false);
+  });
+
+  it("reports no amount received, because none was", () => {
+    // The server refuses one for the same reason: there is no note to record.
+    expect(settle({ totalCents: -300, method: "cash" }).cashGiven).toBeNull();
+    expect(settle({ totalCents: -300, tenderedCents: 500, method: "cash" }).cashGiven).toBeNull();
+    expect(
+      settle({ totalCents: -300, creditCents: 200, method: "cash" }).cashGiven,
+    ).toBeNull();
+  });
+
+  it("moves the money on the terminal instead, when that is how it came in", () => {
+    const s = settle({ totalCents: -300, method: "card" });
+
+    expect(s.backCents).toBe(300);
+    expect(s.cashGiven).toBeNull();
+  });
+});
+
 describe("the invariant the drawer is reconciled on", () => {
   /**
    * Whatever the panel shows the operator to count out, the server must arrive

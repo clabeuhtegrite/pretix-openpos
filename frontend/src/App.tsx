@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api, ApiError } from "./api";
-import { basketFromJournal, repriceCart } from "./basket";
+import { basketFromJournal, customKey, refundKey, repriceCart } from "./basket";
 import CheckinScreen from "./components/CheckinScreen";
+import CustomSalePanel from "./components/CustomSalePanel";
 import DoneScreen from "./components/DoneScreen";
 import HistoryPanel from "./components/HistoryPanel";
 import InstallGate, { browserAllowed, isStandalone } from "./components/InstallGate";
@@ -21,6 +22,7 @@ import {
 } from "./storage";
 import { useConnectivity } from "./connectivity";
 import { drainQueue } from "./sync";
+import { applyTheme, loadTheme, saveTheme, watchDeviceTheme, type Theme } from "./theme";
 import type {
   Catalog, CartLine, Pairing, PaymentType, PosConfig, QueuedSale,
   SaleResult, SyncReport,
@@ -88,6 +90,7 @@ export default function App() {
 
   const [cart, setCart] = useState<CartLine[]>([]);
   const [cashier, setCashier] = useState<string>(loadCashier);
+  const [theme, setTheme] = useState<Theme>(loadTheme);
   /** Read once at startup: the server version a previous reload already tried. */
   const [updateTried] = useState<string | null>(loadUpdateAttempt);
 
@@ -99,6 +102,7 @@ export default function App() {
   const [payError, setPayError] = useState<string | null>(null);
 
   const [sale, setSale] = useState<SaleResult | null>(null);
+  const [customOpen, setCustomOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [checkinOpen, setCheckinOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -122,6 +126,16 @@ export default function App() {
   const [gated] = useState(() => !isStandalone() && !browserAllowed());
 
   useWakeLock(pairing !== null);
+
+  // main.tsx has already painted this once before the first render; running it
+  // again here is what makes a change in the settings panel take effect, and
+  // costs one attribute write on mount.
+  useEffect(() => applyTheme(theme), [theme]);
+  // The palette itself follows the device through a CSS media query, with no
+  // help from here. Only the status-bar colour has to be told.
+  const themeRef = useRef(theme);
+  themeRef.current = theme;
+  useEffect(() => watchDeviceTheme(() => themeRef.current), []);
 
   // What is queued is money that exists nowhere else yet; ask the browser not
   // to evict it.
@@ -168,6 +182,7 @@ export default function App() {
   // Android's back gesture closes what is on top, not the till. The payment
   // panel is deliberately absent: backing out of a half-tendered payment by
   // reflex is not something to make one swipe away.
+  useBackClose(customOpen, () => setCustomOpen(false));
   useBackClose(settingsOpen, () => setSettingsOpen(false));
   useBackClose(checkinOpen, () => setCheckinOpen(false));
   useBackClose(historyOpen, () => setHistoryOpen(false));
@@ -219,8 +234,10 @@ export default function App() {
   }, [pairing, load]);
 
   // True whenever a customer is mid-transaction and the catalogue must hold still.
+  // The free-amount panel counts even with an empty basket: an amount typed
+  // against a tariff that moves underneath it is the same bug one step earlier.
   const servingCustomer =
-    cart.length > 0 || paying !== null || sale !== null || checkinOpen;
+    cart.length > 0 || paying !== null || sale !== null || checkinOpen || customOpen;
 
   useEffect(() => {
     if (!pairing || servingCustomer) return;
@@ -297,6 +314,65 @@ export default function App() {
     });
   }
 
+  /**
+   * A price and a reason the cashier typed, as its own basket line.
+   *
+   * Never merged with anything: two free amounts are two different things
+   * even at the same price, hence a key of its own per line.
+   */
+  function addCustom(amountCents: number, reason: string) {
+    if (!config?.custom_sale?.item) return;
+    setCart((current) => [
+      ...current,
+      {
+        key: customKey(newNonce()),
+        itemId: config.custom_sale!.item as number,
+        variationId: null,
+        label: reason,
+        unitPrice: amountCents,
+        count: 1,
+        available: null,
+        description: reason,
+      },
+    ]);
+    setCustomOpen(false);
+  }
+
+  /**
+   * A cup coming back over the counter.
+   *
+   * A negative line in the ordinary basket rather than a flow of its own, so
+   * that "two beers and I am returning three cups" is one transaction and one
+   * amount to settle — which is what actually happens at a bar.
+   */
+  function addDepositBack() {
+    const deposit = config?.deposit;
+    if (!deposit?.item || deposit.price === null) return;
+    const key = refundKey(deposit.item);
+    const unitPrice = -toCents(deposit.price);
+    setCart((current) => {
+      const existing = current.find((line) => line.key === key);
+      if (existing) {
+        return current.map((line) =>
+          line.key === key ? { ...line, count: line.count + 1 } : line,
+        );
+      }
+      return [
+        ...current,
+        {
+          key,
+          itemId: deposit.item as number,
+          variationId: null,
+          label: t("deposit.line", { name: deposit.name ?? "" }),
+          unitPrice,
+          count: 1,
+          available: null,
+          refund: true,
+        },
+      ];
+    });
+  }
+
   /** Emptying the basket abandons the correction, and the credit with it. */
   function clearCart() {
     setCart([]);
@@ -332,7 +408,11 @@ export default function App() {
         count: line.count,
         // What the customer was charged, from the tariff this till had cached.
         // The server compares it with its own on replay and reports any gap.
+        // Negative on a deposit handed back, which is the same statement of
+        // fact pointing the other way.
         price: fromCents(line.unitPrice),
+        ...(line.description ? { description: line.description } : {}),
+        ...(line.refund ? { refund: true } : {}),
       })),
       chargedTotal: fromCents(total),
       paymentType,
@@ -340,7 +420,8 @@ export default function App() {
       cashChange:
         cashGiven === null ? null : fromCents(Math.max(toCents(cashGiven) - total, 0)),
       cashier,
-      admits: cart.some((line) => admissionItems.has(line.itemId)),
+      // A returned cup lets nobody in, whatever product it is booked against.
+      admits: cart.some((line) => !line.refund && admissionItems.has(line.itemId)),
       label: cart.map((line) => `${line.count}× ${line.label}`).join(", "),
     };
     enqueue(entry);
@@ -349,7 +430,7 @@ export default function App() {
     // Shaped like a server answer so every screen downstream stays unchanged;
     // what it does not have is an order code, because no order exists yet.
     return {
-      order: { code: "", total: entry.chargedTotal, url: null },
+      order: { code: "", total: fromCents(Math.max(soldCents, 0)), url: null },
       journal_seq: 0,
       payment_type: paymentType,
       cash_given: cashGiven,
@@ -362,6 +443,8 @@ export default function App() {
       checked_in: entry.admits ? 1 : 0,
       checkin_errors: [],
       offline: true,
+      deposit_refund: refundedCents > 0 ? fromCents(refundedCents) : null,
+      net_total: entry.chargedTotal,
     };
   }
 
@@ -391,6 +474,13 @@ export default function App() {
           item: line.itemId,
           variation: line.variationId,
           count: line.count,
+          // The two lines the server cannot price on its own: a free amount
+          // comes with its figure and its reason, a returned deposit only
+          // says that it is one.
+          ...(line.description
+            ? { price: fromCents(line.unitPrice), description: line.description }
+            : {}),
+          ...(line.refund ? { refund: true } : {}),
         })),
         payment_type: paymentType,
         cash_given: cashGiven,
@@ -481,7 +571,15 @@ export default function App() {
     );
   }
 
+  // Three figures, and they are only the same one when no deposit comes back.
+  // `total` is what changes hands; `soldCents` is what the order is worth, and
+  // is what pretix is told about; `refundedCents` is what leaves the drawer.
   const total = cart.reduce((sum, line) => sum + line.unitPrice * line.count, 0);
+  const soldCents = cart.reduce(
+    (sum, line) => sum + (line.refund ? 0 : line.unitPrice * line.count),
+    0,
+  );
+  const refundedCents = soldCents - total;
 
   // The server has been upgraded under this till. Only ever offered between
   // customers — reloading is safe (the queue and pairing survive it), but the
@@ -545,7 +643,22 @@ export default function App() {
         catalog={catalog}
         cart={cart}
         currency={config.event.currency}
+        customSale={
+          config.custom_sale?.enabled && config.custom_sale.name
+            ? { name: config.custom_sale.name }
+            : null
+        }
+        depositBack={
+          config.deposit?.enabled && config.deposit.price !== null
+            ? {
+                name: config.deposit.name ?? "",
+                priceCents: toCents(config.deposit.price),
+              }
+            : null
+        }
         onAdd={addProduct}
+        onCustomSale={() => setCustomOpen(true)}
+        onDepositBack={addDepositBack}
         onSetCount={setCount}
         onClear={clearCart}
         onCharge={() => {
@@ -553,6 +666,15 @@ export default function App() {
           setPaying({ key: newNonce() });
         }}
       />
+
+      {customOpen && (
+        <CustomSalePanel
+          currency={config.event.currency}
+          productName={config.custom_sale?.name ?? ""}
+          onAdd={addCustom}
+          onCancel={() => setCustomOpen(false)}
+        />
+      )}
 
       {paying && (
         <PaymentPanel
@@ -619,6 +741,11 @@ export default function App() {
           pairing={pairing}
           currency={config.event.currency}
           cashier={cashier}
+          theme={theme}
+          onThemeChange={(next) => {
+            setTheme(next);
+            saveTheme(next);
+          }}
           onCashierChange={(name) => {
             setCashier(name);
             saveCashier(name);

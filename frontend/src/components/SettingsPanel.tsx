@@ -3,18 +3,28 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { t } from "../i18n";
 import { formatMoney, toCents } from "../money";
+import { THEMES, type Theme } from "../theme";
 import type { Pairing, PosEvent, SummaryResponse, Takings } from "../types";
 
 interface Props {
   pairing: Pairing;
   currency: string;
   cashier: string;
+  theme: Theme;
+  onThemeChange: (theme: Theme) => void;
   onCashierChange: (name: string) => void;
   onRefresh: () => void;
   onUnpair: () => void;
   onClose: () => void;
   onEventChange: (slug: string) => void;
 }
+
+/** Label per theme, kept next to the list it labels. */
+const THEME_LABELS: Record<Theme, "settings.themeSystem" | "settings.themeLight" | "settings.themeDark"> = {
+  system: "settings.themeSystem",
+  light: "settings.themeLight",
+  dark: "settings.themeDark",
+};
 
 function TakingsRow({ label, takings, currency }: { label: string; takings: Takings; currency: string }) {
   return (
@@ -31,7 +41,8 @@ function TakingsRow({ label, takings, currency }: { label: string; takings: Taki
 }
 
 export default function SettingsPanel({
-  pairing, currency, cashier, onCashierChange, onRefresh, onUnpair, onClose, onEventChange,
+  pairing, currency, cashier, theme, onThemeChange, onCashierChange, onRefresh, onUnpair,
+  onClose, onEventChange,
 }: Props) {
   const [summary, setSummary] = useState<SummaryResponse | null>(null);
   const [events, setEvents] = useState<PosEvent[] | null>(null);
@@ -105,6 +116,27 @@ export default function SettingsPanel({
           <div className="help">{t("settings.cashierHelp")}</div>
         </div>
 
+        {/* Three buttons rather than a select: it is a choice of three, it is
+            made with a thumb, and the answer is visible without opening
+            anything. */}
+        <div className="field">
+          <span className="field-label">{t("settings.theme")}</span>
+          <div className="segmented" role="group" aria-label={t("settings.theme")}>
+            {THEMES.map((option) => (
+              <button
+                key={option}
+                type="button"
+                className="btn"
+                aria-pressed={theme === option}
+                onClick={() => onThemeChange(option)}
+              >
+                {t(THEME_LABELS[option])}
+              </button>
+            ))}
+          </div>
+          <div className="help">{t("settings.themeHelp")}</div>
+        </div>
+
         <h3 style={{ fontSize: 16, marginTop: 24 }}>{t("summary.title")}</h3>
         {summary ? (
           <table className="takings">
@@ -131,6 +163,14 @@ export default function SettingsPanel({
           // not short at all.
           <div className="attendance-note">
             {t("summary.cancellations", { n: summary.event.cancellations })}
+          </div>
+        )}
+        {summary && (summary.event.deposit_refunds ?? 0) > 0 && (
+          // Same reasoning, and the figure is easier to be surprised by: a
+          // night of returned cups is money out of the drawer with not one
+          // sale to show for it.
+          <div className="attendance-note">
+            {t("summary.depositRefunds", { n: summary.event.deposit_refunds ?? 0 })}
           </div>
         )}
         {!summary && (

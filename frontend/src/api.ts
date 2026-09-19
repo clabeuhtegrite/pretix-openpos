@@ -168,7 +168,17 @@ export const api = {
     p: Pairing,
     payload: {
       idempotency_key: string;
-      positions: { item: number; variation: number | null; count: number; price?: string }[];
+      positions: {
+        item: number;
+        variation: number | null;
+        count: number;
+        /** Only a replayed offline sale, or a free amount, carries one. */
+        price?: string;
+        /** What a free amount is for. Its presence is what marks it as one. */
+        description?: string;
+        /** A deposit handed back; the server still decides what it is worth. */
+        refund?: boolean;
+      }[];
       payment_type: string;
       cash_given?: string | null;
       cashier?: string;

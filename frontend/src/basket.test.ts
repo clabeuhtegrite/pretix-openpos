@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { basketFromJournal, repriceCart } from "./basket";
+import { basketFromJournal, customKey, productKey, refundKey, repriceCart } from "./basket";
 import type { Catalog, CartLine, JournalPosition } from "./types";
 
 /** Today's catalogue: the beer now costs 4.00, whatever the journal remembers. */
@@ -70,6 +70,56 @@ describe("basketFromJournal", () => {
     const lines = basketFromJournal([journalLine({ item: 99 })], catalog);
     expect(lines).toEqual([]);
   });
+
+  it("carries a free amount over exactly as it was written", () => {
+    // It has no tariff to be re-priced from — the cashier decided it — so the
+    // journal's own figure is the only one it ever had. Re-pricing it from
+    // the catalogue would quietly replace it with a placeholder.
+    const lines = basketFromJournal(
+      [journalLine({
+        item: 30, item_name: "Divers", count: 1,
+        unit_price: "12.50", line_total: "12.50", description: "Verre cassé",
+      })],
+      catalog,
+    );
+
+    expect(lines[0].unitPrice).toBe(1250);
+    expect(lines[0].description).toBe("Verre cassé");
+    expect(lines[0].label).toBe("Divers");
+  });
+
+  it("gives two free amounts two lines, even at the same price", () => {
+    const broken = {
+      item: 30, item_name: "Divers", count: 1,
+      unit_price: "5.00", line_total: "5.00",
+    };
+    const lines = basketFromJournal(
+      [
+        journalLine({ ...broken, description: "Verre cassé" }),
+        journalLine({ ...broken, description: "Don" }),
+      ],
+      catalog,
+    );
+
+    expect(new Set(lines.map((line) => line.key)).size).toBe(2);
+  });
+});
+
+describe("the keys that tell the three kinds of line apart", () => {
+  it("keys an ordinary product by item and variation", () => {
+    expect(productKey(10, null)).toBe("10:");
+    expect(productKey(11, 21)).toBe("11:21");
+  });
+
+  it("keys a returned deposit apart from the deposit being sold", () => {
+    // Otherwise taking a deposit and handing one back would merge into a
+    // single line and cancel each other out on screen.
+    expect(refundKey(30)).not.toBe(productKey(30, null));
+  });
+
+  it("gives every free amount a key of its own", () => {
+    expect(customKey("a")).not.toBe(customKey("b"));
+  });
 });
 
 describe("repriceCart", () => {
@@ -90,5 +140,23 @@ describe("repriceCart", () => {
   it("leaves a vanished product's line alone for the server to refuse", () => {
     const vanished = { ...line, key: "99:", itemId: 99 };
     expect(repriceCart([vanished], catalog)[0].unitPrice).toBe(350);
+  });
+
+  it("moves a returned deposit with the tariff, in the other direction", () => {
+    const back: CartLine = {
+      ...line, key: refundKey(10), unitPrice: -350, refund: true,
+    };
+
+    expect(repriceCart([back], catalog)[0].unitPrice).toBe(-400);
+  });
+
+  it("leaves a free amount exactly as the cashier typed it", () => {
+    // The product it is booked against has a placeholder price, and moving
+    // the line onto it would silently charge that instead.
+    const custom: CartLine = {
+      ...line, key: customKey("n1"), unitPrice: 1250, description: "Verre cassé",
+    };
+
+    expect(repriceCart([custom], catalog)[0].unitPrice).toBe(1250);
   });
 });

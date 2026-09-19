@@ -35,6 +35,9 @@ function time(iso: string): string {
 }
 
 function lineLabel(position: JournalPosition): string {
+  // The reason wins over the product name on a free amount: "Divers" tells
+  // the operator nothing, and it is the same word on every one of them.
+  if (position.description) return position.description;
   return position.variation_name
     ? `${position.item_name} · ${position.variation_name}`
     : position.item_name;
@@ -168,7 +171,9 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
               </button>
             </div>
             <div className="history-meta">
-              #{selected.seq} · {selected.order} · {time(selected.datetime)} ·{" "}
+              #{selected.seq} ·{" "}
+              {selected.kind === "deposit_refund" ? t("deposit.tile") : selected.order} ·{" "}
+              {time(selected.datetime)} ·{" "}
               {t(selected.payment_type === "cash" ? "payment.cash" : "payment.card")}
               {selected.cashier ? ` · ${selected.cashier}` : ""}
             </div>
@@ -234,18 +239,24 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
               {lines?.length === 0 && <div className="search-note">{t("history.empty")}</div>}
               {lines?.map((line) => {
                 const cancellation = line.kind === "cancellation";
+                const depositBack = line.kind === "deposit_refund";
                 return (
                   <button
                     key={line.seq}
                     className={
-                      `history-row${cancellation ? " is-cancellation" : ""}` +
+                      `history-row${cancellation || depositBack ? " is-cancellation" : ""}` +
                       (line.testmode ? " is-testmode" : "")
                     }
                     onClick={() => setOpenSeq(line.seq)}
                   >
                     <span className="history-row-main">
                       <span className="history-row-order">
-                        {time(line.datetime)} · {line.order}
+                        {time(line.datetime)}
+                        {/* A deposit handed back has no order to name: pretix
+                            cannot hold one. So it says what it is instead of
+                            trailing a separator and a blank. */}
+                        {" · "}
+                        {depositBack ? t("deposit.tile") : line.order}
                       </span>
                       <span className="history-row-meta">
                         #{line.seq} ·{" "}
@@ -257,7 +268,11 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
                         <span className="history-row-test">{t("history.badgeTestmode")}</span>
                       )}
                     </span>
-                    <span className={`history-row-total${cancellation ? " is-negative" : ""}`}>
+                    <span
+                      className={`history-row-total${
+                        cancellation || depositBack ? " is-negative" : ""
+                      }`}
+                    >
                       {formatMoney(toCents(line.total), currency)}
                     </span>
                   </button>

@@ -527,6 +527,152 @@ describe("when the server refuses the sale", () => {
   });
 });
 
+describe("the two buttons that are not products", () => {
+  /** A till with both extras switched on, and a one-euro deposit. */
+  const withExtras = () =>
+    config({
+      custom_sale: { enabled: true, item: 30, name: "Divers" },
+      deposit: { enabled: true, item: 31, name: "Consigne", price: "1.00" },
+    });
+
+  const tile = (key: "custom.tile" | "deposit.tile") =>
+    screen.getByRole("button", { name: new RegExp(t(key)) });
+
+  it("shows neither until the organiser has set one up", async () => {
+    show();
+    await ready();
+
+    expect(screen.queryByRole("button", { name: new RegExp(t("custom.tile")) })).toBeNull();
+    expect(screen.queryByRole("button", { name: new RegExp(t("deposit.tile")) })).toBeNull();
+  });
+
+  it("sends a free amount with its price and its reason", async () => {
+    apiMock.config.mockResolvedValue(withExtras());
+    const { user } = show();
+    await ready();
+
+    await user.click(tile("custom.tile"));
+    for (const digit of "1250") {
+      await user.click(screen.getByRole("button", { name: digit }));
+    }
+    await user.type(screen.getByLabelText(t("custom.reason")), "Verre cassé");
+    await user.click(screen.getByRole("button", { name: t("custom.add") }));
+    await user.click(screen.getByRole("button", { name: t("sale.charge") }));
+    await confirm(user);
+
+    await waitFor(() =>
+      expect(apiMock.checkout).toHaveBeenCalledWith(
+        pairing,
+        expect.objectContaining({
+          positions: [
+            { item: 30, variation: null, count: 1, price: "12.50", description: "Verre cassé" },
+          ],
+          expected_total: "12.50",
+        }),
+      ),
+    );
+  });
+
+  it("names a free amount in the basket by its reason", async () => {
+    apiMock.config.mockResolvedValue(withExtras());
+    const { user } = show();
+    await ready();
+
+    await user.click(tile("custom.tile"));
+    await user.click(screen.getByRole("button", { name: "5" }));
+    await user.click(screen.getByRole("button", { name: "00" }));
+    await user.type(screen.getByLabelText(t("custom.reason")), "Don");
+    await user.click(screen.getByRole("button", { name: t("custom.add") }));
+
+    // "Divers · 5,00 €" would be true and useless; the reason is the whole
+    // point of the line.
+    expect(screen.getByText("Don")).toBeDefined();
+  });
+
+  it("nets a returned deposit off the basket it is in", async () => {
+    apiMock.config.mockResolvedValue(withExtras());
+    const { user } = show();
+    await ready();
+
+    // Two beers at 3 €, three cups back at 1 €.
+    await user.click(screen.getByRole("button", { name: /Bière/ }));
+    await user.click(screen.getByRole("button", { name: /Bière/ }));
+    for (let i = 0; i < 3; i += 1) await user.click(tile("deposit.tile"));
+    await user.click(screen.getByRole("button", { name: t("sale.charge") }));
+    await confirm(user);
+
+    await waitFor(() =>
+      expect(apiMock.checkout).toHaveBeenCalledWith(
+        pairing,
+        expect.objectContaining({
+          positions: [
+            { item: 10, variation: null, count: 2 },
+            // No price: the server knows what a deposit costs, and this is
+            // still a till that does not name its own prices.
+            { item: 31, variation: null, count: 3, refund: true },
+          ],
+          expected_total: "3.00",
+        }),
+      ),
+    );
+  });
+
+  it("hands money over for cups returned with nothing bought", async () => {
+    apiMock.config.mockResolvedValue(withExtras());
+    apiMock.checkout.mockResolvedValue(
+      sold({
+        order: { code: "", total: "0.00", url: null },
+        deposit_refund: "2.00",
+        net_total: "-2.00",
+      }),
+    );
+    const { user } = show();
+    await ready();
+
+    await user.click(tile("deposit.tile"));
+    await user.click(tile("deposit.tile"));
+    await user.click(screen.getByRole("button", { name: t("sale.charge") }));
+
+    // Nothing to take, so nothing to type: the panel says what to count out.
+    expect(screen.getByText(t("payment.nothingToTake"))).toBeDefined();
+    await confirm(user);
+
+    await waitFor(() =>
+      expect(apiMock.checkout).toHaveBeenCalledWith(
+        pairing,
+        // null, not "0.00": no note crossed the counter.
+        expect.objectContaining({ cash_given: null, expected_total: "-2.00" }),
+      ),
+    );
+    expect(await screen.findByText(t("done.giveBack"))).toBeDefined();
+  });
+
+  it("queues both kinds of line when the server is not there", async () => {
+    apiMock.config.mockResolvedValue(withExtras());
+    apiMock.checkout.mockRejectedValue(new ApiError(0, "network"));
+    const { user } = show();
+    await ready();
+
+    await user.click(screen.getByRole("button", { name: /Bière/ }));
+    await user.click(tile("deposit.tile"));
+    await user.click(screen.getByRole("button", { name: t("sale.charge") }));
+    await confirm(user);
+
+    await screen.findByText(/kept on this till/);
+    // Both lines priced, as an offline sale must be, and each still saying
+    // which kind it is so the replay records it the same way.
+    expect(loadQueue()[0]).toEqual(
+      expect.objectContaining({
+        chargedTotal: "2.00",
+        positions: [
+          { item: 10, variation: null, count: 1, price: "3.00" },
+          { item: 31, variation: null, count: 1, price: "-1.00", refund: true },
+        ],
+      }),
+    );
+  });
+});
+
 describe("when the server is not there", () => {
   it("queues the sale rather than losing it", async () => {
     // The money is in the drawer. There is nowhere else for this sale to go.

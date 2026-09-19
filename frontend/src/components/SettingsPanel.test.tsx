@@ -46,13 +46,21 @@ const events: PosEvent[] = [
 function show(props: Partial<Parameters<typeof SettingsPanel>[0]> = {}) {
   const handlers = {
     onCashierChange: vi.fn(),
+    onThemeChange: vi.fn(),
     onRefresh: vi.fn(),
     onUnpair: vi.fn(),
     onClose: vi.fn(),
     onEventChange: vi.fn(),
   };
   const { container } = render(
-    <SettingsPanel pairing={pairing} currency="EUR" cashier="Ana" {...handlers} {...props} />,
+    <SettingsPanel
+      pairing={pairing}
+      currency="EUR"
+      cashier="Ana"
+      theme="system"
+      {...handlers}
+      {...props}
+    />,
   );
   return { user: userEvent.setup(), container, ...handlers };
 }
@@ -75,6 +83,32 @@ describe("the cashier", () => {
     await user.type(screen.getByLabelText(t("settings.cashier")), "B");
 
     expect(onCashierChange).toHaveBeenCalledWith("B");
+  });
+});
+
+describe("the appearance", () => {
+  it("shows which palette the till is on", () => {
+    show({ theme: "light" });
+
+    expect(
+      screen.getByRole("button", { name: t("settings.themeLight"), pressed: true }),
+    ).toBeDefined();
+  });
+
+  it("hands the choice up so it can be saved", async () => {
+    const { user, onThemeChange } = show({ theme: "system" });
+
+    await user.click(screen.getByRole("button", { name: t("settings.themeDark") }));
+
+    expect(onThemeChange).toHaveBeenCalledWith("dark");
+  });
+
+  it("offers following the tablet as well as the two palettes", () => {
+    show();
+
+    for (const label of ["settings.themeSystem", "settings.themeLight", "settings.themeDark"] as const) {
+      expect(screen.getByRole("button", { name: t(label) })).toBeDefined();
+    }
   });
 });
 
@@ -104,6 +138,20 @@ describe("the takings", () => {
 
     await waitFor(() =>
       expect(screen.getByText(t("summary.cancellations", { n: 2 }))).toBeDefined(),
+    );
+  });
+
+  it("says out loud that deposits handed back are netted off too", async () => {
+    // A night of returned cups is money out of the drawer with not one sale
+    // to show for it, so the figure above can look wrong when it is right.
+    summary.mockResolvedValue({
+      ...takings,
+      event: { ...takings.event, deposit_refunds: 7 },
+    });
+    show();
+
+    await waitFor(() =>
+      expect(screen.getByText(t("summary.depositRefunds", { n: 7 }))).toBeDefined(),
     );
   });
 

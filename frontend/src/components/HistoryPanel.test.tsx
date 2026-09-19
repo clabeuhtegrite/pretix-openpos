@@ -449,3 +449,76 @@ describe("getting back to the till", () => {
     expect(screen.queryByRole("button", { name: t("settings.close") })).toBeNull();
   });
 });
+
+describe("a deposit handed back", () => {
+  const refund = saleLine({
+    seq: 14,
+    kind: "deposit_refund",
+    // No order behind it: pretix cannot hold one worth less than nothing.
+    order: "",
+    total: "-3.00",
+    can_cancel: false,
+    positions: [
+      {
+        item: 30, item_name: "Consigne", variation: null, variation_name: null,
+        count: 3, unit_price: "-1.00", line_total: "-3.00",
+      },
+    ],
+  });
+
+  it("says what it is, rather than trailing a blank order code", async () => {
+    history.mockResolvedValue({ device: "TILL1", results: [refund], truncated: false });
+    show();
+
+    expect(
+      await screen.findByRole("button", { name: new RegExp(t("deposit.tile")) }),
+    ).toBeDefined();
+  });
+
+  it("reads as money going out", async () => {
+    history.mockResolvedValue({ device: "TILL1", results: [refund], truncated: false });
+    const { container } = show();
+    await screen.findByRole("button", { name: new RegExp(t("deposit.tile")) });
+
+    expect(screen.getByText(formatMoney(-300, "EUR"))).toBeDefined();
+    expect(container.querySelector(".history-row-total.is-negative")).not.toBeNull();
+  });
+
+  it("cannot be reversed from the till", async () => {
+    // There is no order to credit. Taking the deposit again is a deposit
+    // sold, which is one tap away on the grid.
+    history.mockResolvedValue({ device: "TILL1", results: [refund], truncated: false });
+    const { user } = show();
+
+    await user.click(
+      await screen.findByRole("button", { name: new RegExp(t("deposit.tile")) }),
+    );
+
+    expect(screen.getByText(t("history.notCancellable"))).toBeDefined();
+    expect(screen.queryByRole("button", { name: t("history.cancel") })).toBeNull();
+  });
+});
+
+describe("a free amount in the journal", () => {
+  it("shows the reason where the product name would be", async () => {
+    // "Divers" is the same word on every one of them and answers nothing.
+    history.mockResolvedValue({
+      device: "TILL1",
+      results: [
+        saleLine({
+          positions: [{
+            item: 30, item_name: "Divers", variation: null, variation_name: null,
+            count: 1, unit_price: "12.50", line_total: "12.50",
+            description: "Verre cassé",
+          }],
+        }),
+      ],
+      truncated: false,
+    });
+    const { user } = show();
+
+    await user.click(await screen.findByRole("button", { name: /POS01/ }));
+
+    expect(screen.getByText("Verre cassé")).toBeDefined();
+  });
+});

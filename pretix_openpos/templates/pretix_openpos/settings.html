@@ -27,6 +27,19 @@
         {% bootstrap_form_errors form %}
         {% bootstrap_field form.openpos_checkin_list layout="horizontal" %}
         {% bootstrap_field form.openpos_invoices layout="horizontal" %}
+
+        <fieldset>
+            <legend>{% trans "Extra buttons at the till" %}</legend>
+            <p class="text-muted">
+                {% blocktrans trimmed %}
+                    Both are off until you name a product for them. Each one needs a quota,
+                    unlimited if need be, and availability on the <strong>Open POS</strong>
+                    channel — the same as any other product sold at the door.
+                {% endblocktrans %}
+            </p>
+            {% bootstrap_field form.openpos_custom_item layout="horizontal" %}
+            {% bootstrap_field form.openpos_deposit_item layout="horizontal" %}
+        </fieldset>
         <div class="form-group submit-group">
             <button type="submit" class="btn btn-primary btn-save">
                 {% trans "Save" %}
