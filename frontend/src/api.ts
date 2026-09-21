@@ -2,7 +2,7 @@ import { markReachable, markUnreachable } from "./connectivity";
 import type {
   Attendance, AttendeeMatch, CancelResult, Catalog, History, InitializeResponse,
   OfflineSnapshot, Pairing, PosConfig, PosEvent, RedeemResult, SaleResult,
-  SummaryResponse,
+  SummaryResponse, TerminalPayment,
 } from "./types";
 
 const BASE = "/api/v1";
@@ -134,6 +134,26 @@ export function isRetryable(error: unknown): boolean {
   return error instanceof ApiError && (error.isNetwork || error.status >= 500);
 }
 
+/**
+ * One basket line on its way to the server: products and quantities.
+ *
+ * The same payload for a checkout and for a card reader, because it is the
+ * same statement — here is what the customer is buying, you price it. The one
+ * price that travels is a free amount's, which is the only figure the till is
+ * ever allowed to decide.
+ */
+export interface PositionPayload {
+  item: number;
+  variation: number | null;
+  count: number;
+  /** Only a replayed offline sale, or a free amount, carries one. */
+  price?: string;
+  /** What a free amount is for. Its presence is what marks it as one. */
+  description?: string;
+  /** A deposit handed back; the server still decides what it is worth. */
+  refund?: boolean;
+}
+
 export const api = {
   /** Exchange a one-shot pairing code for a long-lived device token. */
   initialize(initializationToken: string): Promise<InitializeResponse> {
@@ -168,17 +188,7 @@ export const api = {
     p: Pairing,
     payload: {
       idempotency_key: string;
-      positions: {
-        item: number;
-        variation: number | null;
-        count: number;
-        /** Only a replayed offline sale, or a free amount, carries one. */
-        price?: string;
-        /** What a free amount is for. Its presence is what marks it as one. */
-        description?: string;
-        /** A deposit handed back; the server still decides what it is worth. */
-        refund?: boolean;
-      }[];
+      positions: PositionPayload[];
       payment_type: string;
       cash_given?: string | null;
       cashier?: string;
@@ -231,6 +241,54 @@ export const api = {
     return request(`/organizers/${p.organizer}/events/${p.event}/openpos/cancel/`, {
       method: "POST",
       body: payload,
+      token: p.token,
+    });
+  },
+
+  /**
+   * Put the basket on this till's card reader.
+   *
+   * Only ever called by a till that has one. The server prices the basket,
+   * keeps what it priced, and charges the card that figure — so the card and
+   * the order cannot end up disagreeing. It answers as soon as SumUp has taken
+   * the request, which is long before the customer has touched anything:
+   * `terminalStatus` is what says how it ended.
+   *
+   * Carries the sale's own idempotency key, because SumUp's reader checkout
+   * has none. A second call under the same key finds the payment already
+   * running instead of charging the card twice.
+   */
+  terminalStart(
+    p: Pairing,
+    payload: { idempotency_key: string; positions: PositionPayload[] },
+  ): Promise<TerminalPayment> {
+    return request(`/organizers/${p.organizer}/events/${p.event}/openpos/terminal/start/`, {
+      method: "POST",
+      body: payload,
+      token: p.token,
+    });
+  },
+
+  /** How the card payment for this basket ended, or that it has not yet. */
+  terminalStatus(p: Pairing, idempotencyKey: string, signal?: AbortSignal): Promise<TerminalPayment> {
+    const params = new URLSearchParams({ idempotency_key: idempotencyKey });
+    return request(
+      `/organizers/${p.organizer}/events/${p.event}/openpos/terminal/status/?${params}`,
+      { token: p.token, signal },
+    );
+  },
+
+  /**
+   * Take the amount back off the reader.
+   *
+   * Best-effort, and the answer says what actually happened rather than what
+   * was asked for: a card tapped in the same second is a payment, and the till
+   * is told so instead of a cancellation that did not take place.
+   */
+  terminalCancel(p: Pairing, idempotencyKey: string): Promise<TerminalPayment> {
+    return request(`/organizers/${p.organizer}/events/${p.event}/openpos/terminal/cancel/`, {
+      method: "POST",
+      body: { idempotency_key: idempotencyKey },
       token: p.token,
     });
   },

@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, time, timedelta
 from decimal import Decimal
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Count, Exists, OuterRef, Sum
 from django.utils.timezone import make_aware, now
 from django.utils.translation import gettext_lazy as _
@@ -23,10 +23,17 @@ from rest_framework.response import Response
 from .. import __version__
 from ..channels import POS_CHANNEL, PosSalesChannelType
 from ..invoicing import pos_invoices_enabled
-from ..models import PosPrice, PosSale
+from ..models import PosDevice, PosPrice, PosSale, PosTerminalPayment
 from ..payment import CARD, CASH
+from ..sumup import SumUpAccount, SumUpError, still_running, succeeded
+from ..webhook import webhook_url
 
 logger = logging.getLogger(__name__)
+
+#: The cashier takes the card themselves and tells the till so. No reader.
+CARD_DECLARED = "declared"
+#: A reader is assigned to this device and is the only way to pay by card on it.
+CARD_TERMINAL = "terminal"
 
 
 def get_pos_channel(organizer):
@@ -177,6 +184,176 @@ def refund_key(idempotency_key: str) -> str:
     return f"{idempotency_key}:refund"
 
 
+class ResolvedLine:
+    """One basket line, priced, with everything the caller needs downstream."""
+
+    __slots__ = ("item", "variation", "price", "tariff", "count", "description", "refund")
+
+    def __init__(self, *, item, variation, price, tariff, count, description, refund):
+        self.item = item
+        self.variation = variation
+        #: What the customer is charged for one of these.
+        self.price = price
+        #: What the catalogue says one costs, for the two to be compared.
+        self.tariff = tariff
+        self.count = count
+        self.description = description
+        self.refund = refund
+
+
+def resolve_line(line, *, sellable, overrides, custom_item, deposit, settled):
+    """
+    Price one line of a basket, and refuse the ones that may not be sold.
+
+    The single place a line's price is decided, and it has to stay that way:
+    the card reader is charged from here at the moment the cardholder is asked,
+    and the order is booked from here afterwards. Two implementations of these
+    rules would eventually charge one figure and book another.
+
+    ``settled`` says the money has already changed hands — a sale replayed from
+    a till that was cut off, or one the card reader has already taken. It buys
+    two things. Prices come from the line rather than from the catalogue,
+    because what was charged is a fact and not a proposal; and a catalogue that
+    has moved since stops being a reason to refuse, because refusing does not
+    give the money back, it only strands the sale outside pretix.
+    """
+    item = sellable.get(line["item"])
+    if item is None:
+        raise ValidationError(
+            {"positions": [_("Product {id} is not on sale at the till.").format(id=line["item"])]}
+        )
+
+    variations = list(item.variations.all())
+    variation = None
+    if line["variation"] is not None:
+        variation = next((v for v in variations if v.pk == line["variation"]), None)
+        if variation is None or (not variation.active and not settled):
+            raise ValidationError(
+                {"positions": [_("Unknown option for product {name}.").format(name=str(item.name))]}
+            )
+    elif variations:
+        raise ValidationError(
+            {"positions": [_("Product {name} requires an option to be chosen.").format(name=str(item.name))]}
+        )
+
+    description = line["description"].strip()
+    is_refund = line["refund"]
+    sent_price = line["price"]
+    if sent_price is not None and not isinstance(sent_price, Decimal):
+        # A line the serializer validated arrives as a Decimal; one read back
+        # out of a pinned basket arrives as the string JSON stored. Everything
+        # below does arithmetic with it, so the conversion belongs here — the
+        # one place a line's price is decided — rather than at each caller.
+        sent_price = Decimal(str(sent_price))
+
+    tariff = resolve_price(overrides, item, variation)
+    if is_refund:
+        # A deposit handed back is worth exactly what the deposit costs,
+        # negated here rather than sent: the till names the product, the server
+        # prices it, as everywhere else.
+        tariff = -tariff
+        if not settled and (deposit is None or item.pk != deposit.pk):
+            raise ValidationError(
+                {"positions": [_("This product is not the one deposits are taken on.")]}
+            )
+    elif description and not settled:
+        if custom_item is None or item.pk != custom_item.pk:
+            raise ValidationError(
+                {"positions": [_("Free amounts can only be sold on the product set aside for them.")]}
+            )
+        if sent_price is None or sent_price <= Decimal("0.00"):
+            raise ValidationError(
+                {"positions": [_("A free amount has to be more than nothing.")]}
+            )
+        # The one price the till decides. It is not compared with the tariff and
+        # never reported as off-tariff: the product's own price is a placeholder
+        # that no free-amount sale is charged at.
+        tariff = sent_price
+
+    # A settled line always has one: an offline sale is refused whole by
+    # CheckoutSerializer unless every line carries what was charged, and a
+    # basket pinned for the card reader was priced here in the first place.
+    price = sent_price if settled else tariff
+
+    return ResolvedLine(
+        item=item,
+        variation=variation,
+        price=price,
+        tariff=tariff,
+        count=line["count"],
+        description=description,
+        refund=is_refund,
+    )
+
+
+def sellable_items(event, channel, *, settled):
+    """
+    What may be sold — and, for a sale already paid for, what may be recorded.
+
+    An online sale is refused unless the product is on the till's channel right
+    now: nothing has been taken, so refusing costs a tap. A sale that has
+    already been paid for is a different question — the catalogue may well have
+    moved since, and refusing then does not undo the sale.
+    """
+    items = event.items.all()
+    if not settled:
+        items = items.filter_available(channel=channel)
+    return {item.pk: item for item in items.prefetch_related("variations")}
+
+
+def settle_terminal_payment(payment, account):
+    """
+    Ask SumUp what became of a reader payment, and write it down.
+
+    The only place a payment is allowed to become successful, and the reason
+    the unsigned callback is harmless: that callback causes this to run, and
+    this asks the Transactions API over an authenticated connection. The till
+    polls into the same function on a timer, so an installation SumUp cannot
+    reach settles every payment anyway, a second or two later.
+    """
+    if payment.settled:
+        return payment
+    try:
+        transaction_data = account.transaction(payment.client_transaction_id)
+    except SumUpError as exc:
+        if exc.retryable:
+            # Nothing is written. "We could not ask" is not "it failed", and
+            # writing the latter would lose a payment that went through while
+            # a cable was out — money taken, no sale, and nothing to point at.
+            return payment
+        payment.status = PosTerminalPayment.STATUS_FAILED
+        payment.failure = str(exc.message)[:190]
+        payment.save(update_fields=["status", "failure", "updated"])
+        return payment
+
+    if still_running(transaction_data):
+        return payment
+
+    if succeeded(transaction_data):
+        payment.status = PosTerminalPayment.STATUS_SUCCESSFUL
+        # Kept rather than looked up again: this is what a refund needs, and by
+        # the time one is asked for it is the shortest way back to the money.
+        payment.transaction_id = str(transaction_data.get("id") or "")
+    else:
+        payment.status = PosTerminalPayment.STATUS_FAILED
+        payment.failure = str(transaction_data.get("status") or "")[:190]
+    payment.save(update_fields=["status", "transaction_id", "failure", "updated"])
+    return payment
+
+
+def card_mode(pos_device) -> str:
+    """
+    How this device is allowed to take a card payment.
+
+    ``"terminal"`` once a reader is assigned to it: the money goes through that
+    reader, and the server will not record a card sale the reader did not
+    validate. ``"declared"`` otherwise, which is what every till has done until
+    now and what the door goes on doing — the cashier takes the card in the
+    vendor's own app on their phone and tells the till it happened.
+    """
+    return CARD_TERMINAL if pos_device.drives_terminal else CARD_DECLARED
+
+
 def plugin_enabled(event) -> bool:
     return "pretix_openpos" in event.get_plugins()
 
@@ -245,6 +422,7 @@ class OpenPosViewSet(viewsets.ViewSet):
     def config(self, request, **kwargs):
         event = request.event
         device = request.auth if isinstance(request.auth, Device) else None
+        pos_device = PosDevice.for_device(device)
         clist = checkin_list_for(event)
         custom = custom_sale_item(event)
         deposit = deposit_item(event)
@@ -271,6 +449,15 @@ class OpenPosViewSet(viewsets.ViewSet):
                 "device": {
                     "serial": device.unique_serial if device else None,
                     "name": device.name if device else None,
+                    # What this device is for. Empty means nobody has said, and
+                    # the app then behaves as it always has — the till, with the
+                    # door one tap away. See PosDevice.
+                    "role": pos_device.role,
+                    # Whether a card payment here has to come from a reader this
+                    # device drives. The app reads it to decide what the payment
+                    # panel offers; the server does not take the app's word for
+                    # it and checks the same thing again at checkout.
+                    "card": card_mode(pos_device),
                 },
                 "checkin": {
                     # The list tickets are checked in on when they are sold.
@@ -428,27 +615,68 @@ class OpenPosViewSet(viewsets.ViewSet):
                 body["checkin_errors"] = checkin_errors
             return Response(body, status=status.HTTP_200_OK)
 
+        # A till that drives a card reader may not record a card payment the
+        # reader did not validate.
+        #
+        # Checked here rather than left to the app, and that is the whole point
+        # of the rule: the app is a page in a browser on a tablet that lives on
+        # a counter, and it can be stale — a till left open across the deploy
+        # that assigned the reader is stale by definition — or simply edited.
+        # Whatever it believes it is allowed to do, this is what decides.
+        #
+        # It applies to a replayed sale as well as to one being rung up now,
+        # which is the one place this departs from the rule of thumb elsewhere
+        # in this endpoint that a sale already paid for is recorded whatever the
+        # catalogue has since done. The difference is what the two refusals
+        # cost: there, refusing strands money that genuinely changed hands;
+        # here, accepting writes down a card payment nobody can point at. And a
+        # reader payment cannot happen while the till is cut off anyway — the
+        # reader is driven through SumUp's cloud, so a till with no network
+        # cannot start one.
+        pos_device = PosDevice.for_device(device)
+        terminal = None
+        if (
+            data["payment_type"] == PosSale.PAYMENT_CARD
+            and pos_device.drives_terminal
+        ):
+            terminal = PosTerminalPayment.objects.filter(
+                event=event, idempotency_key=idempotency_key
+            ).first()
+            if (
+                terminal is None
+                or terminal.status != PosTerminalPayment.STATUS_SUCCESSFUL
+                or not terminal.belongs_to(device)
+            ):
+                raise ValidationError(
+                    {
+                        "payment_type": [
+                            _(
+                                "This till has a card reader assigned, so a card "
+                                "payment has to be validated by the reader. Take "
+                                "this payment on the reader, or in cash."
+                            )
+                        ],
+                        "code": "terminal_required",
+                    }
+                )
+
         channel = get_pos_channel(event.organizer)
         overrides = pos_price_overrides(event)
         offline = data.get("offline")
+        # The money is already out of the customer's hands: replayed from a
+        # till that was cut off, or taken by the card reader a moment ago.
+        settled = bool(offline) or terminal is not None
+        if terminal is not None:
+            # The basket comes from the row written when the cardholder was
+            # asked for the money, not from what the app sends now. Anything
+            # else would let the order drift from the card charge — through a
+            # tariff edited in between, or through an app sending one basket to
+            # the reader and another to the journal.
+            data["positions"] = terminal.positions
         custom_item = custom_sale_item(event)
         deposit = deposit_item(event)
 
-        # What may be sold — and, for a replay, what may be *recorded*, which is
-        # not the same question.
-        #
-        # An online sale is refused unless the product is on the till's channel
-        # right now: nothing has been taken, so refusing costs a tap. A sale
-        # replayed from a till that was cut off has already been paid for and
-        # the ticket is in somebody's hand; the catalogue may well have moved in
-        # the meantime — the product pulled from the channel at the end of the
-        # evening, an option deactivated. Refusing then does not undo the sale,
-        # it strands it in a browser, outside pretix and outside the journal.
-        # So a replay is resolved against everything the event still knows.
-        items = event.items.all()
-        if not offline:
-            items = items.filter_available(channel=channel)
-        sellable = {item.pk: item for item in items.prefetch_related("variations")}
+        sellable = sellable_items(event, channel, settled=settled)
 
         api_positions = []
         journal_positions = []
@@ -462,70 +690,32 @@ class OpenPosViewSet(viewsets.ViewSet):
         notes = []
 
         for line in data["positions"]:
-            item = sellable.get(line["item"])
-            if item is None:
-                raise ValidationError(
-                    {"positions": [_("Product {id} is not on sale at the till.").format(id=line["item"])]}
-                )
-
-            variations = list(item.variations.all())
-            variation = None
-            if line["variation"] is not None:
-                variation = next((v for v in variations if v.pk == line["variation"]), None)
-                # Same reasoning as the catalogue above: an option that has been
-                # switched off since the sale was rung up is still the option the
-                # customer paid for.
-                if variation is None or (not variation.active and not offline):
-                    raise ValidationError(
-                        {"positions": [_("Unknown option for product {name}.").format(name=str(item.name))]}
-                    )
-            elif variations:
-                raise ValidationError(
-                    {"positions": [_("Product {name} requires an option to be chosen.").format(name=str(item.name))]}
-                )
-
-            description = line["description"].strip()
-            is_refund = line["refund"]
-
-            # The tariff, and then the three ways a line can end up costing
-            # something else. Everything below still resolves the tariff first,
-            # because it is what an offline replay is compared against.
-            tariff = resolve_price(overrides, item, variation)
-            if is_refund:
-                # A deposit handed back is worth exactly what the deposit
-                # costs, negated here rather than sent: the till names the
-                # product, the server prices it, as everywhere else.
-                tariff = -tariff
-                if not offline and (deposit is None or item.pk != deposit.pk):
-                    # Not the product the organiser set aside for this. Refused
-                    # online, where nothing has been taken yet; a replay from a
-                    # till that was cut off is past arguing about — see below.
-                    raise ValidationError(
-                        {"positions": [_("This product is not the one deposits are taken on.")]}
-                    )
-            elif description and not offline:
-                if custom_item is None or item.pk != custom_item.pk:
-                    raise ValidationError(
-                        {"positions": [_("Free amounts can only be sold on the product set aside for them.")]}
-                    )
-                if line["price"] <= Decimal("0.00"):
-                    raise ValidationError(
-                        {"positions": [_("A free amount has to be more than nothing.")]}
-                    )
-                # The one price the till decides. It is not compared with the
-                # tariff and never reported as off-tariff: the product's own
-                # price is a placeholder that no free-amount sale is charged at.
-                tariff = line["price"]
+            resolved = resolve_line(
+                line,
+                sellable=sellable,
+                overrides=overrides,
+                custom_item=custom_item,
+                deposit=deposit,
+                settled=settled,
+            )
+            item = resolved.item
+            variation = resolved.variation
+            price = resolved.price
+            tariff = resolved.tariff
+            count = resolved.count
+            description = resolved.description
+            is_refund = resolved.refund
 
             # A sale rung up offline was priced by the app from the tariff it had
             # cached, and the customer has already paid that. The order is
             # therefore created at what was charged — anything else would print
             # an invoice for a sum nobody handed over — and the divergence is
-            # reported rather than smoothed away. A free amount offline is the
-            # same story with no tariff to diverge from, so it is left out of
-            # the comparison.
-            price = line["price"] if offline else tariff
-            if offline and price != tariff and not description:
+            # reported rather than smoothed away. A free amount is the same
+            # story with no tariff to diverge from, so it is left out of the
+            # comparison. A card payment the reader has already taken is priced
+            # from the row written when the cardholder was asked, so it can
+            # diverge the same way and is reported the same way.
+            if settled and price != tariff and not description:
                 off_tariff.append(
                     {
                         "item": item.pk,
@@ -534,7 +724,6 @@ class OpenPosViewSet(viewsets.ViewSet):
                         "tariff": str(tariff),
                     }
                 )
-            count = line["count"]
 
             journal_line = {
                 "item": item.pk,
@@ -551,7 +740,7 @@ class OpenPosViewSet(viewsets.ViewSet):
                 # a few lines further down.
                 journal_line["description"] = description
                 notes.append(f"{count}× {item.name} — {description}")
-            if offline and price != tariff and not description:
+            if settled and price != tariff and not description:
                 # Kept on the line itself, so the divergence survives in the
                 # journal even after the tariff has been edited again.
                 journal_line["tariff_price"] = str(tariff)
@@ -581,7 +770,12 @@ class OpenPosViewSet(viewsets.ViewSet):
         net_total = sale_total + refund_total
 
         expected = data["expected_total"]
-        if expected is not None and expected != net_total:
+        # Not checked once the reader has the money: the basket being priced
+        # here *is* the one the card paid for, pinned when the cardholder was
+        # asked, so the two cannot disagree. If they somehow did, refusing
+        # would leave a charged card with no order behind it — which is the one
+        # outcome worth more than a mismatched figure.
+        if terminal is None and expected is not None and expected != net_total:
             # Refuse rather than charge a different amount than the one the
             # customer was told. The app reloads its catalogue and shows the new
             # basket; nothing has been taken at this point.
@@ -633,7 +827,7 @@ class OpenPosViewSet(viewsets.ViewSet):
             # to reconcile afterwards, not a reason to leave a paid sale with no
             # order behind it. The journal marks the row `offline`, so exactly
             # these sales can be found again.
-            "force": bool(offline),
+            "force": settled,
             "payment_provider": CASH if data["payment_type"] == PosSale.PAYMENT_CASH else CARD,
             # When the money was taken. For a sale replayed from a till that was
             # offline that is not now — the order is created late, but it was
@@ -746,6 +940,212 @@ class OpenPosViewSet(viewsets.ViewSet):
         return Response(body, status=status.HTTP_201_CREATED)
 
     # -- offline snapshot ---------------------------------------------------
+
+    # -- the card reader ---------------------------------------------------
+
+    def _terminal_context(self, request):
+        """The reader this till drives, refusing every till that drives none."""
+        device = request.auth if isinstance(request.auth, Device) else None
+        pos_device = PosDevice.for_device(device)
+        if not pos_device.drives_terminal:
+            raise ValidationError(
+                {"detail": [_("No card reader is assigned to this till.")],
+                 "code": "no_terminal"}
+            )
+        return device, pos_device, SumUpAccount(request.event.organizer)
+
+    def _terminal_payload(self, payment):
+        return {
+            "status": payment.status,
+            "amount": str(payment.amount),
+            "currency": payment.currency,
+            "failure": payment.failure,
+        }
+
+    @action(detail=False, methods=["post"], url_path="terminal/start", url_name="terminal-start")
+    def terminal_start(self, request, **kwargs):
+        """
+        Put the basket on the reader and let the cardholder answer it.
+
+        The amount is priced here, by the same code that books the order, and
+        the priced basket is kept: what the card is charged and what the order
+        says are the same figures by construction rather than by comparison.
+        """
+        from .serializers import TerminalStartSerializer
+
+        event = request.event
+        device, _pos_device, account = self._terminal_context(request)
+
+        serializer = TerminalStartSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        idempotency_key = data["idempotency_key"]
+
+        # A second tap, a retried request, or a till that reloaded mid-payment.
+        # SumUp's reader checkout has no idempotency key of its own, so this is
+        # the only thing standing between a double tap and a double charge.
+        existing = PosTerminalPayment.objects.filter(
+            event=event, idempotency_key=idempotency_key
+        ).first()
+        if existing:
+            return Response(
+                self._terminal_payload(settle_terminal_payment(existing, account)),
+                status=status.HTTP_200_OK,
+            )
+
+        channel = get_pos_channel(event.organizer)
+        overrides = pos_price_overrides(event)
+        custom_item = custom_sale_item(event)
+        deposit = deposit_item(event)
+        sellable = sellable_items(event, channel, settled=False)
+
+        priced = []
+        total = Decimal("0.00")
+        quota_cache = {}
+        for line in data["positions"]:
+            resolved = resolve_line(
+                line,
+                sellable=sellable,
+                overrides=overrides,
+                custom_item=custom_item,
+                deposit=deposit,
+                settled=False,
+            )
+            total += resolved.price * resolved.count
+            if not resolved.refund:
+                # Checked before the money moves, not after. It is not airtight
+                # against two tills selling the last ticket in the same second
+                # — the order is created a moment later, and is forced through
+                # by then because refusing a paid card would be worse — but it
+                # is what stops a sold-out product reaching a cardholder.
+                quotas = (
+                    resolved.variation.quotas.all()
+                    if resolved.variation
+                    else resolved.item.quotas.all()
+                )
+                available = quota_availability(quotas, quota_cache)
+                if available is not None and available < resolved.count:
+                    raise ValidationError(
+                        {"positions": [
+                            _("{name} is sold out.").format(name=str(resolved.item.name))
+                        ], "code": "sold_out"}
+                    )
+            priced.append(
+                {
+                    "item": resolved.item.pk,
+                    "variation": resolved.variation.pk if resolved.variation else None,
+                    "count": resolved.count,
+                    "price": str(resolved.price),
+                    "description": resolved.description,
+                    "refund": resolved.refund,
+                }
+            )
+
+        if total <= Decimal("0.00"):
+            # There is no such thing as a card payment for nothing, and none
+            # for less than nothing either. A basket that nets out at or below
+            # zero is money leaving the drawer — a returned deposit, mostly —
+            # and SumUp cannot send money to a card that no transaction of its
+            # own stands behind. The drawer is the only way out, and saying so
+            # here beats a reader that sits waiting for a card that can never
+            # settle it.
+            raise ValidationError(
+                {"detail": [_("Nothing is due on this basket. Settle it in cash.")],
+                 "code": "nothing_to_charge"}
+            )
+
+        try:
+            payment = PosTerminalPayment.objects.create(
+                event=event,
+                device=device,
+                device_serial=device.unique_serial if device else "",
+                idempotency_key=idempotency_key,
+                reader_id=_pos_device.sumup_reader_id,
+                amount=total,
+                currency=event.currency,
+                positions=priced,
+                status=PosTerminalPayment.STATUS_PENDING,
+            )
+        except IntegrityError:
+            # Two taps in the same second: the look-up above found nothing for
+            # either of them and the unique key let one through. The loser
+            # takes the winner's payment rather than faulting, which is the
+            # same answer a second tap gets a moment later.
+            existing = PosTerminalPayment.objects.filter(
+                event=event, idempotency_key=idempotency_key
+            ).first()
+            if existing is None:
+                raise
+            return Response(
+                self._terminal_payload(settle_terminal_payment(existing, account)),
+                status=status.HTTP_200_OK,
+            )
+        # Written before the reader is asked, deliberately: if this process
+        # dies between the two, the row is there to be settled from SumUp
+        # rather than a charge nobody in pretix has ever heard of. The reverse
+        # order would lose exactly the payments that matter most.
+        try:
+            payment.client_transaction_id = account.start_checkout(
+                _pos_device.sumup_reader_id,
+                amount=total,
+                currency=event.currency,
+                description=f"{event.name} · {device.name if device else ''}".strip(" ·"),
+                return_url=webhook_url(event.organizer),
+            )
+        except SumUpError as exc:
+            payment.status = PosTerminalPayment.STATUS_FAILED
+            payment.failure = str(exc.message)
+            payment.save(update_fields=["status", "failure", "updated"])
+            raise ValidationError(
+                {"detail": [exc.message], "code": "terminal_unreachable"}
+            )
+        payment.save(update_fields=["client_transaction_id", "updated"])
+
+        return Response(self._terminal_payload(payment), status=status.HTTP_201_CREATED)
+
+    @action(detail=False, methods=["get"], url_path="terminal/status", url_name="terminal-status")
+    def terminal_status(self, request, **kwargs):
+        """Where a payment has got to. Polled by the till while it waits."""
+        _device, _pos_device, account = self._terminal_context(request)
+        payment = PosTerminalPayment.objects.filter(
+            event=request.event, idempotency_key=request.query_params.get("idempotency_key", "")
+        ).first()
+        if payment is None:
+            raise ValidationError(
+                {"detail": [_("No card payment was started for this basket.")],
+                 "code": "no_payment"}
+            )
+        return Response(self._terminal_payload(settle_terminal_payment(payment, account)))
+
+    @action(detail=False, methods=["post"], url_path="terminal/cancel", url_name="terminal-cancel")
+    def terminal_cancel(self, request, **kwargs):
+        """
+        Take the amount back off the reader.
+
+        Best-effort, and honestly so: SumUp confirms nothing, and the device
+        only obeys while it is still waiting for the cardholder. So the answer
+        is whatever the payment turns out to be afterwards, not whatever was
+        asked for — a card tapped in the same second is a payment, and the till
+        has to be told that rather than a cancellation that did not happen.
+        """
+        _device, pos_device, account = self._terminal_context(request)
+        payment = PosTerminalPayment.objects.filter(
+            event=request.event,
+            idempotency_key=request.data.get("idempotency_key", ""),
+        ).first()
+        if payment is None:
+            raise ValidationError(
+                {"detail": [_("No card payment was started for this basket.")],
+                 "code": "no_payment"}
+            )
+        if not payment.settled:
+            try:
+                account.terminate_checkout(pos_device.sumup_reader_id)
+            except SumUpError:
+                # Already finished, already gone, or unreachable. Asking SumUp
+                # what actually happened answers all three.
+                pass
+        return Response(self._terminal_payload(settle_terminal_payment(payment, account)))
 
     @action(detail=False, methods=["get"], url_path="offline", url_name="offline")
     def offline(self, request, **kwargs):
@@ -882,10 +1282,16 @@ class OpenPosViewSet(viewsets.ViewSet):
         ).first()
         if replay:
             original = PosSale.objects.filter(event=event, seq=replay.cancels_seq).first()
-            return Response(
-                self._cancellation_payload(replay, original, replayed=True),
-                status=status.HTTP_200_OK,
+            body = self._cancellation_payload(replay, original, replayed=True)
+            # Asked again rather than remembered, and for a reason: the first
+            # attempt may have committed the cancellation and then lost the
+            # connection before it refunded the card. This is what finishes the
+            # job — and when it did run, it answers "already" rather than
+            # sending the money a second time.
+            body["card_refund"] = (
+                self._refund_card(event, original) if original else "none"
             )
+            return Response(body, status=status.HTTP_200_OK)
 
         sale = PosSale.objects.filter(event=event, seq=data["seq"]).select_related("order").first()
         if sale is None:
@@ -951,7 +1357,63 @@ class OpenPosViewSet(viewsets.ViewSet):
         body = self._cancellation_payload(cancellation, sale, replayed=False)
         body["credit_note"] = self._credit_note_number(order)
         body["refunded"] = refund is not None
+        # Deliberately after the transaction has committed. Sending money back
+        # is a call to somebody else's server: holding a database transaction
+        # open across it would keep a row locked for as long as SumUp takes,
+        # and rolling the cancellation back afterwards could not un-send it.
+        # So the cancellation stands first, and the card is a separate step
+        # whose outcome is reported rather than assumed.
+        body["card_refund"] = self._refund_card(event, sale)
         return Response(body, status=status.HTTP_201_CREATED)
+
+    def _refund_card(self, event, sale):
+        """
+        Give a card sale's money back through SumUp, when there is a card to
+        give it back to.
+
+        Returns what the till should tell the operator:
+
+        ``none``
+            Nothing to do here — a cash sale, or a card taken on somebody's
+            phone rather than on a reader this server drove. The operator
+            refunds those the way they took them.
+        ``done``
+            SumUp accepted the refund.
+        ``already``
+            It had been refunded before. Not an error, and not a second refund.
+        ``failed``
+            The money is still on the customer's card. The operator has to
+            refund it from the SumUp app, and has to be told so plainly rather
+            than shown a cancellation that looks complete.
+        """
+        if sale.payment_type != PosSale.PAYMENT_CARD:
+            return "none"
+        payment = PosTerminalPayment.objects.filter(
+            event=event,
+            idempotency_key=sale.idempotency_key,
+            status=PosTerminalPayment.STATUS_SUCCESSFUL,
+        ).first()
+        if payment is None or not payment.transaction_id:
+            return "none"
+        if payment.refunded:
+            return "already"
+
+        try:
+            # In full, and without naming an amount: what goes back is what the
+            # card was charged, which is not always what the order is worth — a
+            # basket with a deposit handed back in it charges the net. SumUp
+            # refunds the transaction, so the transaction's own figure is the
+            # right one and the only one that cannot be got wrong here.
+            SumUpAccount(event.organizer).refund(payment.transaction_id)
+        except SumUpError as exc:
+            logger.warning(
+                "POS card refund failed for journal #%s: %s", sale.seq, exc.detail
+            )
+            return "failed"
+
+        payment.refunded = now()
+        payment.save(update_fields=["refunded", "updated"])
+        return "done"
 
     # -- takings -----------------------------------------------------------
 

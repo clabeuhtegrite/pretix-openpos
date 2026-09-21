@@ -271,6 +271,37 @@ def staff(organizer, event, email, permissions):
 
 
 @pytest.fixture
+def sumup(organizer, monkeypatch):
+    """
+    A SumUp account this organizer is set up with, answered in memory.
+
+    Patches the one function the plugin uses to reach SumUp, so a test that
+    forgets to go through here gets a connection error rather than a live call.
+    """
+    from pretix_openpos import sumup as sumup_module
+
+    from .sumup_stub import FakeSumUp
+
+    fake = FakeSumUp()
+    organizer.settings.set("openpos_sumup_merchant_code", fake.merchant)
+    organizer.settings.set("openpos_sumup_api_key", "sup_sk_test")
+    monkeypatch.setattr(sumup_module.requests, "request", fake.request)
+    return fake
+
+
+@pytest.fixture
+def reader_till(device, sumup):
+    """The till of the `till` fixture, with a paired reader assigned to it."""
+    from pretix_openpos.models import PosDevice
+
+    reader_id = sumup.add_reader()
+    PosDevice.objects.create(
+        device=device, role=PosDevice.ROLE_TILL, sumup_reader_id=reader_id
+    )
+    return reader_id
+
+
+@pytest.fixture
 def backoffice(organizer, event):
     """A logged-in session that may do everything on the event."""
     return staff(organizer, event, "boss@example.org", None)

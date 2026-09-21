@@ -32,6 +32,22 @@ the scope section before deciding it fits.
   now, counted over admission products only and across every door and till.
   Tapping it opens a flow chart of tickets expected → admitted → on site →
   scanned back out, with the breakdown per product.
+- **A role per device**: a tablet is the bar *till* or the *door*, assigned in
+  the back office. A till opens on the product grid; a door opens on the scanner
+  and steps out to the grid to sell a ticket on the spot. A device nobody has
+  assigned keeps doing both, so the split takes effect only where it is chosen.
+  The role is stored server-side rather than in the app, which is what makes the
+  one rule attached to it enforceable: a till with a card reader assigned cannot
+  record a card payment that reader did not validate — not from a stale app, not
+  from an edited one, and not from the offline queue.
+- **A SumUp card reader, driven by the server.** Pair a SumUp Solo to your
+  account from the back office, give it to a till, and choosing "card" there
+  puts the basket on the reader and waits for the customer. The server prices
+  the basket when it asks for the card and books the order from that same
+  priced basket, so the charge and the order cannot disagree. Cancelling such a
+  sale refunds the card by itself. SumUp's callback is never believed — it only
+  makes the server go and ask over an authenticated connection — so an
+  installation SumUp cannot reach works identically, a second or two slower.
 - A dedicated **`openpos` sales channel**, so a product can be limited to the
   door, kept off it, or made to exist *only* on site.
 - **On-site pricing**: a separate tariff per product, because pretix itself has
@@ -47,12 +63,15 @@ the scope section before deciding it fits.
   return is not a pretix order — an order cannot total less than nothing, and
   the queue at closing time is people returning cups and buying nothing — so it
   is recorded in the till journal, where the takings and the drawer are
-  reconciled.
+  reconciled. Cash only: a card refund is always made against an original
+  transaction, and nothing links cups returned at closing time to the round that
+  sold them.
 - **A light palette as well as a dark one**, following the tablet unless told
   otherwise. Dark does not glare in a dim room; light stays readable at an
   outdoor bar at two in the afternoon.
-- **Cash** with change calculation, and **card** taken on a standalone terminal
-  and recorded against the order.
+- **Cash** with change calculation, and **card** — either taken on a standalone
+  terminal and recorded against the order, or, on a till that has one, taken by
+  a **SumUp card reader the server drives** (see below).
 - Orders land in pretix as ordinary paid orders on the POS channel, with the
   cash/card split visible in pretix' own reporting.
 - **Immediate check-in**: the ticket is checked in as it is sold, so the
@@ -83,6 +102,9 @@ Being clear about this up front will save you an evaluation:
   wait for the network. Selling and scanning do not.
 - **No partial refunds** from the till. A sale is cancelled whole, then rung up
   again corrected; refunding two of three beers is a back-office job.
+- **No open refund to a card.** SumUp only refunds against a transaction of its
+  own, up to its amount, so a returned cup deposit is paid out of the drawer.
+  Cancelling a card sale is a different matter and is fully automatic.
 - **A returned deposit is not in pretix.** It lives in the till journal and its
   CSV export, and it is netted off the takings there. pretix sees the sale that
   went with it and nothing else, which is also the honest reading: the beers
@@ -172,7 +194,7 @@ If you run pretix in Docker or Kubernetes, [`deploy/Dockerfile`](deploy/Dockerfi
 bakes the plugin into the official image:
 
 ```bash
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.1.0 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.11.0 .
 ```
 
 The PWA bundle is built inside the image, from the tree you are building, so the
@@ -216,6 +238,16 @@ rather than to a rolling minor.
    code.
 7. **Open `https://your-pretix/openpos/`** on the tablet, add it to the home
    screen, then launch it from the icon and scan the pairing QR code.
+8. **Say what the device is for** under the organizer's *Open POS → Till
+   devices*: **till** for the bar, **door** for the entrance. Leaving it
+   unassigned is a fine answer and the default — the device then does both, as
+   every device did before this screen existed.
+9. **Optionally, set up a card reader.** Under *Open POS → Card readers*, enter
+   your SumUp merchant code and an API key, then pair a reader with the code it
+   shows on its own screen. Give that reader to a till back on the *Till
+   devices* screen, and that till takes card payments through it and nowhere
+   else — the server refuses a card sale the reader did not validate. Every
+   other device goes on as before.
 
 One device can sell for several events: any event with the plugin enabled shows
 up in *Settings → Event*, and switching does not require re-pairing.
@@ -326,17 +358,13 @@ JavaScript.
 
 Roughly in the order they would earn their keep:
 
-1. **Server-driven Stripe Terminal.** The plugin pushes the amount to a Stripe
-   Reader S700 or WisePOS E through the Stripe API and the app watches for the
-   result. This keeps the PWA a PWA — no native app, no LAN requirement — and is
-   the only realistic path to integrated card payments here.
-2. **A permission model for cancelling.** Reversing a sale works today and is
+1. **A permission model for cancelling.** Reversing a sale works today and is
    scoped to the till that made it; what is missing is a way to say that not
    every volunteer may do it.
-3. **A real cash session**: opening float, blind count at close, Z report.
-4. **Partial refunds**, so two of three beers can be given back without
+2. **A real cash session**: opening float, blind count at close, Z report.
+3. **Partial refunds**, so two of three beers can be given back without
    cancelling the sale whole and ringing it up again.
-5. **Receipt printing** over Star CloudPRNT or Epson ePOS, both of which work
+4. **Receipt printing** over Star CloudPRNT or Epson ePOS, both of which work
    from iOS because they are network protocols rather than Bluetooth.
 
 ## License

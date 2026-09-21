@@ -1,0 +1,197 @@
+{% extends "pretixcontrol/organizers/base.html" %}
+{% load i18n %}
+{% load bootstrap3 %}
+{% block title %}{% trans "Card readers" %}{% endblock %}
+{% block content %}
+    <h1>{% trans "Card readers" %}</h1>
+    <p class="text-muted">
+        {% blocktrans trimmed %}
+            A SumUp reader takes the card itself, so the till never has to be told that a
+            payment happened — it watches it happen. Set up the account here and pair the
+            readers; each one is then given to a till on the <strong>Till devices</strong>
+            screen.
+        {% endblocktrans %}
+    </p>
+
+    <fieldset>
+        <legend>{% trans "SumUp account" %}</legend>
+        <form action="" method="post" class="form-horizontal">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="settings">
+            {% bootstrap_form_errors form %}
+            {% bootstrap_field form.openpos_sumup_merchant_code layout="horizontal" %}
+            {% bootstrap_field form.openpos_sumup_api_key layout="horizontal" %}
+            <div class="form-group submit-group">
+                <button type="submit" class="btn btn-primary btn-save">
+                    {% trans "Save" %}
+                </button>
+            </div>
+        </form>
+    </fieldset>
+
+    {% if not configured %}
+        <div class="alert alert-info">
+            {% blocktrans trimmed %}
+                Enter the merchant code and the API key above, and this page will show the
+                readers on your account.
+            {% endblocktrans %}
+        </div>
+    {% else %}
+        <fieldset>
+            <legend>{% trans "Paired readers" %}</legend>
+
+            {% if reader_error %}
+                <div class="alert alert-danger">
+                    <strong>{% trans "SumUp could not be asked which readers you have." %}</strong>
+                    <br>{{ reader_error }}
+                </div>
+            {% elif not readers %}
+                <div class="alert alert-info">
+                    {% blocktrans trimmed %}
+                        No reader is paired yet. On the reader, open the menu and choose to
+                        connect it to an application: it shows a pairing code, which goes in
+                        the form below.
+                    {% endblocktrans %}
+                </div>
+            {% else %}
+                <div class="table-responsive">
+                    <table class="table table-condensed">
+                        <thead>
+                            <tr>
+                                <th>{% trans "Reader" %}</th>
+                                <th>{% trans "State" %}</th>
+                                <th>{% trans "Till" %}</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for row in readers %}
+                                <tr>
+                                    <td>
+                                        <strong>{{ row.name }}</strong><br>
+                                        <small class="text-muted">{{ row.model }} · {{ row.id }}</small>
+                                    </td>
+                                    <td>
+                                        {% if row.paired %}
+                                            <span class="label label-success">{% trans "Paired" %}</span>
+                                        {% elif row.pairing %}
+                                            <span class="label label-warning">{% trans "Waiting for the reader" %}</span>
+                                        {% else %}
+                                            <span class="label label-danger">{{ row.status }}</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if row.till %}
+                                            {{ row.till.name }}
+                                        {% else %}
+                                            <span class="text-muted">{% trans "Not given to a till" %}</span>
+                                        {% endif %}
+                                    </td>
+                                    <td class="text-right">
+                                        <form action="" method="post">
+                                            {% csrf_token %}
+                                            <input type="hidden" name="action" value="forget">
+                                            <input type="hidden" name="reader_id" value="{{ row.id }}">
+                                            <button type="submit" class="btn btn-default btn-xs">
+                                                {% trans "Remove" %}
+                                            </button>
+                                        </form>
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+                <p class="text-muted">
+                    {% blocktrans trimmed %}
+                        Removing a reader also takes it off the till it was given to. That till
+                        goes back to card payments typed in by the cashier — it does not stop
+                        selling.
+                    {% endblocktrans %}
+                </p>
+            {% endif %}
+
+            {% if orphans %}
+                <div class="alert alert-warning">
+                    <p>
+                        {% blocktrans trimmed %}
+                            These tills are pointing at a reader SumUp no longer knows about, so
+                            every card payment on them is refused. Pair the reader again and give
+                            it back to the till, or set the till's reader to none.
+                        {% endblocktrans %}
+                    </p>
+                    <ul>
+                        {% for row in orphans %}
+                            <li>{{ row.device.name }} — <code>{{ row.sumup_reader_id }}</code></li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            {% endif %}
+        </fieldset>
+
+        <fieldset>
+            <legend>{% trans "Pair a reader" %}</legend>
+            <form action="" method="post" class="form-horizontal">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="pair">
+                <div class="form-group">
+                    <label class="col-md-3 control-label" for="pairing_code">
+                        {% trans "Pairing code" %}
+                    </label>
+                    <div class="col-md-9">
+                        <input type="text" class="form-control" id="pairing_code"
+                               name="pairing_code" required>
+                        <p class="help-block">
+                            {% blocktrans trimmed %}
+                                Shown on the reader's own screen, and good for a few minutes only.
+                            {% endblocktrans %}
+                        </p>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label class="col-md-3 control-label" for="reader_name">
+                        {% trans "Name" %}
+                    </label>
+                    <div class="col-md-9">
+                        <input type="text" class="form-control" id="reader_name"
+                               name="reader_name">
+                        <p class="help-block">
+                            {% blocktrans trimmed %}
+                                For you, so you can tell two readers apart — “Bar” or “Entrance”.
+                            {% endblocktrans %}
+                        </p>
+                    </div>
+                </div>
+                <div class="form-group submit-group">
+                    <button type="submit" class="btn btn-default">
+                        {% trans "Pair" %}
+                    </button>
+                </div>
+            </form>
+        </fieldset>
+
+        <fieldset>
+            <legend>{% trans "Callback address" %}</legend>
+            {% if webhook_url %}
+                <p>
+                    {% blocktrans trimmed %}
+                        The till gives SumUp this address so a finished payment comes back at
+                        once instead of being waited for. There is nothing to configure in the
+                        SumUp dashboard, and nothing it says is taken on trust: it only makes
+                        this server ask SumUp what happened a second or two earlier than it
+                        would have anyway.
+                    {% endblocktrans %}
+                </p>
+                <pre>{{ webhook_url }}</pre>
+            {% else %}
+                <div class="alert alert-info">
+                    {% blocktrans trimmed %}
+                        This pretix is not served over HTTPS, so SumUp will not call back and
+                        none is asked for. Payments are settled by asking SumUp on a timer
+                        instead, which takes a second or two longer and is otherwise the same.
+                    {% endblocktrans %}
+                </div>
+            {% endif %}
+        </fieldset>
+    {% endif %}
+{% endblock %}

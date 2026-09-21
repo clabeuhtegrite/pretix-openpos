@@ -425,3 +425,209 @@ class PosSale(models.Model):
         raise RuntimeError(
             f"Could not append to the Open POS journal of {event.slug} after {attempts} attempts."
         )
+
+
+class PosDevice(models.Model):
+    """
+    What a paired device is for, and which card terminal belongs to it.
+
+    A till at the bar and a tablet at the door run the same app and pair the
+    same way, but they are not doing the same job: one rings up rounds with a
+    terminal of its own, the other scans tickets and sells the occasional one on
+    the spot. Which of the two a device is could have been a switch inside the
+    app; it is stored here instead, and the reason is the rule this row exists
+    to carry — *a till with a terminal may not take a card payment that terminal
+    did not validate*. A browser app can be stale, or simply edited, so a switch
+    it holds is a promise it cannot keep. The server can, and the app only
+    renders the role it is told.
+
+    Hung off the pretix ``Device`` rather than off an (event, device) pair: which
+    corner of the room a tablet stands in is a fact about the tablet, not about
+    the event it happens to be selling for tonight.
+
+    A device with no row here — which is every device paired before this
+    existed — keeps behaving exactly as it did: the till, with the door one tap
+    away. That is what :attr:`ROLE_UNSET` means, and it is why the role is a
+    blank string rather than a default of "till": "nobody has said yet" and "it
+    is the bar till" want different answers at the door.
+    """
+
+    #: Nobody has assigned this device. Both jobs stay available, as before.
+    ROLE_UNSET = ""
+    #: The bar till: the product grid, and a terminal of its own if one is set.
+    ROLE_TILL = "pos"
+    #: The door: scanning, with the grid reachable for selling a ticket on site.
+    ROLE_DOOR = "door"
+    ROLE_CHOICES = (
+        (ROLE_UNSET, _("Not assigned")),
+        (ROLE_TILL, _("Till")),
+        (ROLE_DOOR, _("Door")),
+    )
+
+    device = models.OneToOneField(
+        Device, on_delete=models.CASCADE, related_name="openpos_device"
+    )
+    role = models.CharField(
+        max_length=8, choices=ROLE_CHOICES, blank=True, default=ROLE_UNSET,
+        verbose_name=_("Role"),
+    )
+
+    #: The SumUp reader this till drives, e.g. ``rdr_3MSAFM23CK82VSTT4BN6RWSQ65``.
+    #:
+    #: Its presence is what makes card payments on this device go through the
+    #: terminal, and what makes the server refuse a card payment that arrives
+    #: without a transaction the terminal validated. Empty is the ordinary case
+    #: and means the cashier takes the card on their own phone, in the vendor's
+    #: app, and tells the till it happened — which is all the till has ever
+    #: done, and all the door will ever do.
+    #:
+    #: Chosen on the till device screen, from the readers paired to the
+    #: organizer's SumUp account, and only for a device whose role is
+    #: :attr:`ROLE_TILL`: one reader, one till. It is stored as SumUp's own id
+    #: rather than as a foreign key to a reader of ours, because the paired
+    #: readers live on SumUp's side and a copy here would be one more thing
+    #: that can go stale.
+    sumup_reader_id = models.CharField(
+        max_length=190, blank=True, default="",
+        verbose_name=_("SumUp reader"),
+    )
+
+    class Meta:
+        verbose_name = _("Till device")
+        verbose_name_plural = _("Till devices")
+
+    def __str__(self):
+        return f"{self.device}: {self.role or 'unset'}"
+
+    @property
+    def drives_terminal(self) -> bool:
+        """Whether a card payment on this device has to come from its terminal."""
+        return bool(self.sumup_reader_id)
+
+    @classmethod
+    def for_device(cls, device):
+        """
+        The role row of a device, or an unsaved blank one.
+
+        Never ``None``: every caller wants to ask the same questions of a device
+        nobody has assigned as of one somebody has, and the answers for the
+        unassigned one are exactly this object's defaults.
+        """
+        if device is None:
+            return cls()
+        return getattr(device, "openpos_device", None) or cls(device=device)
+
+
+class PosTerminalPayment(models.Model):
+    """
+    A card payment put on a reader, and what became of it.
+
+    This row exists so that "the reader validated it" is something the server
+    knows rather than something the till claims. It is written before the
+    amount reaches the reader, settled from SumUp's own Transactions API, and
+    then spent — exactly once — by the sale that books it.
+
+    It also pins the basket. The amount is priced here, at the moment the
+    cardholder is asked for it, and the sale that follows is booked from
+    :attr:`positions` rather than from whatever the app sends afterwards. That
+    closes the one gap that would otherwise cost real money: a tariff edited
+    between the tap and the receipt would leave a card charged for one figure
+    and an order written for another, and no amount of comparing totals
+    afterwards can put that right once the money has moved.
+
+    Not part of the journal, and deliberately mutable: the journal is the
+    append-only record of what the drawer did, and a payment that is still
+    being waited on has no place in it. What reaches the journal is the sale,
+    once this row says the money moved.
+    """
+
+    STATUS_PENDING = "pending"
+    STATUS_SUCCESSFUL = "successful"
+    STATUS_FAILED = "failed"
+    STATUS_CHOICES = (
+        (STATUS_PENDING, _("Waiting for the cardholder")),
+        (STATUS_SUCCESSFUL, _("Paid")),
+        (STATUS_FAILED, _("Not paid")),
+    )
+
+    event = models.ForeignKey(
+        Event, on_delete=models.CASCADE, related_name="openpos_terminal_payments"
+    )
+    device = models.ForeignKey(
+        Device, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="openpos_terminal_payments",
+    )
+    #: Denormalised so the row still names its till after the device is deleted,
+    #: and so the check that a payment belongs to *this* till survives that too.
+    device_serial = models.CharField(max_length=190, blank=True, default="")
+
+    #: The key the sale will carry. One basket, one payment, one sale.
+    #:
+    #: SumUp's reader checkout has no idempotency key of its own — retrying it
+    #: starts a second payment — so this is what stands in for one: a second
+    #: attempt on the same basket finds this row rather than charging again.
+    idempotency_key = models.CharField(max_length=190)
+
+    #: SumUp's own handle on the payment, generated by the checkout call.
+    client_transaction_id = models.CharField(max_length=190, blank=True, default="")
+    #: SumUp's transaction id, known only once the transaction exists. This is
+    #: what a refund needs, which is why it is kept rather than looked up again.
+    transaction_id = models.CharField(max_length=190, blank=True, default="")
+
+    reader_id = models.CharField(max_length=190)
+    amount = models.DecimalField(max_digits=13, decimal_places=2)
+    currency = models.CharField(max_length=8)
+    #: The basket as the server priced it, in the shape the checkout takes.
+    positions = models.JSONField(default=list)
+
+    status = models.CharField(max_length=16, choices=STATUS_CHOICES, default=STATUS_PENDING)
+    #: Why it did not go through, in SumUp's words, for the operator.
+    failure = models.CharField(max_length=190, blank=True, default="")
+
+    #: When the money was sent back to the card, if it was.
+    #:
+    #: Written only after SumUp has accepted the refund, and checked before one
+    #: is asked for. A cancellation cannot normally run twice — the journal
+    #: refuses a second reversal of the same sale — but this is the money path,
+    #: and "we already gave it back" is worth knowing from the row itself
+    #: rather than by reasoning about another table.
+    refunded = models.DateTimeField(null=True, blank=True)
+
+    created = models.DateTimeField(auto_now_add=True)
+    updated = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name = _("Terminal payment")
+        verbose_name_plural = _("Terminal payments")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["event", "idempotency_key"], name="openpos_terminal_unique_key"
+            ),
+        ]
+        indexes = [
+            models.Index(
+                fields=["client_transaction_id"], name="openpos_terminal_ctid_idx"
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.idempotency_key} {self.amount} {self.status}"
+
+    @property
+    def settled(self) -> bool:
+        return self.status != self.STATUS_PENDING
+
+    def belongs_to(self, device) -> bool:
+        """
+        Whether this payment was taken on the till now trying to spend it.
+
+        Checked by serial rather than by row, so a device deleted and re-paired
+        under the same serial still owns its own payments, and — the point —
+        one till can never book a sale against another till's card payment.
+        """
+        serial = device.unique_serial if device else ""
+        # A payment with no till named belongs to no till, rather than to
+        # every caller who also has none: this is the check that stops one
+        # device booking a sale against another's card payment, and a rule
+        # where two blanks match would be the wrong way for it to fail.
+        return bool(serial) and self.device_serial == serial

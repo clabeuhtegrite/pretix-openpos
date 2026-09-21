@@ -3,7 +3,8 @@ import { useState } from "react";
 import { t } from "../i18n";
 import { formatMoney, toCents } from "../money";
 import { settle } from "../settlement";
-import type { PaymentType } from "../types";
+import type { TerminalState } from "../useTerminal";
+import type { CardMode, PaymentType } from "../types";
 
 interface Props {
   /**
@@ -15,6 +16,22 @@ interface Props {
   totalCents: number;
   currency: string;
   denominations: string[];
+  /**
+   * How this till is allowed to take a card.
+   *
+   * On `"declared"` the cashier takes the card in the card provider's own app
+   * and tells the till it happened. On `"terminal"` the reader on the counter
+   * does it, and the server will not record a card sale that reader did not
+   * validate — so the panel drives the reader rather than asking the cashier
+   * to confirm something they have not done yet.
+   */
+  cardMode: CardMode;
+  /** The reader payment for this basket, while there is one. */
+  terminal: TerminalState | null;
+  /** Put the basket on the reader. Also the retry, after a refusal. */
+  onTerminalStart: () => void;
+  /** Take it back off, which is the cashier's only way out of a live payment. */
+  onTerminalStop: () => void;
   busy: boolean;
   error: string | null;
   /** Money already taken back off the customer, from a sale cancelled to be corrected. */
@@ -23,8 +40,61 @@ interface Props {
   onCancel: () => void;
 }
 
+/**
+ * What the cashier reads out while the reader has the basket.
+ *
+ * Its own component because it is the one part of this panel that is not
+ * arithmetic: it says where the payment has got to, and — when it did not
+ * work — what happened and how to try again.
+ */
+function TerminalPrompt({
+  terminal, currency, fallbackCents, onRetry,
+}: {
+  terminal: TerminalState | null;
+  currency: string;
+  /** The basket's own figure, until the server has priced it. */
+  fallbackCents: number;
+  onRetry: () => void;
+}) {
+  if (terminal === null || terminal.phase === "starting") {
+    return <p className="pay-reader">{t("payment.readerStarting")}</p>;
+  }
+
+  if (terminal.phase === "failed") {
+    return (
+      <div className="pay-reader">
+        <div className="error-banner">{terminal.message ?? t("payment.readerRefused")}</div>
+        <button className="btn" style={{ marginTop: 12 }} onClick={onRetry}>
+          {t("payment.readerRetry")}
+        </button>
+      </div>
+    );
+  }
+
+  if (terminal.phase === "paid") {
+    return <p className="pay-reader paid">{t("payment.readerPaid")}</p>;
+  }
+
+  // Waiting. The amount is the server's, which is the figure the reader is
+  // showing the customer — not the basket's, which can be a catalogue behind.
+  const asked = terminal.amount === null ? fallbackCents : toCents(terminal.amount);
+  return (
+    <div className="pay-reader">
+      <div className="amount-display">
+        <span>{t("payment.readerAsking")}</span>
+        <span className="value">{formatMoney(asked, currency)}</span>
+      </div>
+      <p>{t("payment.readerPrompt")}</p>
+      {terminal.stalled && (
+        <p className="pay-reader-note">{t("payment.readerStalled")}</p>
+      )}
+    </div>
+  );
+}
+
 export default function PaymentPanel({
-  totalCents, currency, denominations, busy, error, credit, onConfirm, onCancel,
+  totalCents, currency, denominations, cardMode, terminal, onTerminalStart, onTerminalStop,
+  busy, error, credit, onConfirm, onCancel,
 }: Props) {
   // Deliberately unanswered to begin with. A panel that opened on cash got
   // confirmed on cash: a card sale rung up as a cash one, and the drawer at
@@ -48,6 +118,38 @@ export default function PaymentPanel({
     method: method ?? "cash",
   });
 
+  // Card payments on this till go through the reader on the counter.
+  const onReader = cardMode === "terminal";
+  /**
+   * Two baskets a reader cannot settle, and they are refused before the
+   * customer is asked for a card rather than after.
+   *
+   * Money going *out* is the first: SumUp only refunds against a transaction
+   * of its own, up to its amount, so there is no way to send money to a card
+   * that nothing stands behind. A returned deposit comes out of the drawer.
+   *
+   * A credit from a cancelled sale is the second, for the same arithmetic seen
+   * from the other side: the reader would charge the whole basket while the
+   * till is holding money that belongs to the customer. Cash settles both
+   * halves in one movement, which is what the drawer is for.
+   */
+  const readerCannot = onReader && (totalCents <= 0 || credit != null);
+  const readerBusy =
+    onReader && (terminal?.phase === "starting" || terminal?.phase === "waiting");
+
+  /**
+   * Answering the question, and — on a reader till — putting the basket on it.
+   *
+   * The reader is asked the moment "card" is chosen rather than on a later
+   * confirmation: the customer is standing there with a card in their hand,
+   * and a second button between them and the reader is a button nobody has a
+   * reason to press.
+   */
+  const choose = (next: PaymentType) => {
+    setMethod(next);
+    if (next === "card" && onReader && !readerCannot) onTerminalStart();
+  };
+
   const press = (digit: string) => setEntry((current) => (current + digit).replace(/^0+/, "").slice(0, 8));
 
   return (
@@ -55,7 +157,18 @@ export default function PaymentPanel({
       <div className="panel pay-panel">
         <h2>{t("payment.title")}</h2>
 
-        {error && <div className="error-banner">{error}</div>}
+        {/* An error after the reader has taken the money is not an ordinary
+            refusal: the customer has paid and pretix has no record of it. It
+            should be impossible — the basket was pinned, the quota is forced,
+            the total is not re-checked — but if it ever happens, somebody at
+            the counter has to know rather than read "not recorded" and assume
+            nothing was charged. */}
+        {error && (
+          <div className="error-banner">
+            {terminal?.phase === "paid" ? `${t("payment.readerPaidNotRecorded")} ` : ""}
+            {error}
+          </div>
+        )}
 
         {/* Everything the operator taps to build the amount. Scrolls on a phone;
             what it produces is read off the pinned footer below. */}
@@ -64,19 +177,21 @@ export default function PaymentPanel({
               mis-tap is one tap to undo rather than a trip back to the basket. */}
           {method !== null && (
             <div className="pay-toggle">
+              {/* Locked while the reader has the basket: the way out of a live
+                  payment is cancelling it, not walking away from it. */}
               <button
                 className="btn"
                 aria-pressed={method === "cash"}
-                onClick={() => setMethod("cash")}
-                disabled={busy}
+                onClick={() => choose("cash")}
+                disabled={busy || readerBusy}
               >
                 {t("payment.cash")}
               </button>
               <button
                 className="btn"
                 aria-pressed={method === "card"}
-                onClick={() => setMethod("card")}
-                disabled={busy}
+                onClick={() => choose("card")}
+                disabled={busy || readerBusy}
               >
                 {t("payment.card")}
               </button>
@@ -115,10 +230,10 @@ export default function PaymentPanel({
             <>
               <p className="pay-question">{t("payment.chooseMethod")}</p>
               <div className="pay-choice">
-                <button className="btn" onClick={() => setMethod("cash")} disabled={busy}>
+                <button className="btn" onClick={() => choose("cash")} disabled={busy}>
                   {t("payment.cash")}
                 </button>
-                <button className="btn" onClick={() => setMethod("card")} disabled={busy}>
+                <button className="btn" onClick={() => choose("card")} disabled={busy}>
                   {t("payment.card")}
                 </button>
               </div>
@@ -180,6 +295,19 @@ export default function PaymentPanel({
                 </>
               )}
             </>
+          ) : onReader ? (
+            readerCannot ? (
+              <div className="error-banner">
+                {credit != null ? t("payment.readerCredit") : t("payment.readerNoRefund")}
+              </div>
+            ) : (
+              <TerminalPrompt
+                terminal={terminal}
+                currency={currency}
+                fallbackCents={totalCents}
+                onRetry={onTerminalStart}
+              />
+            )
           ) : (
             <p style={{ lineHeight: 1.5 }}>
               {backCents > 0
@@ -203,13 +331,21 @@ export default function PaymentPanel({
           )}
 
           <div className="pay-buttons">
-            <button className="btn ghost" style={{ flex: 1 }} onClick={onCancel} disabled={busy}>
-              {t("payment.back")}
+            {/* One tap takes the basket back off the reader, a second leaves.
+                Never one tap for both: walking away from a live payment is how
+                a card gets charged for a sale nobody recorded. */}
+            <button
+              className="btn ghost"
+              style={{ flex: 1 }}
+              onClick={readerBusy ? onTerminalStop : onCancel}
+              disabled={busy}
+            >
+              {readerBusy ? t("payment.readerStop") : t("payment.back")}
             </button>
             {/* Absent rather than disabled: the two buttons above are the step,
                 and a greyed-out "Valider" beside them reads as a till that is
                 stuck rather than as a question waiting for an answer. */}
-            {method !== null && (
+            {method !== null && !(method === "card" && onReader) && (
               <button
                 className="btn success"
                 style={{ flex: 2 }}

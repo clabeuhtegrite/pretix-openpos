@@ -32,11 +32,17 @@ function show(
 ) {
   const onConfirm = vi.fn();
   const onCancel = vi.fn();
+  const onTerminalStart = vi.fn();
+  const onTerminalStop = vi.fn();
   const panel = (extra: Partial<Parameters<typeof PaymentPanel>[0]>) => (
     <PaymentPanel
       totalCents={1234}
       currency="EUR"
       denominations={DENOMINATIONS}
+      cardMode="declared"
+      terminal={null}
+      onTerminalStart={onTerminalStart}
+      onTerminalStop={onTerminalStop}
       busy={false}
       error={null}
       onConfirm={onConfirm}
@@ -64,7 +70,7 @@ function show(
   // own row rather than from the panel at large.
   const row = (label: string) =>
     within(screen.getByText(label).parentElement as HTMLElement);
-  return { user, type, confirm, row, onConfirm, onCancel, container };
+  return { user, type, confirm, row, onConfirm, onCancel, onTerminalStart, onTerminalStop, container };
 }
 
 /** Whether a quick-tender button is lit: it is while its amount is the one received. */
@@ -505,5 +511,176 @@ describe("when the server refuses", () => {
 
     expect(screen.getByText("This product is not on sale here.")).toBeDefined();
     expect(screen.getByRole("button", { name: "1" })).toHaveProperty("disabled", false);
+  });
+});
+
+describe("on a till with a card reader of its own", () => {
+  /** What the hook reports while the customer has the reader in front of them. */
+  const waiting = { phase: "waiting" as const, amount: "12.34", currency: "EUR", message: null, stalled: false };
+
+  it("puts the basket on the reader the moment card is chosen", async () => {
+    // No confirmation step in between: the customer is standing there with a
+    // card, and a button between them and the reader is one nobody presses.
+    const { user, onTerminalStart } = show({ cardMode: "terminal" }, null);
+
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+
+    expect(onTerminalStart).toHaveBeenCalled();
+  });
+
+  it("offers no way to confirm a card payment by hand", async () => {
+    const { user, onConfirm } = show({ cardMode: "terminal", terminal: waiting }, null);
+
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+
+    expect(screen.queryByRole("button", { name: t("payment.cardConfirm") })).toBeNull();
+    expect(screen.queryByRole("button", { name: t("payment.confirm") })).toBeNull();
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  it("reads out the figure the reader is showing, not the basket's", async () => {
+    // They can differ: the server prices the basket when it puts it on the
+    // reader, and this app's catalogue can be a refresh behind. The customer
+    // is being asked for the reader's figure, so that is the one on screen.
+    const { user } = show(
+      { cardMode: "terminal", terminal: { ...waiting, amount: "15.00" } },
+      null,
+    );
+
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+
+    expect(screen.getByText(formatMoney(1500, "EUR"))).toBeDefined();
+    expect(screen.getByText(t("payment.readerPrompt"))).toBeDefined();
+  });
+
+  it("says the payment carries on when it loses the server", async () => {
+    // The one thing that must never be shown here is a refusal for a card
+    // that is in fact being charged.
+    const { user } = show(
+      { cardMode: "terminal", terminal: { ...waiting, stalled: true } },
+      null,
+    );
+
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+
+    expect(screen.getByText(t("payment.readerStalled"))).toBeDefined();
+    expect(screen.getByText(t("payment.readerPrompt"))).toBeDefined();
+  });
+
+  it("says why a card was refused, and offers another go", async () => {
+    const failed = {
+      phase: "failed" as const, amount: null, currency: null,
+      message: t("payment.readerRefused"), stalled: false,
+    };
+    const { user, onTerminalStart } = show({ cardMode: "terminal", terminal: failed }, null);
+
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+    onTerminalStart.mockClear();
+    await user.click(screen.getByRole("button", { name: t("payment.readerRetry") }));
+
+    expect(screen.getByText(t("payment.readerRefused"))).toBeDefined();
+    expect(onTerminalStart).toHaveBeenCalled();
+  });
+
+  it("takes the basket off the reader before it lets the operator leave", async () => {
+    const { user, onTerminalStop, onCancel } = show(
+      { cardMode: "terminal", terminal: waiting },
+      null,
+    );
+
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+    await user.click(screen.getByRole("button", { name: t("payment.readerStop") }));
+
+    expect(onTerminalStop).toHaveBeenCalled();
+    // Walking away in the same tap is how a card gets charged for a sale
+    // nobody recorded.
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it("locks the method toggle while the reader has the basket", async () => {
+    const { user } = show({ cardMode: "terminal", terminal: waiting }, null);
+
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+
+    expect(screen.getByRole("button", { name: t("payment.cash") })).toHaveProperty(
+      "disabled",
+      true,
+    );
+  });
+
+  it("refuses the reader for a basket that pays money out", async () => {
+    // SumUp only refunds against a transaction of its own, so there is no way
+    // to send money to a card that nothing stands behind.
+    const { user, onTerminalStart } = show(
+      { cardMode: "terminal", totalCents: -200 },
+      null,
+    );
+
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+
+    expect(screen.getByText(t("payment.readerNoRefund"))).toBeDefined();
+    expect(onTerminalStart).not.toHaveBeenCalled();
+  });
+
+  it("refuses the reader while a credit is being settled", async () => {
+    const { user, onTerminalStart } = show(
+      { cardMode: "terminal", credit: { amountCents: 2000, order: "ABC12" } },
+      null,
+    );
+
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+
+    expect(screen.getByText(t("payment.readerCredit"))).toBeDefined();
+    expect(onTerminalStart).not.toHaveBeenCalled();
+  });
+
+  it("says so when the card was charged and the sale was not recorded", async () => {
+    // It should be impossible — the basket is pinned, the quota is forced, the
+    // total is not re-checked — but a cashier reading "not recorded" would
+    // otherwise assume nothing was charged.
+    const paid = {
+      phase: "paid" as const, amount: "12.34", currency: "EUR", message: null, stalled: false,
+    };
+    const { user } = show(
+      { cardMode: "terminal", terminal: paid, error: "Something went wrong." },
+      null,
+    );
+
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+
+    expect(
+      screen.getByText(`${t("payment.readerPaidNotRecorded")} Something went wrong.`),
+    ).toBeDefined();
+  });
+
+  it("does not say that about an ordinary refusal, before any card is charged", async () => {
+    const { user } = show(
+      { cardMode: "terminal", terminal: waiting, error: "Something went wrong." },
+      null,
+    );
+
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+
+    expect(screen.queryByText(t("payment.readerPaidNotRecorded"))).toBeNull();
+    expect(screen.getByText("Something went wrong.")).toBeDefined();
+  });
+
+  it("leaves cash alone, because the drawer is still a drawer", async () => {
+    const { user, onConfirm } = show({ cardMode: "terminal" }, null);
+
+    await user.click(screen.getByRole("button", { name: t("payment.cash") }));
+    await user.click(screen.getByRole("button", { name: t("payment.exact") }));
+    await user.click(screen.getByRole("button", { name: t("payment.confirm") }));
+
+    expect(onConfirm).toHaveBeenCalledWith("cash", "12.34");
+  });
+
+  it("lets a mis-tap on card be undone in one tap, before the reader answers", async () => {
+    const { user } = show({ cardMode: "terminal" }, null);
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+
+    await user.click(screen.getByRole("button", { name: t("payment.cash") }));
+
+    expect(screen.getByRole("button", { name: t("payment.confirm") })).toBeDefined();
   });
 });
