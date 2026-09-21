@@ -1269,3 +1269,137 @@ describe("the top bar", () => {
     expect(screen.getByRole("heading", { name: t("history.title") })).toBeDefined();
   });
 });
+
+describe("what a device is for", () => {
+  /** A config whose device carries a role, and optionally a card reader. */
+  function assigned(role: "" | "pos" | "door", card: "declared" | "terminal" = "declared") {
+    return config({ device: { serial: "TILL1", name: "Caisse bar", role, card } });
+  }
+
+  it("keeps both jobs on a device nobody has assigned", async () => {
+    // Which is every device paired before roles existed. The till opens on the
+    // grid and the door is one tap away, exactly as before.
+    show();
+    await ready();
+
+    expect(screen.getByRole("button", { name: t("checkin.open") })).toBeDefined();
+  });
+
+  it("keeps both jobs against a server too old to have a role at all", async () => {
+    apiMock.config.mockResolvedValue(config({
+      device: { serial: "TILL1", name: "Caisse bar" },
+    }));
+    show();
+    await ready();
+
+    expect(screen.getByRole("button", { name: t("checkin.open") })).toBeDefined();
+  });
+
+  it("gives a bar till no door to open", async () => {
+    apiMock.config.mockResolvedValue(assigned("pos"));
+    show();
+    await ready();
+
+    expect(screen.queryByRole("button", { name: t("checkin.open") })).toBeNull();
+  });
+
+  it("opens a door device on the scanner", async () => {
+    apiMock.config.mockResolvedValue(assigned("door"));
+    show();
+
+    expect(
+      await screen.findByRole("heading", { name: t("checkin.title") }),
+    ).toBeDefined();
+  });
+
+  it("lets the door step out to the grid to sell a ticket", async () => {
+    apiMock.config.mockResolvedValue(assigned("door"));
+    const { user } = show();
+    await screen.findByRole("heading", { name: t("checkin.title") });
+
+    await user.click(screen.getByRole("button", { name: `🛒 ${t("checkin.sell")}` }));
+
+    expect(screen.getByRole("button", { name: /Entrée/ })).toBeDefined();
+    expect(screen.queryByRole("heading", { name: t("checkin.title") })).toBeNull();
+  });
+
+  it("puts the door back on the scanner once the ticket is sold", async () => {
+    // The grid is a detour at the door: the next person in the queue is
+    // holding a QR code, and a volunteer should not have to find the way back.
+    apiMock.config.mockResolvedValue(assigned("door"));
+    const { user } = show();
+    await screen.findByRole("heading", { name: t("checkin.title") });
+    await user.click(screen.getByRole("button", { name: `🛒 ${t("checkin.sell")}` }));
+
+    await ringUp(user, /Entrée/);
+    await confirm(user);
+    await user.click(await screen.findByRole("button", { name: t("done.next") }));
+
+    expect(
+      await screen.findByRole("heading", { name: t("checkin.title") }),
+    ).toBeDefined();
+  });
+
+  it("leaves a till where it is once its sale is done", async () => {
+    apiMock.config.mockResolvedValue(assigned("pos"));
+    const { user } = show();
+    await ready();
+
+    await ringUp(user);
+    await confirm(user);
+    await user.click(await screen.findByRole("button", { name: t("done.next") }));
+
+    expect(screen.queryByRole("heading", { name: t("checkin.title") })).toBeNull();
+    expect(screen.getByRole("button", { name: /Bière/ })).toBeDefined();
+  });
+
+  it("does not offer a door that only the scanner button knows about", async () => {
+    // The button is the way back in, so it has no business being on screen
+    // while the scanner already is.
+    apiMock.config.mockResolvedValue(assigned("door"));
+    show();
+    await screen.findByRole("heading", { name: t("checkin.title") });
+
+    expect(screen.queryByRole("button", { name: t("checkin.open") })).toBeNull();
+  });
+
+  it("opens a door on the grid when the event has no list to scan", async () => {
+    // There is nothing to scan against, so the scanner would be a screen that
+    // does nothing — and, after every sale, a loop back into it.
+    apiMock.config.mockResolvedValue(config({
+      device: { serial: "TILL1", name: "Caisse bar", role: "door", card: "declared" },
+      checkin: { enabled: false, list_id: null, list_name: null, lists: [] },
+    }));
+    show();
+    await ready();
+
+    expect(screen.queryByRole("heading", { name: t("checkin.title") })).toBeNull();
+  });
+
+  it("will not take a card on a till whose reader it cannot drive", async () => {
+    apiMock.config.mockResolvedValue(assigned("pos", "terminal"));
+    const { user } = show();
+    await ready();
+
+    await ringUp(user);
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+
+    expect(screen.getByText(t("payment.cardTerminalOnly"))).toBeDefined();
+    // No way to confirm it: the server would refuse the same payment, and a
+    // button that only ever produces an error is worse than no button.
+    expect(screen.queryByRole("button", { name: t("payment.cardConfirm") })).toBeNull();
+    expect(apiMock.checkout).not.toHaveBeenCalled();
+  });
+
+  it("still takes cash on that same till", async () => {
+    apiMock.config.mockResolvedValue(assigned("pos", "terminal"));
+    const { user } = show();
+    await ready();
+
+    await ringUp(user);
+    await confirm(user);
+
+    await waitFor(() => expect(apiMock.checkout).toHaveBeenCalled());
+    expect(apiMock.checkout.mock.calls[0][1].payment_type).toBe("cash");
+  });
+});

@@ -3,7 +3,7 @@ import { useState } from "react";
 import { t } from "../i18n";
 import { formatMoney, toCents } from "../money";
 import { settle } from "../settlement";
-import type { PaymentType } from "../types";
+import type { CardMode, PaymentType } from "../types";
 
 interface Props {
   /**
@@ -15,6 +15,16 @@ interface Props {
   totalCents: number;
   currency: string;
   denominations: string[];
+  /**
+   * How this till is allowed to take a card.
+   *
+   * On `"terminal"` the card button is shown refusing rather than hidden: the
+   * cashier is standing in front of somebody holding a card, and "there is no
+   * card button on this till" is not an answer they can give. The server
+   * refuses the same payment either way — this is only what makes the refusal
+   * legible before it costs a round trip.
+   */
+  cardMode: CardMode;
   busy: boolean;
   error: string | null;
   /** Money already taken back off the customer, from a sale cancelled to be corrected. */
@@ -24,7 +34,7 @@ interface Props {
 }
 
 export default function PaymentPanel({
-  totalCents, currency, denominations, busy, error, credit, onConfirm, onCancel,
+  totalCents, currency, denominations, cardMode, busy, error, credit, onConfirm, onCancel,
 }: Props) {
   // Deliberately unanswered to begin with. A panel that opened on cash got
   // confirmed on cash: a card sale rung up as a cash one, and the drawer at
@@ -180,6 +190,8 @@ export default function PaymentPanel({
                 </>
               )}
             </>
+          ) : cardMode === "terminal" ? (
+            <div className="error-banner">{t("payment.cardTerminalOnly")}</div>
           ) : (
             <p style={{ lineHeight: 1.5 }}>
               {backCents > 0
@@ -209,7 +221,7 @@ export default function PaymentPanel({
             {/* Absent rather than disabled: the two buttons above are the step,
                 and a greyed-out "Valider" beside them reads as a till that is
                 stuck rather than as a question waiting for an answer. */}
-            {method !== null && (
+            {method !== null && !(method === "card" && cardMode === "terminal") && (
               <button
                 className="btn success"
                 style={{ flex: 2 }}

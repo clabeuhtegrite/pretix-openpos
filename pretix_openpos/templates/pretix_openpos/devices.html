@@ -1,0 +1,85 @@
+{% extends "pretixcontrol/organizers/base.html" %}
+{% load i18n %}
+{% block title %}{% trans "Till devices" %}{% endblock %}
+{% block content %}
+    <h1>{% trans "Till devices" %}</h1>
+    <p class="text-muted">
+        {% blocktrans trimmed %}
+            What each paired device is for. A <strong>till</strong> opens on the product grid
+            and takes the money; a <strong>door</strong> opens on the scanner and can still
+            sell a ticket on the spot. A device nobody has assigned keeps doing both, which is
+            how every device behaved before this screen existed.
+        {% endblocktrans %}
+    </p>
+
+    {% if not rows %}
+        <div class="alert alert-info">
+            {% blocktrans trimmed %}
+                No device is paired on the <strong>Open POS</strong> security profile yet. Pair
+                one from the organizer's device settings, then come back here to say what it is
+                for.
+            {% endblocktrans %}
+        </div>
+    {% else %}
+        <form action="" method="post">
+            {% csrf_token %}
+            <div class="table-responsive">
+                <table class="table table-condensed">
+                    <thead>
+                        <tr>
+                            <th>{% trans "Device" %}</th>
+                            {% for value, label in roles %}
+                                <th>{{ label }}</th>
+                            {% endfor %}
+                            <th>{% trans "Card reader" %}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in rows %}
+                            <tr>
+                                <td>
+                                    <strong>{{ row.device.name }}</strong><br>
+                                    <small class="text-muted">{{ row.device.unique_serial }}</small>
+                                </td>
+                                {% for value, label in roles %}
+                                    <td>
+                                        <label>
+                                            <input type="radio"
+                                                   name="role_{{ row.device.pk }}"
+                                                   value="{{ value }}"
+                                                   {% if row.role == value %}checked{% endif %}>
+                                            <span class="sr-only">{{ label }}</span>
+                                        </label>
+                                    </td>
+                                {% endfor %}
+                                <td>
+                                    {% if row.reader %}
+                                        <code>{{ row.reader }}</code>
+                                    {% else %}
+                                        <span class="text-muted">{% trans "None" %}</span>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="alert alert-info">
+                {% blocktrans trimmed %}
+                    A card reader is not assigned here yet. Once one is, that till takes card
+                    payments through it and nowhere else: the server refuses a card sale the
+                    reader did not validate, so a stale or edited app cannot record one. Every
+                    other device goes on as before — the cashier takes the card in the card
+                    provider's own app and tells the till it happened.
+                {% endblocktrans %}
+            </div>
+
+            <div class="form-group submit-group">
+                <button type="submit" class="btn btn-primary btn-save">
+                    {% trans "Save" %}
+                </button>
+            </div>
+        </form>
+    {% endif %}
+{% endblock %}

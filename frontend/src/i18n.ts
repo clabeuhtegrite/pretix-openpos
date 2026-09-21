@@ -52,6 +52,8 @@ export const MESSAGES = {
     "payment.exact": "Exact",
     "payment.cardPrompt": "Charge the customer on the card terminal, then confirm.",
     "payment.cardConfirm": "Payment taken",
+    "payment.cardTerminalOnly":
+      "This till has a card reader of its own, and the reader is not driven yet. Take this payment in cash.",
     "payment.confirm": "Confirm",
     "payment.back": "Back",
     "payment.working": "Recording…",
@@ -114,6 +116,7 @@ export const MESSAGES = {
     "pairing.scanHint": "Point the camera at the QR code shown by pretix.",
     "pairing.orType": "or type it in",
     "checkin.open": "Check-in",
+    "checkin.sell": "Sell",
     "checkin.title": "Scan tickets",
     "checkin.hint": "Point the camera at the ticket.",
     "checkin.list": "Check-in list",
@@ -277,6 +280,8 @@ export const MESSAGES = {
     "payment.exact": "Appoint",
     "payment.cardPrompt": "Encaissez le client sur le TPE, puis confirmez.",
     "payment.cardConfirm": "Paiement encaissé",
+    "payment.cardTerminalOnly":
+      "Cette caisse a son propre TPE, et le TPE n’est pas encore piloté. Encaissez en espèces.",
     "payment.confirm": "Valider",
     "payment.back": "Retour",
     "payment.working": "Enregistrement…",
@@ -340,6 +345,7 @@ export const MESSAGES = {
     "pairing.scanHint": "Visez le QR code affiché par pretix.",
     "pairing.orType": "ou saisir le code",
     "checkin.open": "Check-in",
+    "checkin.sell": "Vendre",
     "checkin.title": "Scanner les billets",
     "checkin.hint": "Visez le billet.",
     "checkin.list": "Liste de check-in",

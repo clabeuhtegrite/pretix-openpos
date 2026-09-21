@@ -40,7 +40,8 @@ def openpos_nav_organizer(sender, request=None, **kwargs):
     ).filter(organizer=request.organizer).exists():
         return []
     url = resolve(request.path_info)
-    return [
+    here = url.namespace == "plugins:pretix_openpos"
+    nav = [
         {
             "label": _("Arrivals"),
             "url": reverse(
@@ -48,9 +49,24 @@ def openpos_nav_organizer(sender, request=None, **kwargs):
                 kwargs={"organizer": request.organizer.slug},
             ),
             "icon": "line-chart",
-            "active": (
-                url.namespace == "plugins:pretix_openpos"
-                and url.url_name == "arrivals"
-            ),
+            "active": here and url.url_name == "arrivals",
         }
     ]
+    # Assigning a role is a device setting, so it is offered to whoever may
+    # change devices — the same gate the screen itself enforces. Anyone else
+    # simply does not see the entry, rather than finding a 403 behind it.
+    if request.user.has_organizer_permission(
+        request.organizer, "organizer.devices:write", request=request
+    ):
+        nav.append(
+            {
+                "label": _("Till devices"),
+                "url": reverse(
+                    "plugins:pretix_openpos:devices",
+                    kwargs={"organizer": request.organizer.slug},
+                ),
+                "icon": "tablet",
+                "active": here and url.url_name == "devices",
+            }
+        )
+    return nav

@@ -32,6 +32,14 @@ the scope section before deciding it fits.
   now, counted over admission products only and across every door and till.
   Tapping it opens a flow chart of tickets expected → admitted → on site →
   scanned back out, with the breakdown per product.
+- **A role per device**: a tablet is the bar *till* or the *door*, assigned in
+  the back office. A till opens on the product grid; a door opens on the scanner
+  and steps out to the grid to sell a ticket on the spot. A device nobody has
+  assigned keeps doing both, so the split takes effect only where it is chosen.
+  The role is stored server-side rather than in the app, which is what makes the
+  one rule attached to it enforceable: a till with a card reader assigned cannot
+  record a card payment that reader did not validate — not from a stale app, not
+  from an edited one, and not from the offline queue.
 - A dedicated **`openpos` sales channel**, so a product can be limited to the
   door, kept off it, or made to exist *only* on site.
 - **On-site pricing**: a separate tariff per product, because pretix itself has
@@ -47,7 +55,9 @@ the scope section before deciding it fits.
   return is not a pretix order — an order cannot total less than nothing, and
   the queue at closing time is people returning cups and buying nothing — so it
   is recorded in the till journal, where the takings and the drawer are
-  reconciled.
+  reconciled. Cash only: a card refund is always made against an original
+  transaction, and nothing links cups returned at closing time to the round that
+  sold them.
 - **A light palette as well as a dark one**, following the tablet unless told
   otherwise. Dark does not glare in a dim room; light stays readable at an
   outdoor bar at two in the afternoon.

@@ -189,6 +189,46 @@ depuis `/static/` :
   garde le fichier en cache de bordure : après un déploiement qui touche `sw.js`,
   purger ce chemin.
 
+### 2.7 Un rôle par appareil
+
+La même app tourne au bar et à la porte, mais ce ne sont pas le même poste. Un
+appareil peut donc se voir attribuer un **rôle**, dans *Open POS → Appareils de
+caisse*, au niveau de l'organisateur — là où pretix garde ses devices, parce
+qu'une caisse est appairée une fois et vend pour l'événement du soir.
+
+| Rôle | Écran d'accueil | Ce qu'il peut faire |
+|---|---|---|
+| *Non attribué* | la grille | les deux, comme avant ce réglage |
+| **Caisse** | la grille | vendre, encaisser ; pas de bouton porte |
+| **Porte** | le scanner | scanner, et *Vendre* pour un billet sur place |
+
+Un appareil sans rôle se comporte exactement comme avant : la grille, avec la
+porte à un doigt. C'est ce qui fait que déployer ce découpage ne change rien
+tant que personne n'a choisi — y compris en pleine soirée.
+
+Le rôle est stocké côté serveur ([models.py](../pretix_openpos/models.py),
+`PosDevice`), et pas dans l'app, et ce n'est pas un détail d'implémentation.
+C'est ce qui rend tenable la règle ci-dessous : une app est une page dans un
+navigateur, sur une tablette posée sur un comptoir. Elle peut être périmée —
+une caisse restée ouverte pendant le déploiement l'est par construction — ou
+simplement modifiée. Une règle qu'elle s'appliquerait à elle-même ne serait pas
+une règle.
+
+**Une caisse à qui un lecteur de carte est attribué ne peut pas encaisser en
+carte sans ce lecteur.** Le champ `sumup_reader_id` porte cette attribution ;
+dès qu'il est rempli, `/checkout/` refuse tout `payment_type: "card"` avec le
+code `terminal_required`, et l'app affiche le refus plutôt que de laisser
+valider. Le refus vaut aussi pour une vente rejouée depuis la file hors ligne,
+seul endroit de cet endpoint où une vente déjà payée est refusée : un paiement
+lecteur passe par le cloud de SumUp, donc une caisse sans réseau n'a pas pu en
+démarrer un, et enregistrer celui-là reviendrait à écrire un paiement carte que
+personne ne peut retrouver.
+
+Le lecteur ne s'attribue pas encore depuis le back-office : le code qui parle à
+SumUp n'existe pas, et remplir le champ rendrait la caisse incapable de prendre
+la carte. Le garde-fou est écrit et testé d'avance pour que l'intégration n'ait
+qu'à fournir la référence de transaction.
+
 ---
 
 ## 3. Mise en service (pas à pas)
@@ -250,6 +290,11 @@ Sous *Organisateur → Devices → Créer* :
 Un device peut vendre pour plusieurs événements : tout événement où le plugin est
 activé apparaît dans *Réglages → Événement* de l'app, et changer d'événement ne
 demande pas de réappairer.
+
+Puis, sous *Organisateur → Open POS → Appareils de caisse*, dire à quoi sert cet
+appareil : **Caisse** pour le bar, **Porte** pour l'entrée. Laisser *non
+attribué* est un choix valable et c'est l'état par défaut — l'appareil fait
+alors les deux, comme avant l'existence de ce réglage. Voir le §2.7.
 
 ### 3.4 Installer la caisse sur la tablette
 
@@ -804,7 +849,18 @@ Trois conséquences à connaître :
   mauvais montant, devant le client, à chaque fois.
 - **Un panier qui passe sous zéro n'encaisse rien.** Le pavé disparaît, le
   panneau affiche *À rendre*, et `cash_given` part à `null` : aucun billet n'a
-  traversé le comptoir. En carte, c'est l'invite de remboursement sur le TPE.
+  traversé le comptoir.
+- **Une consigne se rend en espèces, et c'est une contrainte du réseau, pas un
+  choix.** Un remboursement carte se fait toujours *contre une transaction
+  d'origine* : l'API de SumUp n'a qu'un seul point d'entrée,
+  `POST /v1.0/merchants/{code}/payments/{transaction_id}/refunds`, et le montant
+  ne peut pas dépasser celui de cette transaction. Il n'existe pas de
+  remboursement libre où le client présente sa carte et repart avec 3 €. Or rien
+  ne rattache trois gobelets rendus en fin de soirée à la tournée qui les a
+  vendus. Le tiroir est donc la seule sortie possible pour un retour de
+  consigne. Ce qui se rembourse par API, et très bien, c'est **l'annulation
+  d'une vente carte** : la transaction est connue, elle se rembourse totalement
+  ou partiellement, sans le TPE et sans la carte du client.
 - **Un retour ne s'annule pas depuis la caisse.** Il n'y a pas de commande à
   avoirer. Reprendre la consigne, c'est une consigne vendue, et c'est déjà un
   appui sur la grille.
@@ -1126,6 +1182,7 @@ le tarif d'hier.
 | 400 `price_changed` | Les prix ont bougé sous le panier | Recharge le catalogue, re-tarife, garde le panneau ouvert |
 | 400 `positions` | Produit non vendable au guichet / variante inconnue | Affiche le message tel quel |
 | 400 `cash_given` | Reçu inférieur au dû, ou montant reçu sur un panier qui paie | Affiche le message |
+| 400 `terminal_required` | Paiement carte sur une caisse à qui un lecteur est attribué | Affiche le refus ; le bouton *Valider* n'est pas offert en carte sur cette caisse (§2.7) |
 | 401 / 403 | Device révoqué, ou plugin désactivé sur l'événement | Affiche le motif, avec *Réessayer* et *Dépairer* ; l'appairage n'est jamais effacé tout seul |
 
 ---

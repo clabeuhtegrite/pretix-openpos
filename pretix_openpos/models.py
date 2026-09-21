@@ -425,3 +425,93 @@ class PosSale(models.Model):
         raise RuntimeError(
             f"Could not append to the Open POS journal of {event.slug} after {attempts} attempts."
         )
+
+
+class PosDevice(models.Model):
+    """
+    What a paired device is for, and which card terminal belongs to it.
+
+    A till at the bar and a tablet at the door run the same app and pair the
+    same way, but they are not doing the same job: one rings up rounds with a
+    terminal of its own, the other scans tickets and sells the occasional one on
+    the spot. Which of the two a device is could have been a switch inside the
+    app; it is stored here instead, and the reason is the rule this row exists
+    to carry — *a till with a terminal may not take a card payment that terminal
+    did not validate*. A browser app can be stale, or simply edited, so a switch
+    it holds is a promise it cannot keep. The server can, and the app only
+    renders the role it is told.
+
+    Hung off the pretix ``Device`` rather than off an (event, device) pair: which
+    corner of the room a tablet stands in is a fact about the tablet, not about
+    the event it happens to be selling for tonight.
+
+    A device with no row here — which is every device paired before this
+    existed — keeps behaving exactly as it did: the till, with the door one tap
+    away. That is what :attr:`ROLE_UNSET` means, and it is why the role is a
+    blank string rather than a default of "till": "nobody has said yet" and "it
+    is the bar till" want different answers at the door.
+    """
+
+    #: Nobody has assigned this device. Both jobs stay available, as before.
+    ROLE_UNSET = ""
+    #: The bar till: the product grid, and a terminal of its own if one is set.
+    ROLE_TILL = "pos"
+    #: The door: scanning, with the grid reachable for selling a ticket on site.
+    ROLE_DOOR = "door"
+    ROLE_CHOICES = (
+        (ROLE_UNSET, _("Not assigned")),
+        (ROLE_TILL, _("Till")),
+        (ROLE_DOOR, _("Door")),
+    )
+
+    device = models.OneToOneField(
+        Device, on_delete=models.CASCADE, related_name="openpos_device"
+    )
+    role = models.CharField(
+        max_length=8, choices=ROLE_CHOICES, blank=True, default=ROLE_UNSET,
+        verbose_name=_("Role"),
+    )
+
+    #: The SumUp reader this till drives, e.g. ``rdr_3MSAFM23CK82VSTT4BN6RWSQ65``.
+    #:
+    #: Its presence is what makes card payments on this device go through the
+    #: terminal, and what makes the server refuse a card payment that arrives
+    #: without a transaction the terminal validated. Empty is the ordinary case
+    #: and means the cashier takes the card on their own phone, in the vendor's
+    #: app, and tells the till it happened — which is all the till has ever
+    #: done, and all the door will ever do.
+    #:
+    #: Deliberately not editable from the back office yet: setting it would turn
+    #: the refusal on for a till that has no way to satisfy it, since the code
+    #: that talks to SumUp does not exist. The rule is written and tested here
+    #: so that the integration only has to supply the reference, not invent the
+    #: guard rail at the same time.
+    sumup_reader_id = models.CharField(
+        max_length=190, blank=True, default="",
+        verbose_name=_("SumUp reader"),
+    )
+
+    class Meta:
+        verbose_name = _("Till device")
+        verbose_name_plural = _("Till devices")
+
+    def __str__(self):
+        return f"{self.device}: {self.role or 'unset'}"
+
+    @property
+    def drives_terminal(self) -> bool:
+        """Whether a card payment on this device has to come from its terminal."""
+        return bool(self.sumup_reader_id)
+
+    @classmethod
+    def for_device(cls, device):
+        """
+        The role row of a device, or an unsaved blank one.
+
+        Never ``None``: every caller wants to ask the same questions of a device
+        nobody has assigned as of one somebody has, and the answers for the
+        unassigned one are exactly this object's defaults.
+        """
+        if device is None:
+            return cls()
+        return getattr(device, "openpos_device", None) or cls(device=device)

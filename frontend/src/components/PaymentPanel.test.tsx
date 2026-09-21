@@ -37,6 +37,7 @@ function show(
       totalCents={1234}
       currency="EUR"
       denominations={DENOMINATIONS}
+      cardMode="declared"
       busy={false}
       error={null}
       onConfirm={onConfirm}
@@ -505,5 +506,38 @@ describe("when the server refuses", () => {
 
     expect(screen.getByText("This product is not on sale here.")).toBeDefined();
     expect(screen.getByRole("button", { name: "1" })).toHaveProperty("disabled", false);
+  });
+});
+
+describe("on a till whose card reader it cannot drive", () => {
+  it("says so instead of offering a card payment the server would refuse", async () => {
+    const { user, onConfirm } = show({ cardMode: "terminal" }, null);
+
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+
+    expect(screen.getByText(t("payment.cardTerminalOnly"))).toBeDefined();
+    expect(screen.queryByRole("button", { name: t("payment.cardConfirm") })).toBeNull();
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  it("leaves cash alone, because the drawer is still a drawer", async () => {
+    const { user, onConfirm } = show({ cardMode: "terminal" }, null);
+
+    await user.click(screen.getByRole("button", { name: t("payment.cash") }));
+    await user.click(screen.getByRole("button", { name: t("payment.exact") }));
+    await user.click(screen.getByRole("button", { name: t("payment.confirm") }));
+
+    expect(onConfirm).toHaveBeenCalledWith("cash", "12.34");
+  });
+
+  it("lets a mis-tap on card be undone in one tap, as it always could", async () => {
+    // The question stays on screen as a toggle; a till that trapped the
+    // operator on the refusal would be worse than one that never offered it.
+    const { user } = show({ cardMode: "terminal" }, null);
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+
+    await user.click(screen.getByRole("button", { name: t("payment.cash") }));
+
+    expect(screen.getByRole("button", { name: t("payment.confirm") })).toBeDefined();
   });
 });

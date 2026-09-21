@@ -1,7 +1,7 @@
 from django.urls import re_path
 from pretix.api.urls import event_router, orga_router
 
-from . import arrivals, pwa, views
+from . import arrivals, devices, pwa, views
 from .api.views import OpenPosOrganizerViewSet, OpenPosViewSet
 
 urlpatterns = [
@@ -33,6 +33,13 @@ urlpatterns = [
         r"^control/organizer/(?P<organizer>[^/]+)/openpos/arrivals/$",
         arrivals.ArrivalsView.as_view(),
         name="arrivals",
+    ),
+    # Organizer-level for a different reason: pretix keeps devices there, and a
+    # till is paired once and sells for whichever event is running tonight.
+    re_path(
+        r"^control/organizer/(?P<organizer>[^/]+)/openpos/devices/$",
+        devices.DevicesView.as_view(),
+        name="devices",
     ),
 ]
 

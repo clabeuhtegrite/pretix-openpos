@@ -858,3 +858,36 @@ describe("leaving", () => {
     expect(onListChange).toHaveBeenCalledWith(8);
   });
 });
+
+describe("selling a ticket at the door", () => {
+  it("offers no way out to the grid unless this device is a door", () => {
+    // Everywhere else the grid is already underneath: the ✕ is the way back
+    // and a second button saying the same thing would be noise.
+    show();
+
+    expect(screen.queryByRole("button", { name: `🛒 ${t("checkin.sell")}` })).toBeNull();
+  });
+
+  it("hands the door over to the grid when asked", async () => {
+    const onSell = vi.fn();
+    const { user } = show({ onSell });
+
+    await user.click(screen.getByRole("button", { name: `🛒 ${t("checkin.sell")}` }));
+
+    expect(onSell).toHaveBeenCalled();
+  });
+
+  it("stays available while the head count and the search are still loading", async () => {
+    // Those two need a list to be chosen; selling does not, and a door should
+    // be able to take somebody's ten euros the moment it is on screen.
+    const onSell = vi.fn();
+    const { user } = show({ onSell });
+
+    await user.click(screen.getByRole("button", { name: `🛒 ${t("checkin.sell")}` }));
+
+    expect(onSell).toHaveBeenCalledTimes(1);
+    expect(
+      screen.getByRole("button", { name: `🛒 ${t("checkin.sell")}` }),
+    ).toHaveProperty("disabled", false);
+  });
+});

@@ -18,6 +18,12 @@ export interface InitializeResponse {
   security_profile: string;
 }
 
+/** What a paired device is for. Empty means nobody has assigned it. */
+export type DeviceRole = "" | "pos" | "door";
+
+/** Whether card payments here go through a reader this device drives. */
+export type CardMode = "declared" | "terminal";
+
 export interface CheckinListInfo {
   id: number;
   name: string;
@@ -36,7 +42,28 @@ export interface PosConfig {
     testmode: boolean;
     timezone: string;
   };
-  device: { serial: string | null; name: string | null };
+  device: {
+    serial: string | null;
+    name: string | null;
+    /**
+     * What this device is for, as the server was told in the back office.
+     *
+     * `""` means nobody has said, and the till then behaves as it always has:
+     * the product grid, with the door one tap away. Absent altogether on a
+     * server older than the field, which reads the same way.
+     */
+    role?: DeviceRole;
+    /**
+     * How a card payment may be taken here.
+     *
+     * `"declared"` is the cashier taking the card in the card provider's own
+     * app and telling the till it happened. `"terminal"` means a reader is
+     * assigned to this device and is the only way: the server refuses a card
+     * sale the reader did not validate, so this is not the app's decision to
+     * make — only the thing it shows.
+     */
+    card?: CardMode;
+  };
   checkin: {
     enabled: boolean;
     list_id: number | null;

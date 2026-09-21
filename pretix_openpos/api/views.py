@@ -23,10 +23,15 @@ from rest_framework.response import Response
 from .. import __version__
 from ..channels import POS_CHANNEL, PosSalesChannelType
 from ..invoicing import pos_invoices_enabled
-from ..models import PosPrice, PosSale
+from ..models import PosDevice, PosPrice, PosSale
 from ..payment import CARD, CASH
 
 logger = logging.getLogger(__name__)
+
+#: The cashier takes the card themselves and tells the till so. No reader.
+CARD_DECLARED = "declared"
+#: A reader is assigned to this device and is the only way to pay by card on it.
+CARD_TERMINAL = "terminal"
 
 
 def get_pos_channel(organizer):
@@ -177,6 +182,19 @@ def refund_key(idempotency_key: str) -> str:
     return f"{idempotency_key}:refund"
 
 
+def card_mode(pos_device) -> str:
+    """
+    How this device is allowed to take a card payment.
+
+    ``"terminal"`` once a reader is assigned to it: the money goes through that
+    reader, and the server will not record a card sale the reader did not
+    validate. ``"declared"`` otherwise, which is what every till has done until
+    now and what the door goes on doing — the cashier takes the card in the
+    vendor's own app on their phone and tells the till it happened.
+    """
+    return CARD_TERMINAL if pos_device.drives_terminal else CARD_DECLARED
+
+
 def plugin_enabled(event) -> bool:
     return "pretix_openpos" in event.get_plugins()
 
@@ -245,6 +263,7 @@ class OpenPosViewSet(viewsets.ViewSet):
     def config(self, request, **kwargs):
         event = request.event
         device = request.auth if isinstance(request.auth, Device) else None
+        pos_device = PosDevice.for_device(device)
         clist = checkin_list_for(event)
         custom = custom_sale_item(event)
         deposit = deposit_item(event)
@@ -271,6 +290,15 @@ class OpenPosViewSet(viewsets.ViewSet):
                 "device": {
                     "serial": device.unique_serial if device else None,
                     "name": device.name if device else None,
+                    # What this device is for. Empty means nobody has said, and
+                    # the app then behaves as it always has — the till, with the
+                    # door one tap away. See PosDevice.
+                    "role": pos_device.role,
+                    # Whether a card payment here has to come from a reader this
+                    # device drives. The app reads it to decide what the payment
+                    # panel offers; the server does not take the app's word for
+                    # it and checks the same thing again at checkout.
+                    "card": card_mode(pos_device),
                 },
                 "checkin": {
                     # The list tickets are checked in on when they are sold.
@@ -427,6 +455,42 @@ class OpenPosViewSet(viewsets.ViewSet):
                 body["checked_in"] = checked_in
                 body["checkin_errors"] = checkin_errors
             return Response(body, status=status.HTTP_200_OK)
+
+        # A till that drives a card reader may not record a card payment the
+        # reader did not validate.
+        #
+        # Checked here rather than left to the app, and that is the whole point
+        # of the rule: the app is a page in a browser on a tablet that lives on
+        # a counter, and it can be stale — a till left open across the deploy
+        # that assigned the reader is stale by definition — or simply edited.
+        # Whatever it believes it is allowed to do, this is what decides.
+        #
+        # It applies to a replayed sale as well as to one being rung up now,
+        # which is the one place this departs from the rule of thumb elsewhere
+        # in this endpoint that a sale already paid for is recorded whatever the
+        # catalogue has since done. The difference is what the two refusals
+        # cost: there, refusing strands money that genuinely changed hands;
+        # here, accepting writes down a card payment nobody can point at. And a
+        # reader payment cannot happen while the till is cut off anyway — the
+        # reader is driven through SumUp's cloud, so a till with no network
+        # cannot start one.
+        pos_device = PosDevice.for_device(device)
+        if (
+            data["payment_type"] == PosSale.PAYMENT_CARD
+            and pos_device.drives_terminal
+        ):
+            raise ValidationError(
+                {
+                    "payment_type": [
+                        _(
+                            "This till has a card reader assigned, so a card payment "
+                            "has to be validated by the reader. Take this payment on "
+                            "the reader, or in cash."
+                        )
+                    ],
+                    "code": "terminal_required",
+                }
+            )
 
         channel = get_pos_channel(event.organizer)
         overrides = pos_price_overrides(event)

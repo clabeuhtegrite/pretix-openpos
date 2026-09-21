@@ -95,11 +95,19 @@ interface Props {
    * guest list of this door after the screen is closed, and reopen it here.
    */
   onListChange?: (listId: number) => void;
+  /**
+   * How a door sells a ticket to somebody who turns up without one.
+   *
+   * Given only on a device whose role is the door, where this screen is the
+   * home screen and the product grid is the place you step out to. A till has
+   * no use for it: there the grid is already what is underneath.
+   */
+  onSell?: () => void;
   onClose: () => void;
 }
 
 export default function CheckinScreen({
-  pairing, lists, defaultListId, admissionItems, onListChange, onClose,
+  pairing, lists, defaultListId, admissionItems, onListChange, onSell, onClose,
 }: Props) {
   const [listId, setListId] = useState<number | null>(
     defaultListId ?? (lists.length ? lists[0].id : null),
@@ -314,6 +322,14 @@ export default function CheckinScreen({
             </select>
           )}
           <div className="scanner-actions">
+            {onSell && (
+              // First in the row on purpose: it is the one thing on this screen
+              // that takes money, and the queue it serves is somebody standing
+              // at the door without a ticket.
+              <button className="btn" onClick={onSell}>
+                🛒 {t("checkin.sell")}
+              </button>
+            )}
             <button className="btn" onClick={() => setSearchOpen(true)} disabled={!listId}>
               🔍 {t("search.open")}
             </button>

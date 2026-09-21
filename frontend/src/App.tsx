@@ -24,7 +24,7 @@ import { useConnectivity } from "./connectivity";
 import { drainQueue } from "./sync";
 import { applyTheme, loadTheme, saveTheme, watchDeviceTheme, type Theme } from "./theme";
 import type {
-  Catalog, CartLine, Pairing, PaymentType, PosConfig, QueuedSale,
+  Catalog, CartLine, DeviceRole, Pairing, PaymentType, PosConfig, QueuedSale,
   SaleResult, SyncReport,
 } from "./types";
 import { useBackClose } from "./useBackClose";
@@ -60,6 +60,38 @@ function doorListFor(config: PosConfig | null, chosen: number | null): number | 
   const lists = config.checkin.lists;
   if (chosen !== null && lists.some((list) => list.id === chosen)) return chosen;
   return config.checkin.list_id ?? lists[0]?.id ?? null;
+}
+
+/**
+ * Which screen this device opens on, and what it may reach from there.
+ *
+ * The role is the server's answer, not a preference held here: it is what makes
+ * "a till with a card reader cannot take a card payment the reader did not
+ * validate" a rule rather than a hope, and a rule the app enforced on itself
+ * would be no rule at all — this page can be a build old enough to predate the
+ * reader, or simply edited. So the app renders what it is told, and the server
+ * checks the same thing again at checkout.
+ *
+ * A device nobody has assigned — which is every device paired before roles
+ * existed, and every device on a server too old to have the field — is
+ * deliberately not treated as a till: it keeps doing both jobs, exactly as it
+ * did before. Nothing changes until somebody chooses.
+ */
+function screensFor(config: PosConfig | null) {
+  const role: DeviceRole | undefined = config?.device.role;
+  return {
+    /** This device's job is the door, whatever screen happens to be on top. */
+    atDoor: role === "door",
+    /**
+     * ...and there is something to scan, so the scanner is both where it opens
+     * and where it comes back to after a sale. An event with no check-in list
+     * has nothing: sending a door back to an empty scanner after every ticket
+     * would be a loop rather than a home screen, so it lives on the grid.
+     */
+    opensOnDoor: role === "door" && (config?.checkin.lists.length ?? 0) > 0,
+    /** A bar till has no door to open; anything unassigned still does. */
+    doorReachable: role !== "pos",
+  };
 }
 
 /**
@@ -140,6 +172,17 @@ export default function App() {
   // What is queued is money that exists nowhere else yet; ask the browser not
   // to evict it.
   useEffect(requestPersistence, []);
+
+  const { atDoor, opensOnDoor, doorReachable } = screensFor(config);
+
+  // A door device opens on the scanner. An effect rather than an initial state,
+  // because the role arrives with the config a moment after the first render;
+  // and keyed on the answer rather than run once on mount, so an idle catalogue
+  // refresh that hands back the same role does not shove the scanner back over
+  // a basket the volunteer is in the middle of ringing up.
+  useEffect(() => {
+    if (opensOnDoor) setCheckinOpen(true);
+  }, [opensOnDoor]);
 
   /** The list last chosen at the door, so the door reopens on it — see doorListFor. */
   const [doorListId, setDoorListId] = useState<number | null>(null);
@@ -599,7 +642,7 @@ export default function App() {
         {config.event.testmode && <span className="badge">{t("testmode")}</span>}
         <span className="spacer" />
         {cashier && <span className="badge muted">{cashier}</span>}
-        {config.checkin.lists.length > 0 && (
+        {doorReachable && config.checkin.lists.length > 0 && !checkinOpen && (
           <button
             className="btn ghost topbar-action"
             onClick={() => setCheckinOpen(true)}
@@ -681,6 +724,7 @@ export default function App() {
           totalCents={total}
           currency={config.event.currency}
           denominations={config.cash_denominations}
+          cardMode={config.device.card ?? "declared"}
           busy={busy}
           error={payError}
           credit={credit}
@@ -693,7 +737,13 @@ export default function App() {
         <DoneScreen
           sale={sale}
           currency={config.event.currency}
-          onDismiss={() => setSale(null)}
+          onDismiss={() => {
+            setSale(null);
+            // At the door the grid is a detour, not a destination: the ticket
+            // has been sold and the next person in the queue is holding a QR
+            // code. A till stays where it is.
+            if (opensOnDoor) setCheckinOpen(true);
+          }}
         />
       )}
 
@@ -704,6 +754,9 @@ export default function App() {
           defaultListId={doorList}
           admissionItems={config.admission_items}
           onListChange={setDoorListId}
+          // The door steps out to the grid to sell a ticket; every other device
+          // already has the grid underneath and is merely closing an overlay.
+          onSell={atDoor ? () => setCheckinOpen(false) : undefined}
           onClose={() => setCheckinOpen(false)}
         />
       )}
