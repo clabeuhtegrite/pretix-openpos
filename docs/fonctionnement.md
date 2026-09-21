@@ -262,7 +262,7 @@ En Docker/Kubernetes, [`deploy/Dockerfile`](../deploy/Dockerfile) intègre le pl
 
 ```bash
 cd frontend && npm run build && cd ..
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.6.1 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.11.0 .
 ```
 
 Deux pièges :
