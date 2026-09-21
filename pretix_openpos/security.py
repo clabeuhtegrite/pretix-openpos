@@ -33,6 +33,12 @@ class OpenPosSecurityProfile(AllowListSecurityProfile):
         ("GET", "api-v1:openpos-config"),
         ("GET", "api-v1:openpos-catalog"),
         ("POST", "api-v1:openpos-checkout"),
+        # Driving the card reader this till is assigned. Starting a payment is
+        # a write and is deliberately in the same profile as the checkout it
+        # leads to: a token that can sell can also ask for the money.
+        ("POST", "api-v1:openpos-terminal-start"),
+        ("GET", "api-v1:openpos-terminal-status"),
+        ("POST", "api-v1:openpos-terminal-cancel"),
         ("GET", "api-v1:openpos-summary"),
         ("GET", "api-v1:openpos-attendance"),
         # Correcting a sale made on this same till. The endpoint itself refuses

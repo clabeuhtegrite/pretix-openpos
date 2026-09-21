@@ -66,6 +66,22 @@ class OfflineSerializer(serializers.Serializer):
         return value
 
 
+class TerminalStartSerializer(serializers.Serializer):
+    """
+    What the till sends to put a basket on the card reader.
+
+    The same products-and-quantities payload as a checkout, and for the same
+    reason: the server prices it. The only price it will read is a free
+    amount's, which is the one figure the till is allowed to decide anywhere.
+    """
+
+    #: The key the sale will carry, minted once per attempt by the app. It is
+    #: what makes a second tap find the payment already running rather than
+    #: start a second one — SumUp's reader checkout has no such key of its own.
+    idempotency_key = serializers.CharField(max_length=190)
+    positions = CheckoutPositionSerializer(many=True, allow_empty=False, max_length=MAX_LINES)
+
+
 class CheckoutSerializer(serializers.Serializer):
     """
     Note what this deliberately does *not* accept: a price.

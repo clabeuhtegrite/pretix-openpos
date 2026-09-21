@@ -1,7 +1,7 @@
 from django.urls import re_path
 from pretix.api.urls import event_router, orga_router
 
-from . import arrivals, devices, pwa, views
+from . import arrivals, devices, pwa, views, webhook
 from .api.views import OpenPosOrganizerViewSet, OpenPosViewSet
 
 urlpatterns = [
@@ -12,6 +12,14 @@ urlpatterns = [
     # Must be served from this path, not from /static/, or its scope could not
     # cover /openpos/.
     re_path(r"^openpos/sw\.js$", pwa.service_worker, name="pwa.sw"),
+    # Where SumUp posts when a reader payment ends. Public by necessity and
+    # unauthenticated by SumUp's design — which is why nothing it says is
+    # believed; see webhook.py.
+    re_path(
+        r"^openpos/sumup/(?P<organizer>[^/]+)/(?P<token>[^/]+)/$",
+        webhook.sumup_callback,
+        name="sumup.callback",
+    ),
     re_path(
         r"^control/event/(?P<organizer>[^/]+)/(?P<event>[^/]+)/openpos/$",
         views.SettingsView.as_view(),
