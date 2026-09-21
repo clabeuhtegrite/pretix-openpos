@@ -2,7 +2,7 @@ import logging
 from datetime import datetime, time, timedelta
 from decimal import Decimal
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Count, Exists, OuterRef, Sum
 from django.utils.timezone import make_aware, now
 from django.utils.translation import gettext_lazy as _
@@ -1054,17 +1054,32 @@ class OpenPosViewSet(viewsets.ViewSet):
                  "code": "nothing_to_charge"}
             )
 
-        payment = PosTerminalPayment.objects.create(
-            event=event,
-            device=device,
-            device_serial=device.unique_serial if device else "",
-            idempotency_key=idempotency_key,
-            reader_id=_pos_device.sumup_reader_id,
-            amount=total,
-            currency=event.currency,
-            positions=priced,
-            status=PosTerminalPayment.STATUS_PENDING,
-        )
+        try:
+            payment = PosTerminalPayment.objects.create(
+                event=event,
+                device=device,
+                device_serial=device.unique_serial if device else "",
+                idempotency_key=idempotency_key,
+                reader_id=_pos_device.sumup_reader_id,
+                amount=total,
+                currency=event.currency,
+                positions=priced,
+                status=PosTerminalPayment.STATUS_PENDING,
+            )
+        except IntegrityError:
+            # Two taps in the same second: the look-up above found nothing for
+            # either of them and the unique key let one through. The loser
+            # takes the winner's payment rather than faulting, which is the
+            # same answer a second tap gets a moment later.
+            existing = PosTerminalPayment.objects.filter(
+                event=event, idempotency_key=idempotency_key
+            ).first()
+            if existing is None:
+                raise
+            return Response(
+                self._terminal_payload(settle_terminal_payment(existing, account)),
+                status=status.HTTP_200_OK,
+            )
         # Written before the reader is asked, deliberately: if this process
         # dies between the two, the row is there to be settled from SumUp
         # rather than a charge nobody in pretix has ever heard of. The reverse

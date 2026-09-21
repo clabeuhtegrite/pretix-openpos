@@ -157,7 +157,18 @@ export default function PaymentPanel({
       <div className="panel pay-panel">
         <h2>{t("payment.title")}</h2>
 
-        {error && <div className="error-banner">{error}</div>}
+        {/* An error after the reader has taken the money is not an ordinary
+            refusal: the customer has paid and pretix has no record of it. It
+            should be impossible — the basket was pinned, the quota is forced,
+            the total is not re-checked — but if it ever happens, somebody at
+            the counter has to know rather than read "not recorded" and assume
+            nothing was charged. */}
+        {error && (
+          <div className="error-banner">
+            {terminal?.phase === "paid" ? `${t("payment.readerPaidNotRecorded")} ` : ""}
+            {error}
+          </div>
+        )}
 
         {/* Everything the operator taps to build the amount. Scrolls on a phone;
             what it produces is read off the pinned footer below. */}

@@ -626,4 +626,8 @@ class PosTerminalPayment(models.Model):
         one till can never book a sale against another till's card payment.
         """
         serial = device.unique_serial if device else ""
-        return self.device_serial == serial
+        # A payment with no till named belongs to no till, rather than to
+        # every caller who also has none: this is the check that stops one
+        # device booking a sale against another's card payment, and a rule
+        # where two blanks match would be the wrong way for it to fail.
+        return bool(serial) and self.device_serial == serial

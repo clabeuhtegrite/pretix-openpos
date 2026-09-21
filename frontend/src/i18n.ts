@@ -58,6 +58,8 @@ export const MESSAGES = {
     "payment.readerStalled":
       "The till cannot reach the server for the moment. The payment carries on — do not take it again.",
     "payment.readerPaid": "Payment accepted.",
+    "payment.readerPaidNotRecorded":
+      "The card has been charged and the sale was not recorded. Write the amount down and tell whoever keeps the books.",
     "payment.readerRefused": "The card was refused.",
     "payment.readerCancelled": "The payment was cancelled.",
     "payment.readerTimeout": "The reader waited too long for the card.",
@@ -303,6 +305,8 @@ export const MESSAGES = {
     "payment.readerStalled":
       "La caisse n’arrive plus à joindre le serveur. Le paiement continue : ne l’encaissez pas une seconde fois.",
     "payment.readerPaid": "Paiement accepté.",
+    "payment.readerPaidNotRecorded":
+      "La carte a été débitée et la vente n’a pas été enregistrée. Notez le montant et prévenez la personne qui tient les comptes.",
     "payment.readerRefused": "La carte a été refusée.",
     "payment.readerCancelled": "Le paiement a été annulé.",
     "payment.readerTimeout": "Le lecteur a attendu la carte trop longtemps.",

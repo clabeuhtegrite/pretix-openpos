@@ -17,8 +17,11 @@ The flow, once, so the tests below read as steps rather than as HTTP:
    server finds the payment, books the order from the *pinned* basket, and only
    then is anything in the journal.
 """
+from unittest.mock import patch
+
 import pytest
 import requests
+from django.db import IntegrityError
 
 from pretix_openpos.models import PosDevice, PosSale, PosTerminalPayment
 
@@ -643,3 +646,60 @@ def test_a_payment_names_itself_by_its_key_and_state(till, ticket, reader_till, 
     start(till, [{"item": ticket.pk, "count": 1}])
 
     assert str(PosTerminalPayment.objects.get()) == f"{KEY} 10.00 pending"
+
+
+@pytest.mark.django_db
+def test_two_taps_in_the_same_second_charge_one_card(till, ticket, reader_till, sumup):
+    """
+    Both requests look for a payment, both find none, and the unique key lets
+    one through. The loser takes the winner's payment rather than faulting.
+    """
+    from pretix_openpos.models import PosTerminalPayment as Model
+
+    real_create = Model.objects.create
+    state = {"first": True}
+
+    def racing_create(**kwargs):
+        if state["first"]:
+            state["first"] = False
+            # The other request got there between the look-up and this line.
+            real_create(**kwargs)
+            raise IntegrityError("duplicate key")
+        return real_create(**kwargs)
+
+    with patch.object(Model.objects, "create", side_effect=racing_create):
+        response = start(till, [{"item": ticket.pk, "count": 1}])
+
+    assert response.status_code == 200
+    assert PosTerminalPayment.objects.count() == 1
+
+
+@pytest.mark.django_db
+def test_a_payment_naming_no_till_belongs_to_none(till, ticket, reader_till, sumup, device):
+    """
+    The check that stops one device booking a sale against another's card
+    payment. Two blanks matching would be the wrong way for it to fail.
+    """
+    start(till, [{"item": ticket.pk, "count": 1}])
+    payment = PosTerminalPayment.objects.get()
+    payment.device_serial = ""
+
+    assert payment.belongs_to(device) is False
+    assert payment.belongs_to(None) is False
+
+
+@pytest.mark.django_db
+def test_a_write_that_fails_for_another_reason_is_still_a_failure(
+    till, ticket, reader_till, sumup
+):
+    """
+    The catch above is for the duplicate key and nothing else. Anything else
+    answering 200 would tell a till a payment is running when none is.
+    """
+    from pretix_openpos.models import PosTerminalPayment as Model
+
+    with patch.object(Model.objects, "create", side_effect=IntegrityError("something else")):
+        with pytest.raises(IntegrityError):
+            start(till, [{"item": ticket.pk, "count": 1}])
+
+    assert not PosTerminalPayment.objects.exists()

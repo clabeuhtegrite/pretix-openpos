@@ -634,6 +634,37 @@ describe("on a till with a card reader of its own", () => {
     expect(onTerminalStart).not.toHaveBeenCalled();
   });
 
+  it("says so when the card was charged and the sale was not recorded", async () => {
+    // It should be impossible — the basket is pinned, the quota is forced, the
+    // total is not re-checked — but a cashier reading "not recorded" would
+    // otherwise assume nothing was charged.
+    const paid = {
+      phase: "paid" as const, amount: "12.34", currency: "EUR", message: null, stalled: false,
+    };
+    const { user } = show(
+      { cardMode: "terminal", terminal: paid, error: "Something went wrong." },
+      null,
+    );
+
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+
+    expect(
+      screen.getByText(`${t("payment.readerPaidNotRecorded")} Something went wrong.`),
+    ).toBeDefined();
+  });
+
+  it("does not say that about an ordinary refusal, before any card is charged", async () => {
+    const { user } = show(
+      { cardMode: "terminal", terminal: waiting, error: "Something went wrong." },
+      null,
+    );
+
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+
+    expect(screen.queryByText(t("payment.readerPaidNotRecorded"))).toBeNull();
+    expect(screen.getByText("Something went wrong.")).toBeDefined();
+  });
+
   it("leaves cash alone, because the drawer is still a drawer", async () => {
     const { user, onConfirm } = show({ cardMode: "terminal" }, null);
 
