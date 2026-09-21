@@ -603,6 +603,27 @@ button {
   color: var(--on-fill);
 }
 
+/* The first question of every sale, asked with the amount already on screen. */
+.pay-question {
+  margin: 14px 0;
+  font-size: 18px;
+  line-height: 1.4;
+  color: var(--text-dim);
+}
+
+/* Sized to be hit without looking, and without either button being the one
+   the thumb lands on by default: neither is where "next" used to be. */
+.pay-choice {
+  display: flex;
+  gap: 12px;
+}
+
+.pay-choice .btn {
+  flex: 1;
+  min-height: 108px;
+  font-size: 24px;
+}
+
 .amount-display {
   display: flex;
   justify-content: space-between;
@@ -1648,6 +1669,15 @@ table.takings thead th {
 
   .pay-panel .pay-toggle {
     margin-bottom: 12px;
+  }
+
+  .pay-panel .pay-question {
+    margin: 10px 0;
+  }
+
+  .pay-panel .pay-choice .btn {
+    min-height: 80px;
+    font-size: 20px;
   }
 
   .pay-panel .amount-display {

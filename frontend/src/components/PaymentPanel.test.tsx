@@ -1,9 +1,10 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { t } from "../i18n";
 import { formatMoney } from "../money";
+import type { PaymentType } from "../types";
 import PaymentPanel from "./PaymentPanel";
 
 /**
@@ -17,10 +18,21 @@ import PaymentPanel from "./PaymentPanel";
 
 const DENOMINATIONS = ["5.00", "10.00", "20.00", "50.00"];
 
-function show(props: Partial<Parameters<typeof PaymentPanel>[0]> = {}) {
+/**
+ * Render the panel and answer its first question, so a test lands where it
+ * means to: on the keypad, unless it says otherwise.
+ *
+ * ``method: null`` leaves the question open, which is what the block below
+ * looks at. The answer is given before the test's own props are applied,
+ * because a panel mid-request has necessarily been through the step already.
+ */
+function show(
+  props: Partial<Parameters<typeof PaymentPanel>[0]> = {},
+  method: PaymentType | null = "cash",
+) {
   const onConfirm = vi.fn();
   const onCancel = vi.fn();
-  const { container } = render(
+  const panel = (extra: Partial<Parameters<typeof PaymentPanel>[0]>) => (
     <PaymentPanel
       totalCents={1234}
       currency="EUR"
@@ -30,8 +42,14 @@ function show(props: Partial<Parameters<typeof PaymentPanel>[0]> = {}) {
       onConfirm={onConfirm}
       onCancel={onCancel}
       {...props}
-    />,
+      {...extra}
+    />
   );
+  const { container, rerender } = render(panel({ busy: false }));
+  if (method !== null) {
+    fireEvent.click(screen.getByRole("button", { name: t(`payment.${method}`) }));
+  }
+  rerender(panel({}));
   const user = userEvent.setup();
   const type = async (digits: string) => {
     for (const digit of digits) {
@@ -52,6 +70,90 @@ function show(props: Partial<Parameters<typeof PaymentPanel>[0]> = {}) {
 /** Whether a quick-tender button is lit: it is while its amount is the one received. */
 const lit = (name: string) =>
   screen.getByRole("button", { name }).getAttribute("aria-pressed") === "true";
+
+describe("the question that comes first", () => {
+  // Cash was the default and card a toggle nobody remembered to flip, which
+  // came out as a drawer that did not balance. Now nothing is presumed.
+
+  it("asks which way before showing anything to press", () => {
+    show({}, null);
+
+    expect(screen.getByText(t("payment.chooseMethod"))).toBeDefined();
+    expect(screen.queryByRole("button", { name: "1" })).toBeNull();
+    expect(screen.queryByRole("button", { name: t("payment.exact") })).toBeNull();
+  });
+
+  it("asks with the amount already on screen", () => {
+    // What the operator says out loud is "douze trente-quatre, espèces ou
+    // carte ?", so the figure has to be there before the question is answered.
+    show({}, null);
+
+    expect(
+      within(screen.getByText(t("payment.due")).parentElement as HTMLElement)
+        .getByText(formatMoney(1234, "EUR")),
+    ).toBeDefined();
+  });
+
+  it("offers nothing to confirm until it has an answer", () => {
+    const { container } = show({}, null);
+
+    const actions = container.querySelector(".pay-actions") as HTMLElement;
+    expect(
+      within(actions).queryByRole("button", { name: t("payment.confirm") }),
+    ).toBeNull();
+    expect(
+      within(actions).queryByRole("button", { name: t("payment.cardConfirm") }),
+    ).toBeNull();
+  });
+
+  it("opens the keypad once the answer is cash", async () => {
+    const { user, confirm } = show({}, null);
+
+    await user.click(screen.getByRole("button", { name: t("payment.cash") }));
+
+    expect(screen.getByRole("button", { name: "1" })).toBeDefined();
+    expect(confirm()).toHaveProperty("disabled", false);
+  });
+
+  it("goes straight to the terminal once the answer is card", async () => {
+    const { user, onConfirm, confirm } = show({}, null);
+
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+    expect(screen.getByText(t("payment.cardPrompt"))).toBeDefined();
+
+    await user.click(confirm());
+
+    expect(onConfirm).toHaveBeenCalledWith("card", null);
+  });
+
+  it("leaves the answer changeable afterwards", async () => {
+    // A mis-tap is one tap to undo, not a trip back to the basket.
+    const { user } = show({}, null);
+    await user.click(screen.getByRole("button", { name: t("payment.cash") }));
+
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+
+    expect(screen.queryByRole("button", { name: "1" })).toBeNull();
+    expect(screen.getByText(t("payment.cardPrompt"))).toBeDefined();
+  });
+
+  it("can be backed out of without answering", async () => {
+    const { user, onCancel, onConfirm } = show({}, null);
+
+    await user.click(screen.getByRole("button", { name: t("payment.back") }));
+
+    expect(onCancel).toHaveBeenCalledOnce();
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  it("asks it of a basket that pays out too", () => {
+    // Deposits handed back still leave the journal a payment type to record.
+    show({ totalCents: -300 }, null);
+
+    expect(screen.getByText(t("payment.chooseMethod"))).toBeDefined();
+    expect(screen.queryByText(t("payment.nothingToTake"))).toBeNull();
+  });
+});
 
 describe("the keypad", () => {
   it("reads digits as cents, the way a till does", async () => {
