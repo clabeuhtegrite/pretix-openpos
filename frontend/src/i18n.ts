@@ -52,8 +52,21 @@ export const MESSAGES = {
     "payment.exact": "Exact",
     "payment.cardPrompt": "Charge the customer on the card terminal, then confirm.",
     "payment.cardConfirm": "Payment taken",
-    "payment.cardTerminalOnly":
-      "This till has a card reader of its own, and the reader is not driven yet. Take this payment in cash.",
+    "payment.readerStarting": "Sending the basket to the card reader…",
+    "payment.readerAsking": "On the reader",
+    "payment.readerPrompt": "Ask the customer for their card on the reader.",
+    "payment.readerStalled":
+      "The till cannot reach the server for the moment. The payment carries on — do not take it again.",
+    "payment.readerPaid": "Payment accepted.",
+    "payment.readerRefused": "The card was refused.",
+    "payment.readerCancelled": "The payment was cancelled.",
+    "payment.readerTimeout": "The reader waited too long for the card.",
+    "payment.readerRetry": "Try again",
+    "payment.readerStop": "Cancel the payment",
+    "payment.readerCredit":
+      "There is a credit on this basket, and a card reader cannot settle one. Take this payment in cash.",
+    "payment.readerNoRefund":
+      "The money is going out on this basket, and a card reader cannot pay money out. Hand it back in cash.",
     "payment.confirm": "Confirm",
     "payment.back": "Back",
     "payment.working": "Recording…",
@@ -191,6 +204,10 @@ export const MESSAGES = {
     "reason.unknown": "Refused",
     "history.correct": "Correct the order",
     "history.correctHelp": "Correcting puts the items back in the basket and settles the difference at payment — no need to hand the whole amount back and take it again.",
+    "history.refundedToCard": "Already refunded to the customer's card.",
+    "history.refundFailed":
+      "The refund did not go through: the money is still on the customer's card. Refund it from the SumUp app.",
+    "history.finish": "Finish",
     "history.refundCashAndFinish": "Give {total} back and finish",
     "history.refundCardAndFinish": "Refund {total} on the terminal and finish",
     "history.scopeEvent": "This till only, for the whole event. Other tills are corrected on their own device, or in the back office.",
@@ -280,8 +297,21 @@ export const MESSAGES = {
     "payment.exact": "Appoint",
     "payment.cardPrompt": "Encaissez le client sur le TPE, puis confirmez.",
     "payment.cardConfirm": "Paiement encaissé",
-    "payment.cardTerminalOnly":
-      "Cette caisse a son propre TPE, et le TPE n’est pas encore piloté. Encaissez en espèces.",
+    "payment.readerStarting": "Envoi du panier au lecteur…",
+    "payment.readerAsking": "Sur le lecteur",
+    "payment.readerPrompt": "Demandez la carte au client sur le lecteur.",
+    "payment.readerStalled":
+      "La caisse n’arrive plus à joindre le serveur. Le paiement continue : ne l’encaissez pas une seconde fois.",
+    "payment.readerPaid": "Paiement accepté.",
+    "payment.readerRefused": "La carte a été refusée.",
+    "payment.readerCancelled": "Le paiement a été annulé.",
+    "payment.readerTimeout": "Le lecteur a attendu la carte trop longtemps.",
+    "payment.readerRetry": "Réessayer",
+    "payment.readerStop": "Annuler le paiement",
+    "payment.readerCredit":
+      "Un avoir est en cours sur ce panier, et le lecteur ne sait pas le déduire. Encaissez en espèces.",
+    "payment.readerNoRefund":
+      "Ce panier rend de l’argent, et le lecteur ne sait pas en rendre. Rendez la somme en espèces.",
     "payment.confirm": "Valider",
     "payment.back": "Retour",
     "payment.working": "Enregistrement…",
@@ -420,6 +450,10 @@ export const MESSAGES = {
     "reason.unknown": "Refusé",
     "history.correct": "Corriger la commande",
     "history.correctHelp": "Corriger remet les articles au panier et règle la différence à l’encaissement — inutile de rendre toute la somme pour la reprendre ensuite.",
+    "history.refundedToCard": "Déjà remboursé sur la carte du client.",
+    "history.refundFailed":
+      "Le remboursement n’est pas passé : l’argent est toujours sur la carte du client. Remboursez-le depuis l’application SumUp.",
+    "history.finish": "Terminer",
     "history.refundCashAndFinish": "Rendre {total} et terminer",
     "history.refundCardAndFinish": "Rembourser {total} sur le TPE et terminer",
     "history.scopeEvent": "Cette caisse uniquement, sur tout l’événement. Les autres se corrigent sur leur propre appareil, ou en back-office.",

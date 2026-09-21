@@ -7,6 +7,9 @@ const { apiMock } = vi.hoisted(() => ({
     config: vi.fn(),
     catalog: vi.fn(),
     checkout: vi.fn(),
+    terminalStart: vi.fn(),
+    terminalStatus: vi.fn(),
+    terminalCancel: vi.fn(),
     history: vi.fn(),
     cancelSale: vi.fn(),
     summary: vi.fn(),
@@ -1376,19 +1379,90 @@ describe("what a device is for", () => {
     expect(screen.queryByRole("heading", { name: t("checkin.title") })).toBeNull();
   });
 
-  it("will not take a card on a till whose reader it cannot drive", async () => {
+  /** What the server answers for a reader payment in one state or another. */
+  function reader(status: "pending" | "successful" | "failed", failure = "") {
+    return { status, amount: "5.00", currency: "EUR", failure };
+  }
+
+  it("puts the basket on the reader and records the sale it validated", async () => {
     apiMock.config.mockResolvedValue(assigned("pos", "terminal"));
+    apiMock.terminalStart.mockResolvedValue(reader("successful"));
     const { user } = show();
     await ready();
 
     await ringUp(user);
     await user.click(screen.getByRole("button", { name: t("payment.card") }));
 
-    expect(screen.getByText(t("payment.cardTerminalOnly"))).toBeDefined();
-    // No way to confirm it: the server would refuse the same payment, and a
-    // button that only ever produces an error is worse than no button.
+    await waitFor(() => expect(apiMock.checkout).toHaveBeenCalled());
+    const started = apiMock.terminalStart.mock.calls[0][1];
+    const sale = apiMock.checkout.mock.calls[0][1];
+    // One key for both: the sale the server records is the one the reader was
+    // asked to take, and that is what it looks up before it writes anything.
+    expect(sale.idempotency_key).toBe(started.idempotency_key);
+    expect(sale.payment_type).toBe("card");
+    // The figure the customer agreed to is the reader's, which the server
+    // priced — not this app's, whose catalogue can be a refresh behind.
+    expect(sale.expected_total).toBe("5.00");
+    expect(started.positions).toEqual(sale.positions);
+  });
+
+  it("records nothing when the card is refused", async () => {
+    apiMock.config.mockResolvedValue(assigned("pos", "terminal"));
+    apiMock.terminalStart.mockResolvedValue(reader("failed", "FAILED"));
+    const { user } = show();
+    await ready();
+
+    await ringUp(user);
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+
+    expect(await screen.findByText(t("payment.readerRefused"))).toBeDefined();
+    expect(apiMock.checkout).not.toHaveBeenCalled();
+  });
+
+  it("does not offer a card payment the operator could confirm by hand", async () => {
+    apiMock.config.mockResolvedValue(assigned("pos", "terminal"));
+    apiMock.terminalStart.mockResolvedValue(reader("pending"));
+    const { user } = show();
+    await ready();
+
+    await ringUp(user);
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+
+    expect(await screen.findByText(t("payment.readerPrompt"))).toBeDefined();
     expect(screen.queryByRole("button", { name: t("payment.cardConfirm") })).toBeNull();
     expect(apiMock.checkout).not.toHaveBeenCalled();
+  });
+
+  it("takes the basket back off the reader when the operator gives up", async () => {
+    apiMock.config.mockResolvedValue(assigned("pos", "terminal"));
+    apiMock.terminalStart.mockResolvedValue(reader("pending"));
+    apiMock.terminalCancel.mockResolvedValue(reader("failed", "CANCELLED"));
+    const { user } = show();
+    await ready();
+
+    await ringUp(user);
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+    await user.click(await screen.findByRole("button", { name: t("payment.readerStop") }));
+
+    expect(await screen.findByText(t("payment.readerCancelled"))).toBeDefined();
+    expect(apiMock.checkout).not.toHaveBeenCalled();
+  });
+
+  it("asks the reader again under a new key after a refusal", async () => {
+    // The server remembers a payment by its key, so retrying under the spent
+    // one would find the refusal instead of asking for a card again.
+    apiMock.config.mockResolvedValue(assigned("pos", "terminal"));
+    apiMock.terminalStart.mockResolvedValue(reader("failed", "FAILED"));
+    const { user } = show();
+    await ready();
+
+    await ringUp(user);
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+    await user.click(await screen.findByRole("button", { name: t("payment.readerRetry") }));
+
+    await waitFor(() => expect(apiMock.terminalStart).toHaveBeenCalledTimes(2));
+    const [first, second] = apiMock.terminalStart.mock.calls.map((call) => call[1]);
+    expect(second.idempotency_key).not.toBe(first.idempotency_key);
   });
 
   it("still takes cash on that same till", async () => {

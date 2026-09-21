@@ -768,7 +768,12 @@ class OpenPosViewSet(viewsets.ViewSet):
         net_total = sale_total + refund_total
 
         expected = data["expected_total"]
-        if expected is not None and expected != net_total:
+        # Not checked once the reader has the money: the basket being priced
+        # here *is* the one the card paid for, pinned when the cardholder was
+        # asked, so the two cannot disagree. If they somehow did, refusing
+        # would leave a charged card with no order behind it — which is the one
+        # outcome worth more than a mismatched figure.
+        if terminal is None and expected is not None and expected != net_total:
             # Refuse rather than charge a different amount than the one the
             # customer was told. The app reloads its catalogue and shows the new
             # basket; nothing has been taken at this point.

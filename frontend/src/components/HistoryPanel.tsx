@@ -26,7 +26,17 @@ interface Props {
    * The credited amount travels with them: the corrected order is settled
    * against it rather than by handing the whole sale back across the counter.
    */
-  onReuse: (positions: JournalPosition[], credit: { amountCents: number; order: string }) => void;
+  /**
+   * Put a cancelled sale's lines back in the basket to be corrected.
+   *
+   * `credit` is the money the till is still holding for the customer, which
+   * the corrected sale is settled against — and `null` when it is holding
+   * none, because a card reader has already sent it back to their card.
+   */
+  onReuse: (
+    positions: JournalPosition[],
+    credit: { amountCents: number; order: string } | null,
+  ) => void;
   onClose: () => void;
 }
 
@@ -113,6 +123,11 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
           (() => {
             const amount = Math.abs(toCents(done.cancellation.total));
             const card = done.cancellation.payment_type === "card";
+            // The reader gave the money back by itself, so the till is holding
+            // nothing for this customer: the corrected sale is charged in full
+            // and there is nothing to count out of the drawer.
+            const sentBack = done.card_refund === "done" || done.card_refund === "already";
+            const stuck = done.card_refund === "failed";
             return (
               <div className="history-done">
                 <div className="history-done-headline">{t("history.cancelled")}</div>
@@ -127,6 +142,14 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
                     {t("history.creditNote", { number: done.credit_note })}
                   </div>
                 )}
+                {sentBack && (
+                  <div className="history-done-meta">{t("history.refundedToCard")}</div>
+                )}
+                {/* Loud, and not a line of small print: a cancellation that
+                    looks complete while the money is still on the customer's
+                    card is the one thing nobody finds out about until the
+                    customer does. */}
+                {stuck && <div className="error-banner">{t("history.refundFailed")}</div>}
 
                 {/*
                   Two ways out, and the money only moves on one of them. Telling
@@ -139,7 +162,10 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
                     <button
                       className="btn primary"
                       onClick={() => {
-                        onReuse(done.sale!.positions, { amountCents: amount, order: done.sale!.order });
+                        onReuse(
+                          done.sale!.positions,
+                          sentBack ? null : { amountCents: amount, order: done.sale!.order },
+                        );
                         onClose();
                       }}
                     >
@@ -154,9 +180,11 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
                       void load();
                     }}
                   >
-                    {t(card ? "history.refundCardAndFinish" : "history.refundCashAndFinish", {
-                      total: formatMoney(amount, currency),
-                    })}
+                    {sentBack
+                      ? t("history.finish")
+                      : t(card ? "history.refundCardAndFinish" : "history.refundCashAndFinish", {
+                          total: formatMoney(amount, currency),
+                        })}
                   </button>
                 </div>
                 <div className="attendance-note">{t("history.correctHelp")}</div>

@@ -177,6 +177,25 @@ export interface CartLine {
 
 export type PaymentType = "cash" | "card";
 
+/** Where a card payment put on a reader has got to. */
+export type TerminalStatus = "pending" | "successful" | "failed";
+
+/**
+ * One card payment on the till's own reader, as the server sees it.
+ *
+ * The app never learns anything about it from the reader itself — the reader
+ * is driven through SumUp's cloud and answers to the server, not to this
+ * browser. So this is the whole of what the till knows, and `successful` here
+ * is the only thing that lets a card sale be recorded at all.
+ */
+export interface TerminalPayment {
+  status: TerminalStatus;
+  amount: string;
+  currency: string;
+  /** Why it did not go through, in words a cashier can read out. */
+  failure: string;
+}
+
 export interface SaleResult {
   order: { code: string; total: string; url: string | null };
   journal_seq: number;
@@ -287,6 +306,19 @@ export interface CancelResult {
   /** Number of the credit note pretix issued, when the order had an invoice. */
   credit_note: string | null;
   refunded: boolean;
+  /**
+   * What became of the money, when a card reader this server drives took it.
+   *
+   * `"none"` is every other sale — cash, or a card taken on somebody's phone —
+   * and the operator gives those back the way they took them. `"done"` and
+   * `"already"` mean it is on its way back to the customer's card and there is
+   * nothing to hand over. `"failed"` means it is still on their card and
+   * somebody has to refund it from the SumUp app, which is the one outcome
+   * that must not be shown as a cancellation that looks complete.
+   *
+   * Absent from a server older than the card reader.
+   */
+  card_refund?: "none" | "done" | "already" | "failed";
 }
 
 /** One ticket of the guest list a till carries for a network dropout. */

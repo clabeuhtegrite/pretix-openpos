@@ -369,6 +369,49 @@ describe("after a cancellation", () => {
     expect(onClose).toHaveBeenCalledOnce();
   });
 
+  describe("when a card reader took the money", () => {
+    /** The server having refunded the card, or not managed to. */
+    const refund = (card_refund: "done" | "already" | "failed") => ({
+      ...cancelled,
+      cancellation: { ...cancelled.cancellation, payment_type: "card" as const },
+      card_refund,
+    });
+
+    it("says the money is on its way back, and asks for nothing", async () => {
+      cancelSale.mockResolvedValue(refund("done"));
+      const { user } = show();
+
+      await cancel(user);
+
+      expect(screen.getByText(t("history.refundedToCard"))).toBeDefined();
+      expect(screen.getByRole("button", { name: t("history.finish") })).toBeDefined();
+    });
+
+    it("corrects the order without a credit, because the till holds none", async () => {
+      // The money went back to the card. Carrying a credit into the corrected
+      // basket would settle it against money the till no longer has.
+      cancelSale.mockResolvedValue(refund("already"));
+      const { user, onReuse } = show();
+      await cancel(user);
+
+      await user.click(screen.getByRole("button", { name: t("history.correct") }));
+
+      expect(onReuse).toHaveBeenCalledWith(cancelled.sale?.positions, null);
+    });
+
+    it("says plainly when the refund did not go through", async () => {
+      // The one outcome that must not read as a cancellation that is finished:
+      // the customer's money is still on their card.
+      cancelSale.mockResolvedValue(refund("failed"));
+      const { user } = show();
+
+      await cancel(user);
+
+      expect(screen.getByText(t("history.refundFailed"))).toBeDefined();
+      expect(screen.queryByRole("button", { name: t("history.finish") })).toBeNull();
+    });
+  });
+
   it("names the amount to hand back on the other way out", async () => {
     const { user } = show();
 

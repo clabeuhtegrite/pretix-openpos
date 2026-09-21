@@ -342,6 +342,38 @@ describe("the endpoints", () => {
     });
   });
 
+  it("puts a basket on the card reader", async () => {
+    await api.terminalStart(pairing, {
+      idempotency_key: "sale-1",
+      positions: [{ item: 3, variation: null, count: 2 }],
+    });
+
+    const [url, options] = callArgs();
+    expect(url).toBe("/api/v1/organizers/demo/events/festival/openpos/terminal/start/");
+    expect(options.method).toBe("POST");
+    expect(JSON.parse(String(options.body))).toEqual({
+      idempotency_key: "sale-1",
+      positions: [{ item: 3, variation: null, count: 2 }],
+    });
+  });
+
+  it("asks how a reader payment ended", async () => {
+    await api.terminalStatus(pairing, "sale-1");
+
+    expect(callArgs()[0]).toBe(
+      "/api/v1/organizers/demo/events/festival/openpos/terminal/status/?idempotency_key=sale-1",
+    );
+  });
+
+  it("takes a basket back off the reader", async () => {
+    await api.terminalCancel(pairing, "sale-1");
+
+    const [url, options] = callArgs();
+    expect(url).toBe("/api/v1/organizers/demo/events/festival/openpos/terminal/cancel/");
+    expect(options.method).toBe("POST");
+    expect(JSON.parse(String(options.body))).toEqual({ idempotency_key: "sale-1" });
+  });
+
   it("reads the takings", async () => {
     await api.summary(pairing);
 

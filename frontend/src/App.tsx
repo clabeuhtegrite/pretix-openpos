@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, ApiError } from "./api";
+import { api, ApiError, type PositionPayload } from "./api";
 import { basketFromJournal, customKey, refundKey, repriceCart } from "./basket";
 import CheckinScreen from "./components/CheckinScreen";
 import CustomSalePanel from "./components/CustomSalePanel";
@@ -12,6 +12,7 @@ import PaymentPanel from "./components/PaymentPanel";
 import SaleScreen, { type Sellable } from "./components/SaleScreen";
 import SettingsPanel from "./components/SettingsPanel";
 import SyncPanel from "./components/SyncPanel";
+import { describeError } from "./errors";
 import { t } from "./i18n";
 import { fromCents, toCents } from "./money";
 import { newNonce } from "./nonce";
@@ -29,6 +30,7 @@ import type {
 } from "./types";
 import { useBackClose } from "./useBackClose";
 import { useOfflineSnapshot } from "./useOfflineSnapshot";
+import { useTerminal } from "./useTerminal";
 import { useWakeLock } from "./useWakeLock";
 
 /**
@@ -40,11 +42,6 @@ import { useWakeLock } from "./useWakeLock";
  * figure and charging another.
  */
 const CATALOG_REFRESH_MS = 60_000;
-
-function describeError(err: unknown): string {
-  if (err instanceof ApiError) return err.isNetwork ? t("error.offline") : err.message;
-  return String(err);
-}
 
 /**
  * The check-in list this device scans on.
@@ -130,6 +127,13 @@ export default function App() {
   // attempt and reused across retries, so a timeout that actually committed
   // cannot turn into a second sale.
   const [paying, setPaying] = useState<{ key: string } | null>(null);
+  const terminal = useTerminal(pairing, (payment) => {
+    // The reader has the money. What follows is the same call as any other
+    // card sale — the server looks the payment up against this device before
+    // it writes anything down, which is the whole point of doing it this way.
+    void confirmPayment("card", null, payment.amount);
+  });
+  const resetTerminal = terminal.reset;
   const [busy, setBusy] = useState(false);
   const [payError, setPayError] = useState<string | null>(null);
 
@@ -491,7 +495,54 @@ export default function App() {
     };
   }
 
-  async function confirmPayment(paymentType: PaymentType, cashGiven: string | null) {
+  /**
+   * The basket as the server wants it: products and quantities.
+   *
+   * The same statement whether it is going to the card reader or to the
+   * checkout, which is what makes the card charge and the order agree — the
+   * reader is sent exactly what the order will be built from.
+   */
+  function positionsPayload(): PositionPayload[] {
+    return cart.map((line) => ({
+      item: line.itemId,
+      variation: line.variationId,
+      count: line.count,
+      // The two lines the server cannot price on its own: a free amount comes
+      // with its figure and its reason, a returned deposit only says that it
+      // is one.
+      ...(line.description
+        ? { price: fromCents(line.unitPrice), description: line.description }
+        : {}),
+      ...(line.refund ? { refund: true } : {}),
+    }));
+  }
+
+  /**
+   * Put the basket on the card reader, under a key this sale will carry.
+   *
+   * A fresh key on every attempt, including a retry after a refusal: the
+   * server remembers a reader payment by its key, so reusing a spent one would
+   * find the refusal it already recorded instead of asking for a card again.
+   */
+  function startTerminal() {
+    const key = newNonce();
+    setPaying({ key });
+    void terminal.start(key, positionsPayload());
+  }
+
+  /**
+   * Record the sale the customer has just paid for.
+   *
+   * `charged` is what a card reader took, when one did: the server priced the
+   * basket when it put it on the reader, and that figure — not this app's,
+   * whose catalogue can be a refresh behind — is the one the customer agreed
+   * to by tapping their card.
+   */
+  async function confirmPayment(
+    paymentType: PaymentType,
+    cashGiven: string | null,
+    charged?: string,
+  ) {
     if (!pairing || !paying) return;
 
     if (!online) {
@@ -513,24 +564,15 @@ export default function App() {
     try {
       const result = await api.checkout(pairing, {
         idempotency_key: paying.key,
-        positions: cart.map((line) => ({
-          item: line.itemId,
-          variation: line.variationId,
-          count: line.count,
-          // The two lines the server cannot price on its own: a free amount
-          // comes with its figure and its reason, a returned deposit only
-          // says that it is one.
-          ...(line.description
-            ? { price: fromCents(line.unitPrice), description: line.description }
-            : {}),
-          ...(line.refund ? { refund: true } : {}),
-        })),
+        positions: positionsPayload(),
         payment_type: paymentType,
         cash_given: cashGiven,
         cashier,
         // What the customer was just told. The server refuses rather than
-        // charge a different figure.
-        expected_total: fromCents(total),
+        // charge a different figure — except once a reader has taken the
+        // money, where the figure the customer agreed to is the one on the
+        // reader, and the basket is the one the server pinned for it.
+        expected_total: charged ?? fromCents(total),
       });
       setSale(result);
       setPaying(null);
@@ -578,6 +620,12 @@ export default function App() {
       setBusy(false);
     }
   }
+
+  // The panel has closed — the sale went through, or the basket came back.
+  // Either way nothing is on the reader any more as far as this till goes.
+  useEffect(() => {
+    if (paying === null) resetTerminal();
+  }, [paying, resetTerminal]);
 
   if (gated) return <InstallGate />;
 
@@ -725,6 +773,9 @@ export default function App() {
           currency={config.event.currency}
           denominations={config.cash_denominations}
           cardMode={config.device.card ?? "declared"}
+          terminal={terminal.state}
+          onTerminalStart={startTerminal}
+          onTerminalStop={() => void terminal.cancel()}
           busy={busy}
           error={payError}
           credit={credit}
