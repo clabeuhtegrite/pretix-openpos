@@ -256,7 +256,7 @@ class SumUpAccount:
             expect=(200, 202, 204),
         )
 
-    def transaction(self, *, client_transaction_id=None, transaction_id=None):
+    def transaction(self, client_transaction_id):
         """
         What SumUp says about a payment, or ``None`` while it does not exist.
 
@@ -264,15 +264,17 @@ class SumUpAccount:
         cardholder has no transaction, and SumUp says so with a 404. That is
         not an error here: it is "still waiting", which is exactly what the
         till is asking about.
+
+        Looked up by the ``client_transaction_id`` the reader checkout
+        returned, because that is the only handle there is until a transaction
+        exists. The transaction's own id comes back in the answer, and is what
+        a refund later points at.
         """
-        params = {}
-        if client_transaction_id:
-            params["client_transaction_id"] = client_transaction_id
-        if transaction_id:
-            params["id"] = transaction_id
         try:
             return self._call(
-                "GET", f"/v2.1/merchants/{self.merchant_code}/transactions", params=params
+                "GET",
+                f"/v2.1/merchants/{self.merchant_code}/transactions",
+                params={"client_transaction_id": client_transaction_id},
             )
         except SumUpError as exc:
             if "not know this reader or transaction" in str(exc.message):

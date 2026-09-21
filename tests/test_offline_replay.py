@@ -229,3 +229,21 @@ def test_replaying_the_same_offline_sale_twice_sells_it_once(till, event, ticket
     assert first.status_code == 201
     assert second.status_code == 200
     assert Order.objects.filter(event=event).count() == 1
+
+
+@pytest.mark.django_db
+def test_a_replayed_basket_with_an_unpriced_line_is_refused_whole(till, ticket, beer):
+    """
+    A queue entry damaged in storage. The prices of a sale taken offline come
+    from the lines, so a line without one leaves no figure at all — and
+    guessing the missing half would put a number nobody handed over on an
+    invoice.
+    """
+    response = offline_sale(
+        till,
+        [{"item": ticket.pk, "count": 1, "price": "10.00"}, {"item": beer.pk, "count": 1}],
+        charged="10.00",
+    )
+
+    assert response.status_code == 400
+    assert "must carry the price charged" in str(response.json()["positions"])

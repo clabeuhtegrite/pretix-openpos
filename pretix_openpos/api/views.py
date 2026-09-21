@@ -238,6 +238,13 @@ def resolve_line(line, *, sellable, overrides, custom_item, deposit, settled):
 
     description = line["description"].strip()
     is_refund = line["refund"]
+    sent_price = line["price"]
+    if sent_price is not None and not isinstance(sent_price, Decimal):
+        # A line the serializer validated arrives as a Decimal; one read back
+        # out of a pinned basket arrives as the string JSON stored. Everything
+        # below does arithmetic with it, so the conversion belongs here — the
+        # one place a line's price is decided — rather than at each caller.
+        sent_price = Decimal(str(sent_price))
 
     tariff = resolve_price(overrides, item, variation)
     if is_refund:
@@ -254,22 +261,19 @@ def resolve_line(line, *, sellable, overrides, custom_item, deposit, settled):
             raise ValidationError(
                 {"positions": [_("Free amounts can only be sold on the product set aside for them.")]}
             )
-        if line["price"] is None or line["price"] <= Decimal("0.00"):
+        if sent_price is None or sent_price <= Decimal("0.00"):
             raise ValidationError(
                 {"positions": [_("A free amount has to be more than nothing.")]}
             )
         # The one price the till decides. It is not compared with the tariff and
         # never reported as off-tariff: the product's own price is a placeholder
         # that no free-amount sale is charged at.
-        tariff = line["price"]
+        tariff = sent_price
 
-    price = line["price"] if settled else tariff
-    if price is None:
-        # A settled line with no price is a corrupted queue entry or a basket
-        # this server never priced. Either way there is no figure to book.
-        raise ValidationError(
-            {"positions": [_("This sale carries no price for {name}.").format(name=str(item.name))]}
-        )
+    # A settled line always has one: an offline sale is refused whole by
+    # CheckoutSerializer unless every line carries what was charged, and a
+    # basket pinned for the card reader was priced here in the first place.
+    price = sent_price if settled else tariff
 
     return ResolvedLine(
         item=item,
@@ -310,9 +314,7 @@ def settle_terminal_payment(payment, account):
     if payment.settled:
         return payment
     try:
-        transaction_data = account.transaction(
-            client_transaction_id=payment.client_transaction_id
-        )
+        transaction_data = account.transaction(payment.client_transaction_id)
     except SumUpError as exc:
         if exc.retryable:
             # Nothing is written. "We could not ask" is not "it failed", and
@@ -1080,8 +1082,7 @@ class OpenPosViewSet(viewsets.ViewSet):
             payment.failure = str(exc.message)
             payment.save(update_fields=["status", "failure", "updated"])
             raise ValidationError(
-                {"detail": [exc.message], "code": "terminal_unreachable",
-                 "retryable": exc.retryable}
+                {"detail": [exc.message], "code": "terminal_unreachable"}
             )
         payment.save(update_fields=["client_transaction_id", "updated"])
 
@@ -1266,10 +1267,16 @@ class OpenPosViewSet(viewsets.ViewSet):
         ).first()
         if replay:
             original = PosSale.objects.filter(event=event, seq=replay.cancels_seq).first()
-            return Response(
-                self._cancellation_payload(replay, original, replayed=True),
-                status=status.HTTP_200_OK,
+            body = self._cancellation_payload(replay, original, replayed=True)
+            # Asked again rather than remembered, and for a reason: the first
+            # attempt may have committed the cancellation and then lost the
+            # connection before it refunded the card. This is what finishes the
+            # job — and when it did run, it answers "already" rather than
+            # sending the money a second time.
+            body["card_refund"] = (
+                self._refund_card(event, original) if original else "none"
             )
+            return Response(body, status=status.HTTP_200_OK)
 
         sale = PosSale.objects.filter(event=event, seq=data["seq"]).select_related("order").first()
         if sale is None:
