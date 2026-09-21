@@ -90,6 +90,12 @@ Propriétés notables :
 espèces/carte apparaisse dans les vues et rapports natifs de pretix, sans que la
 caisse tienne une comptabilité parallèle.
 
+Une vente carte est de ce point de vue une vente carte, qu'elle ait été validée
+par le lecteur d'une caisse ou prise sur le téléphone d'un bénévole. Ce qui
+distingue les deux — la transaction SumUp, et de quoi la rembourser — vit à
+côté, dans `PosTerminalPayment` (§5quinquies), plutôt que dans le journal :
+le journal dit ce que le tiroir a fait.
+
 L'argent est **toujours encaissé avant** que la commande n'existe, donc ces
 prestataires ne participent jamais à un tunnel de paiement interactif :
 `is_allowed()` renvoie `False` en dur (jamais proposés dans la boutique),
@@ -142,10 +148,12 @@ jamais supprimée : `save()` sur une ligne existante et `delete()` lèvent une
 | `reason` | Le motif saisi par l'opérateur, pour qui lira le journal plus tard |
 | `previous_hash`, `hash`, `hash_version` | La chaîne d'intégrité |
 
-### 2.5 Quatre écrans de back-office
+### 2.5 Six écrans de back-office
 
-[views.py](../pretix_openpos/views.py) et [arrivals.py](../pretix_openpos/arrivals.py),
-montés par [urls.py](../pretix_openpos/urls.py).
+[views.py](../pretix_openpos/views.py), [arrivals.py](../pretix_openpos/arrivals.py),
+[devices.py](../pretix_openpos/devices.py) et
+[sumup_views.py](../pretix_openpos/sumup_views.py), montés par
+[urls.py](../pretix_openpos/urls.py).
 
 | URL | Écran | Permission exigée |
 |---|---|---|
@@ -153,6 +161,14 @@ montés par [urls.py](../pretix_openpos/urls.py).
 | `…/openpos/prices/` | Prix sur place | `event.items:write` |
 | `…/openpos/sales/` | Journal des ventes + relevé | `event.orders:read` |
 | `/control/organizer/<org>/openpos/arrivals/` | Affluence à l'entrée, tous événements passés | `event.orders:read` sur ≥ 1 événement |
+| `/control/organizer/<org>/openpos/devices/` | Appareils de caisse : rôle et lecteur de chacun | `organizer.devices:write` |
+| `/control/organizer/<org>/openpos/sumup/` | Lecteurs de carte : le compte SumUp et ses lecteurs | `organizer.devices:write` |
+
+Les trois derniers sont au niveau *organisateur*, et pas par événement : une
+caisse est appairée une fois, un lecteur appartient à l'association, et
+« à quelle heure les gens arrivent-ils ? » est une question qui porte sur toutes
+les soirées passées. Les deux écrans matériels sont gardés par la permission des
+devices de pretix — qui peut appairer une caisse peut dire à quoi elle sert.
 
 L'écran *Prix sur place* est un tableau, pas un formset : un champ par ligne
 vendable, et un champ vide signifie « facturer le prix en ligne ». Il est **tout
@@ -161,9 +177,7 @@ ou rien** — le formulaire est lu en entier avant que quoi que ce soit ne soit
 avec ce qui a été tapé, pas avec ce que la base contient encore. La virgule est
 acceptée comme séparateur décimal.
 
-L'écran Affluence est le seul au niveau *organisateur* : « à quelle heure les
-gens arrivent-ils ? » est une question qui se pose sur l'ensemble des soirées
-passées, pas sur une seule. Il est strictement en lecture — un histogramme des
+L'écran Affluence est strictement en lecture — un histogramme des
 scans d'entrée réussis par heure locale de l'événement, le pic et le creux, et
 le détail par événement. Les check-ins automatiques, les commandes en mode test,
 les scans refusés et les scans de sortie n'y comptent pas : la page mesure des
@@ -224,10 +238,12 @@ lecteur passe par le cloud de SumUp, donc une caisse sans réseau n'a pas pu en
 démarrer un, et enregistrer celui-là reviendrait à écrire un paiement carte que
 personne ne peut retrouver.
 
-Le lecteur ne s'attribue pas encore depuis le back-office : le code qui parle à
-SumUp n'existe pas, et remplir le champ rendrait la caisse incapable de prendre
-la carte. Le garde-fou est écrit et testé d'avance pour que l'intégration n'ait
-qu'à fournir la référence de transaction.
+Le lecteur s'attribue sur ce même écran, dans la colonne *Lecteur de carte*, et
+seulement à une caisse : un lecteur appartient à un poste, et une porte encaisse
+la carte sur le téléphone de quelqu'un. Deux caisses ne peuvent pas se partager
+un lecteur non plus — les deux règles sont vérifiées à l'enregistrement, pas
+suggérées. La liste déroulante est remplie depuis le compte SumUp de
+l'organisateur ; le §5quinquies décrit ce qui se passe ensuite.
 
 ---
 
@@ -295,6 +311,10 @@ Puis, sous *Organisateur → Open POS → Appareils de caisse*, dire à quoi ser
 appareil : **Caisse** pour le bar, **Porte** pour l'entrée. Laisser *non
 attribué* est un choix valable et c'est l'état par défaut — l'appareil fait
 alors les deux, comme avant l'existence de ce réglage. Voir le §2.7.
+
+Si cette caisse a un lecteur de carte, c'est aussi ici qu'on le lui donne, une
+fois le compte SumUp renseigné sous *Open POS → Lecteurs de carte*. Voir le
+§5quinquies.
 
 ### 3.4 Installer la caisse sur la tablette
 
@@ -379,6 +399,10 @@ saisi par réflexe n'est pas quelque chose qu'on met à un geste de distance.
    direct.
 5. **Envoi** — `POST checkout/` avec la clé, les lignes, le type de paiement, le
    montant reçu, le nom du caissier et `expected_total`.
+
+Sur une caisse à qui un lecteur de carte est attribué, choisir *Carte* insère
+deux étapes avant celle-ci : le panier part sur le lecteur, et la vente n'est
+envoyée qu'une fois le paiement validé. Le §5quinquies décrit la séquence.
 
 ### 4.2 Côté serveur
 
@@ -612,9 +636,11 @@ comme ce qui s'est passé : un avoir imputé sur une vente neuve.
 
 ### Ce que la caisse ne fait pas à votre place
 
-- **L'argent physique.** Espèces : « Rendez 3,00 € sur la caisse. » Carte :
-  « Remboursez 3,00 € sur le TPE » — le plugin ne pilote aucun terminal, et
-  prétendre le contraire serait pire que se taire.
+- **L'argent physique, tant qu'aucun lecteur n'est en jeu.** Espèces :
+  « Rendez 3,00 € sur la caisse. » Carte prise sur le téléphone de quelqu'un :
+  « Remboursez 3,00 € sur le TPE » — là, le plugin ne pilote rien et prétendre
+  le contraire serait pire que se taire. Une vente encaissée sur le lecteur
+  d'une caisse, en revanche, se rembourse toute seule (§5quinquies).
 - **Le remboursement partiel.** Une vente s'annule en entier. Reprendre les
   articles au panier, en retirer un et réencaisser fait le même travail, avec
   une piste écrite en trois documents plutôt qu'une modification silencieuse.
@@ -876,6 +902,149 @@ Deux limites assumées :
 
 ---
 
+## 5quinquies. Le lecteur de carte SumUp
+
+Une caisse à qui un lecteur est attribué encaisse la carte **sur ce lecteur**,
+et le serveur n'enregistre pas une vente carte que le lecteur n'a pas validée.
+C'est la règle qui justifie tout le reste de cette section.
+
+Le lecteur retenu est le **SumUp Solo**, piloté par la *Cloud API* de SumUp. Un
+lecteur Bluetooth s'appaire avec l'application du fabricant, pas avec une page
+web : il ne peut pas être piloté depuis la PWA. La Cloud API, elle, prend une
+requête HTTP côté serveur et fait sonner le lecteur. Elle couvre le Solo et le
+Go, pas le Solo Lite ; le Solo doit être en firmware 3.3.24.3 ou plus récent.
+
+**Un lecteur piloté par l'API est détaché de l'application SumUp Paiements.**
+Il n'y a donc pas de repli sur l'app du téléphone en pleine soirée sans le
+réappairer. C'est le seul vrai inconvénient du montage, et il vaut d'être connu
+avant la soirée plutôt que pendant.
+
+### Mise en route
+
+1. *Organisateur → Open POS → Lecteurs de carte* : coller le **code marchand**
+   (visible dans le tableau de bord SumUp, du genre `MH4H92C7`) et une **clé
+   d'API** créée sous *Paramètres → Pour les développeurs → Clés d'API*. La clé
+   est stockée sur le serveur, n'est jamais renvoyée dans la page, ne part
+   jamais vers une caisse, et n'apparaît pas dans le journal de l'organisateur —
+   seul le nom des champs modifiés y est écrit.
+2. Sur le lecteur : menu → connecter à une application. Il affiche un **code
+   d'appairage**, valable quelques minutes. Le coller dans le formulaire
+   *Appairer un lecteur*.
+3. SumUp répond avant que le lecteur physique n'ait acquitté, ce qui prend
+   quelques secondes : l'écran dit *En attente du lecteur* plutôt que *Appairé*,
+   et il suffit de recharger.
+4. *Open POS → Appareils de caisse* : donner ce lecteur à la caisse, dans la
+   colonne *Lecteur de carte*.
+
+### Le déroulé d'un paiement
+
+Deux temps, et c'est ce découpage qui fait que la carte et la commande ne
+peuvent pas diverger.
+
+1. La caisse poste le panier sur `terminal/start`. **Le serveur le tarife, garde
+   ce qu'il a tarifé** (`PosTerminalPayment.positions`), et met ce total sur le
+   lecteur. Il refuse tout de suite un produit épuisé, un produit qui n'est pas
+   en vente au guichet, et un panier qui ne doit rien.
+2. La caisse interroge `terminal/status` toutes les deux secondes. Quand SumUp
+   dit que l'argent a bougé, la caisse poste la vente sur `checkout/` avec **la
+   même clé d'idempotence**. Le serveur retrouve le paiement, vérifie qu'il
+   appartient à cet appareil, et construit la commande **depuis le panier
+   épinglé** — pas depuis ce que l'app renvoie.
+
+Une modification de tarif entre les deux temps ne change donc rien : la commande
+vaut ce que la carte a payé. Une app qui enverrait un panier au lecteur et un
+autre au journal fait enregistrer le premier.
+
+### Ce qui n'est jamais cru
+
+Le webhook de SumUp **n'est pas signé**. Sa notification porte un identifiant
+d'événement, un identifiant de transaction, un code marchand et un mot du genre
+« successful », et rien qui authentifie tout ça. Il est donc traité comme un
+coup de coude et rien de plus : il *déclenche* une interrogation de l'API
+Transactions, sur une connexion authentifiée, et c'est cette réponse-là qui est
+écrite. Un webhook forgé peut, au mieux, faire faire une lecture plus tôt que
+prévu.
+
+Il s'ensuit que le webhook est **facultatif** : l'interrogation périodique fait
+le même travail, une ou deux secondes plus tard. Une installation que SumUp ne
+peut pas joindre — un pretix derrière un VPN, un portable sur le wifi d'une
+salle — encaisse exactement pareil. Le serveur ne demande d'ailleurs pas de
+`return_url` du tout si `SITE_URL` n'est pas en HTTPS : SumUp refuserait
+l'appel, et un encaissement refusé devant un client coûte plus cher qu'une
+seconde d'attente.
+
+L'URL de rappel porte un jeton aléatoire par organisateur. Ce n'est pas la
+frontière de sécurité — le paragraphe ci-dessus l'est — mais ça évite que la
+lecture puisse être déclenchée par quiconque connaît le slug.
+
+### « On n'a pas pu demander » n'est pas « ça a échoué »
+
+C'est la distinction sur laquelle repose tout le reste, et elle est tenue des
+deux côtés :
+
+- **Côté serveur**, une erreur SumUp qui vaut la peine d'être retentée — un
+  timeout, une coupure, un 5xx — n'écrit rien. Écrire « échoué » perdrait un
+  paiement passé pendant qu'un câble était débranché : de l'argent encaissé,
+  aucune vente, et rien à montrer.
+- **Côté caisse**, perdre le serveur en pleine attente n'affiche jamais un
+  refus. Le lecteur répond à SumUp, pas à la tablette : l'écran dit que le
+  paiement suit son cours et qu'il ne faut pas l'encaisser une seconde fois.
+  Seul le serveur met fin à l'attente.
+
+Quitter un paiement en cours demande deux appuis : un pour retirer le panier du
+lecteur, un pour revenir. Et ce que répond l'annulation, c'est ce qui s'est
+réellement passé — une carte présentée dans la même seconde est un paiement, et
+la caisse est prévenue plutôt que de laisser partir un client qui a payé.
+
+### Ce que le lecteur ne fait pas
+
+- **Un panier qui rend de l'argent.** SumUp ne rembourse que contre une
+  transaction d'origine (voir §5quater) : il n'y a aucun moyen d'envoyer de
+  l'argent vers une carte que rien ne justifie. Le retour de consigne se rend en
+  espèces, et la caisse le dit avant de demander une carte au client.
+- **Un panier réglé sur un avoir.** Le lecteur encaisserait le panier entier
+  alors que la caisse détient déjà l'argent du client. En espèces, les deux
+  moitiés se règlent d'un seul geste. C'est refusé, avec le motif à l'écran.
+- **Une vente rejouée depuis la file hors ligne.** Un paiement lecteur passe par
+  le cloud de SumUp : une caisse sans réseau n'a pas pu en démarrer un.
+
+### Annuler une vente carte
+
+C'est le cas où le remboursement s'automatise entièrement. La transaction est
+connue, donc `cancel/` la rembourse **en totalité, par API, sans le lecteur et
+sans la carte du client**, et répond ce qu'il en est :
+
+| `card_refund` | Ce que ça veut dire | Ce que la caisse affiche |
+|---|---|---|
+| `none` | Espèces, ou carte prise sur le téléphone de quelqu'un | Le montant à rendre, comme avant |
+| `done` | SumUp a accepté le remboursement | *Déjà remboursé sur la carte du client*, rien à rendre |
+| `already` | C'était déjà fait | Idem |
+| `failed` | **L'argent est toujours sur la carte du client** | Un bandeau rouge, et quoi faire : rembourser depuis l'app SumUp |
+
+Une correction de commande après une annulation carte ne porte donc **pas
+d'avoir** : l'argent est reparti. Le panier corrigé s'encaisse en entier.
+
+Si la connexion meurt entre l'annulation et le remboursement, la caisse
+réessaie avec la même clé : le serveur lui rend l'annulation telle quelle *et*
+finit le remboursement, ou répond qu'il était déjà fait. Rien d'autre ne
+repasserait derrière.
+
+### Quand le lecteur disparaît
+
+Un lecteur désappairé depuis le tableau de bord SumUp laisse une caisse qui
+pointe sur un lecteur inconnu, et cette caisse refuse alors tout paiement carte
+sans que le caissier puisse comprendre pourquoi. Les deux écrans le disent :
+celui des lecteurs liste les caisses concernées, celui des appareils affiche
+*inconnu de SumUp* sur la ligne. Retirer un lecteur depuis Open POS, à
+l'inverse, le retire aussi de la caisse à qui il était donné — cette caisse
+repart en carte déclarée, elle ne s'arrête pas de vendre.
+
+Et si SumUp est injoignable, aucun des deux écrans ne se ferme : l'erreur
+s'affiche au-dessus du tableau, les rôles restent modifiables, et un lecteur
+déjà attribué reste attribué.
+
+---
+
 ## 6. Les garde-fous
 
 ### 6.1 Le serveur est seul maître des prix
@@ -921,6 +1090,26 @@ double appui ne peuvent donc pas vendre deux fois les mêmes billets : la second
 requête retrouve la vente et renvoie la commande d'origine avec `replayed: true`.
 
 C'est la façon la plus courante pour une caisse maison de perdre de l'argent.
+
+La même clé couvre le paiement sur le lecteur, et c'est encore plus nécessaire
+là : le *reader checkout* de SumUp n'a aucune idempotence à lui, donc un
+deuxième appel démarre un deuxième paiement. `terminal/start` retrouve le
+paiement en cours au lieu de solliciter le lecteur une seconde fois. Une
+tentative refusée, en revanche, se rejoue sous une **clé neuve** : la clé
+dépensée porte le refus, et la réutiliser ne ferait que le retrouver.
+
+### 6.3bis Le panier épinglé
+
+Le serveur tarife le panier au moment où il le met sur le lecteur, et garde ce
+qu'il a tarifé. La commande est construite depuis cette copie, pas depuis ce que
+l'app renvoie ensuite. C'est ce qui rend impossible qu'une carte paie un montant
+et qu'une commande en dise un autre — par un tarif modifié entre les deux, ou
+par une app qui enverrait deux paniers différents.
+
+Le contrôle `expected_total` du §6.2 ne s'applique d'ailleurs pas à ces
+ventes-là : les deux montants sont le même par construction, et refuser laisserait
+une carte débitée sans commande derrière — ce qui coûte plus cher qu'un chiffre
+qui ne correspond pas.
 
 ### 6.4 Le journal chaîné
 
@@ -1043,12 +1232,21 @@ Base : `/api/v1`. Authentification : `Authorization: Device <token>`.
 | `GET` | `…/openpos/history/` | Journal de l'événement, **de cette caisse seule** (100 dernières, `truncated` si tronqué) |
 | `GET` | `…/openpos/offline/?list=<id>` | Liste embarquée pour scanner sans réseau |
 | `POST` | `…/openpos/cancel/` | Annule une vente de cette caisse (avoir + remboursement + contrepassation) |
+| `POST` | `…/openpos/terminal/start/` | Met le panier sur le lecteur de cette caisse |
+| `GET` | `…/openpos/terminal/status/?idempotency_key=<clé>` | Où en est ce paiement lecteur |
+| `POST` | `…/openpos/terminal/cancel/` | Retire le panier du lecteur |
 | `POST` | `/organizers/<org>/checkinrpc/redeem/` | Pointage (endpoint pretix natif) |
 | `GET` | `/organizers/<org>/checkinrpc/search/` | Recherche de participant (natif) |
 
 Tout appel sur un événement où le plugin n'est pas activé est refusé en 403, quel
 que soit l'accès du device : c'est ce qui empêche une app périmée de vendre sur
 un événement pour lequel l'organisateur n'a jamais ouvert de caisse.
+
+Les trois endpoints `terminal/` n'existent que pour une caisse à qui un lecteur
+est attribué ; les autres reçoivent `no_terminal`. En dehors de `/api/v1`, le
+plugin expose aussi `POST /openpos/sumup/<org>/<jeton>/`, où SumUp signale qu'un
+paiement lecteur s'est terminé — non authentifié par conception de SumUp, donc
+rien de ce qu'il dit n'est cru (§5quinquies).
 
 ### Corps de `checkout/`
 
@@ -1182,7 +1380,12 @@ le tarif d'hier.
 | 400 `price_changed` | Les prix ont bougé sous le panier | Recharge le catalogue, re-tarife, garde le panneau ouvert |
 | 400 `positions` | Produit non vendable au guichet / variante inconnue | Affiche le message tel quel |
 | 400 `cash_given` | Reçu inférieur au dû, ou montant reçu sur un panier qui paie | Affiche le message |
-| 400 `terminal_required` | Paiement carte sur une caisse à qui un lecteur est attribué | Affiche le refus ; le bouton *Valider* n'est pas offert en carte sur cette caisse (§2.7) |
+| 400 `terminal_required` | Vente carte qu'aucun paiement lecteur ne justifie | Ne devrait pas arriver : l'app passe par le lecteur (§5quinquies). Affiche le refus |
+| 400 `no_terminal` | Appel `terminal/` depuis une caisse sans lecteur | Idem ; l'app n'offre ce chemin qu'en mode `terminal` |
+| 400 `nothing_to_charge` | Panier qui ne doit rien, ou qui rend de l'argent | L'app le dit avant d'appeler : *à régler en espèces* |
+| 400 `sold_out` | Produit épuisé, vérifié avant de demander la carte | Affiche le message tel quel |
+| 400 `terminal_unreachable` | SumUp injoignable au moment de solliciter le lecteur | Affiche le motif, avec *Réessayer* (nouvelle clé) |
+| 400 `no_payment` | `terminal/status` ou `terminal/cancel` sur un panier jamais démarré | Affiche le motif |
 | 401 / 403 | Device révoqué, ou plugin désactivé sur l'événement | Affiche le motif, avec *Réessayer* et *Dépairer* ; l'appairage n'est jamais effacé tout seul |
 
 ---
@@ -1244,6 +1447,10 @@ Ce qu'elle couvre, fichier par fichier :
 | `test_summary.py` | La journée de caisse qui commence à 6 h, le mode test à part, une annulation qui se nette |
 | `test_catalog.py` | Ce que la caisse a le droit de vendre et ce qu'on lui dit de l'événement |
 | `test_attendance.py` | Le compteur de présents, produits d'admission seulement |
+| `test_device_roles.py` | Le rôle d'un appareil, et ce que le serveur refuse à une caisse qui a un lecteur |
+| `test_terminal.py` | Le paiement sur le lecteur de bout en bout : panier épinglé, double appui, webhook forgé, remboursement à l'annulation |
+| `test_sumup_client.py` | La forme d'un échec SumUp — « refusé », « pas encore », « on n'a pas pu demander » |
+| `test_sumup_backoffice.py` | Les deux écrans matériels : la clé d'API hors des journaux, un lecteur donné à une seule caisse, SumUp en panne |
 | `test_backoffice.py` | Les écrans, chacun avec sa permission exacte — dont la page de commande de pretix, qu'une vente espèces a déjà mise en 500 |
 | `test_arrivals.py` | L'histogramme et tout ce qu'il ne doit pas compter |
 | `test_security.py` | Ce qu'un token de caisse atteint, et surtout ce qu'il n'atteint pas |
@@ -1251,7 +1458,9 @@ Ce qu'elle couvre, fichier par fichier :
 **La suite frontend** (`frontend/src/*.test.ts`) couvre la logique qui décide où
 va l'argent : les règles de reprise de la file, les verdicts hors ligne à la
 porte, l'arithmétique en centimes, la monnaie à rendre sur une commande corrigée
-contre un avoir, et la clé d'idempotence d'une annulation.
+contre un avoir, la clé d'idempotence d'une annulation, et la conduite du
+lecteur de carte — dont la règle qu'un serveur injoignable ne s'affiche jamais
+comme un refus.
 
 ```bash
 cd frontend && npm test
@@ -1297,7 +1506,9 @@ Rappel, parce que c'est la première question qu'on se pose en incident :
 
 pas de **remboursement partiel** depuis la caisse — une vente s'annule en entier puis se
 refait corrigée, rembourser deux bières sur trois reste un travail de back-office
-—, pas d'**impression** de reçu ni de billet, pas de **questions au contrôle**, pas
+—, pas de **remboursement libre sur carte** : rendre une consigne se fait en
+espèces, et ce n'est pas un choix mais une contrainte de SumUp (§5quater), pas
+d'**impression** de reçu ni de billet, pas de **questions au contrôle**, pas
 de **Tap to Pay** (Stripe ne l'expose que par ses SDK natifs), et **aucune
 certification fiscale** — le journal est conçu pour qu'un travail de conformité
 reste possible, mais aucune revendication n'est faite sur les législations
