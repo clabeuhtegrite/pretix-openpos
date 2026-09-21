@@ -1,0 +1,227 @@
+# Publishing the image the cluster actually runs.
+#
+# Until now this image existed only on 192.168.1.37:5000, a MetalLB address on
+# the home LAN, and the only way to put it there was `docker build` + `docker
+# push` from a machine on that network. No CI runner can reach it, so every
+# release needed a laptop, a VPN and a `docker login` — and the cluster's
+# homelab-k8s repo says so in as many words (docs/12 §12.9).
+#
+# The way out is not to give CI the LAN. It is to publish the image somewhere
+# CI can reach and the cluster already knows how to read. The cluster runs a
+# mirror-reconcile CronJob that copies declared upstreams into .37 with
+# `skopeo copy --all`, byte for byte, so the internal digest equals the
+# upstream one. Seven images already arrive that way, four of them from
+# ghcr.io. Publishing here turns this image into the eighth, and the hand-push
+# disappears.
+#
+# TWO TAGS, AND THEY ARE NOT INTERCHANGEABLE.
+#
+#   <version>-pretix<base>   immutable, one per build, never moved. This is the
+#                            provenance record and what a rollback names.
+#   pretix<base>             the channel. It MOVES to the newest build on that
+#                            pretix base, and it is the tag the cluster's
+#                            manifest declares as its upstream.
+#
+# The channel is what makes the deployment safe, and the reason is worth
+# stating because it is the whole design. mirror-reconcile pre-seeds the digest
+# its declared upstream tag serves *today*, every 30 minutes, before anything
+# in the cluster asks for it. With a moving channel tag the new image is
+# therefore already on .37 by the time Renovate opens the digest bump, so
+# merging that bump is an ordinary rollout. With an immutable tag in that slot
+# the upstream only changes in the same commit that pins it, nothing can be
+# pre-seeded, and the pod would sit in ImagePullBackOff until the next
+# reconcile pass — on a deployment whose strategy is Recreate, that is the
+# ticketing system down, not a rollout that waits.
+#
+# The base version stays in the tag on purpose. A pretix base change is a
+# different channel, so it cannot arrive as a silent digest bump: it takes an
+# edit to the manifest, which is exactly the deliberate gesture §12.9 asks for.
+name: Publish production image
+
+on:
+  # The ordinary path. Fired by hand, or through the API, once main carries the
+  # version to ship.
+  workflow_dispatch:
+    inputs:
+      base:
+        description: "pretix base version (defaults to the Dockerfile's ARG PRETIX_VERSION)"
+        required: false
+        type: string
+      force:
+        description: "Overwrite the immutable tag if it already exists"
+        required: false
+        type: boolean
+        default: false
+  # A release tag ships itself.
+  push:
+    tags: ["v*"]
+
+# Least privilege: the build needs to write packages and read the tree, nothing
+# else. GITHUB_TOKEN covers both, so this workflow adds no secret to the repo.
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  # Two builds pushing the same channel tag would race for which one it ends
+  # up pointing at.
+  group: publish-image
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: "Build and push to ghcr.io"
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # Both numbers come from the tree being built, never from a hand-typed
+      # input, so the tag cannot disagree with what is inside the image. The
+      # base is overridable because a base bump is a rebuild of unchanged
+      # plugin code — the one case where nothing in the tree moves.
+      - name: Work out the version, the base and the tags
+        id: id
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' pretix_openpos/__init__.py)
+          [ -n "$version" ] || { echo "::error::no __version__ in pretix_openpos/__init__.py"; exit 1; }
+
+          base='${{ inputs.base }}'
+          if [ -z "$base" ]; then
+            base=$(sed -n 's/^ARG PRETIX_VERSION=\(.*\)$/\1/p' deploy/Dockerfile)
+          fi
+          [ -n "$base" ] || { echo "::error::no ARG PRETIX_VERSION in deploy/Dockerfile"; exit 1; }
+
+          # Lowercase: ghcr.io rejects an uppercase path, and the owner's login
+          # is not guaranteed to be lowercase.
+          repo=$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+
+          {
+            echo "version=$version"
+            echo "base=$base"
+            echo "repo=$repo"
+            echo "immutable=$repo:$version-pretix$base"
+            echo "channel=$repo:pretix$base"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # An immutable tag that gets overwritten is not immutable, and the
+      # cluster pins digests against the promise that it is not. A rebuild of
+      # an already-published version is a mistake often enough to be worth
+      # refusing by default: bump the version, or say `force` and mean it.
+      - name: Refuse to overwrite a published version
+        if: ${{ !inputs.force }}
+        run: |
+          set -euo pipefail
+          if docker manifest inspect '${{ steps.id.outputs.immutable }}' > /dev/null 2>&1; then
+            echo "::error::${{ steps.id.outputs.immutable }} already exists. Bump __version__, or re-run with force."
+            exit 1
+          fi
+          echo "${{ steps.id.outputs.immutable }} is free."
+
+      # --platform linux/amd64 is the cluster's architecture and the runner's,
+      # but naming it keeps the manifest single-platform and predictable.
+      # --provenance=false --sbom=false keep buildx from wrapping the result in
+      # an attestation index, which would make the pinned digest name the index
+      # rather than the image.
+      # buildx by name rather than `docker build`, so --provenance and --sbom
+      # are certain to be understood whatever the runner's default builder is;
+      # --load puts the result in the local store, which the checks below and
+      # the push both read.
+      - name: Build
+        run: |
+          docker buildx build --platform linux/amd64 --provenance=false --sbom=false --load \
+            -f deploy/Dockerfile \
+            --build-arg PRETIX_VERSION='${{ steps.id.outputs.base }}' \
+            -t '${{ steps.id.outputs.immutable }}' \
+            -t '${{ steps.id.outputs.channel }}' \
+            .
+
+      # The same assertion the CI image job makes, for the same reason: a
+      # missing bundle does not fail the build, it fails at runtime with the
+      # till 500ing on its own JavaScript. Checked before the push, so a broken
+      # image never reaches a tag the cluster reads.
+      - name: The till's own JavaScript is in the image
+        run: |
+          docker run --rm --entrypoint sh '${{ steps.id.outputs.immutable }}' -c \
+            'ls /pretix/src/pretix/static.dist/pretix_openpos/pwa/app.js'
+
+      # And that the two versions in there agree. A bundle older than the
+      # plugin beside it is the one failure the till cannot be talked out of:
+      # it sees a server newer than itself and offers an update no reload can
+      # apply.
+      # Searched across the whole bundle directory rather than app.js alone:
+      # which chunk vite bakes the version into is its business, and pinning
+      # this check to one filename would turn a chunking change into a failed
+      # release.
+      - name: The plugin and the bundle are the same version
+        run: |
+          set -euo pipefail
+          found=$(docker run --rm --entrypoint sh '${{ steps.id.outputs.immutable }}' -c \
+            "grep -rlF '\"${{ steps.id.outputs.version }}\"' /pretix/src/pretix/static.dist/pretix_openpos/pwa/ | head -1" || true)
+          if [ -z "$found" ]; then
+            echo "::error::no file in the bundle carries ${{ steps.id.outputs.version }} — the image would ship a bundle older than the plugin installed beside it"
+            exit 1
+          fi
+          echo "bundle and plugin both at ${{ steps.id.outputs.version }} (${found})."
+
+      # The immutable tag first: if the push of the channel fails, the record
+      # of this build still exists and the channel still points at the last
+      # image known to be good.
+      - name: Push
+        id: push
+        run: |
+          set -euo pipefail
+          docker push '${{ steps.id.outputs.immutable }}'
+          docker push '${{ steps.id.outputs.channel }}'
+          digest=$(docker buildx imagetools inspect '${{ steps.id.outputs.immutable }}' \
+                     --format '{{.Manifest.Digest}}')
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      # The channel has to resolve to this build, or the cluster will pre-seed
+      # the wrong image and nobody will notice until a rollout.
+      - name: The channel points at this build
+        run: |
+          set -euo pipefail
+          channel=$(docker buildx imagetools inspect '${{ steps.id.outputs.channel }}' \
+                      --format '{{.Manifest.Digest}}')
+          if [ "$channel" != '${{ steps.push.outputs.digest }}' ]; then
+            echo "::error::channel resolves to $channel, expected ${{ steps.push.outputs.digest }}"
+            exit 1
+          fi
+          echo "channel at ${{ steps.push.outputs.digest }}."
+
+      # What a human needs next, in the form they need it. The manifest line is
+      # printed whole because it is pasted into homelab-k8s by hand, on both
+      # containers, and a mistyped digest is an outage rather than a typo.
+      - name: Summary
+        run: |
+          {
+            echo "## \`${{ steps.id.outputs.version }}\` on pretix \`${{ steps.id.outputs.base }}\`"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| immutable | \`${{ steps.id.outputs.immutable }}\` |"
+            echo "| channel | \`${{ steps.id.outputs.channel }}\` |"
+            echo "| digest | \`${{ steps.push.outputs.digest }}\` |"
+            echo
+            echo "The cluster's mirror-reconcile copies the channel onto"
+            echo "\`192.168.1.37:5000\` within 30 minutes. Renovate then opens the"
+            echo "digest bump against homelab-k8s; merging it is the deploy."
+            echo
+            echo "To pin it by hand instead, on **both** containers of"
+            echo "\`apps/tools/pretix/deployment.yaml\`:"
+            echo
+            echo '```yaml'
+            echo "          image: 192.168.1.37:5000/pretix-openpos:pretix${{ steps.id.outputs.base }}@${{ steps.push.outputs.digest }} # mirror: ${{ steps.id.outputs.channel }}"
+            echo '```'
+            echo
+            echo "> Merge only once the digest is on \`.37\` — \`strategy: Recreate\`"
+            echo "> kills the running pod before the new one pulls."
+          } >> "$GITHUB_STEP_SUMMARY"
