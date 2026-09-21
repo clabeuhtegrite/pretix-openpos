@@ -1,7 +1,7 @@
 from django.urls import re_path
 from pretix.api.urls import event_router, orga_router
 
-from . import arrivals, devices, pwa, views, webhook
+from . import arrivals, devices, pwa, sumup_views, views, webhook
 from .api.views import OpenPosOrganizerViewSet, OpenPosViewSet
 
 urlpatterns = [
@@ -48,6 +48,13 @@ urlpatterns = [
         r"^control/organizer/(?P<organizer>[^/]+)/openpos/devices/$",
         devices.DevicesView.as_view(),
         name="devices",
+    ),
+    # Organizer-level because a card reader belongs to the association rather
+    # than to one evening, and because the devices it is given to are here too.
+    re_path(
+        r"^control/organizer/(?P<organizer>[^/]+)/openpos/sumup/$",
+        sumup_views.SumUpView.as_view(),
+        name="sumup",
     ),
 ]
 

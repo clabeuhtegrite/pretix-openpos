@@ -242,19 +242,22 @@ def test_an_invented_role_is_refused_and_nothing_is_written(backoffice, organize
 
 
 @pytest.mark.django_db
-def test_assigning_a_role_does_not_disturb_the_reader(backoffice, organizer, device):
+def test_saving_a_role_keeps_the_reader_the_form_sends_back(backoffice, organizer, device):
     """
-    The reader is not set from this screen, so saving it must not clear one.
+    An organizer correcting a role mid-evening must not detach the terminal.
 
-    It matters the day the integration lands: an organizer correcting a role
-    mid-evening would otherwise silently detach the terminal from the till.
+    The reader travels with the form, so it comes back unchanged unless someone
+    changed it — the same way the role does.
     """
     assign(device, role=PosDevice.ROLE_TILL, reader="rdr_ABC")
 
-    backoffice.post(devices_url(organizer), {f"role_{device.pk}": "door"})
+    backoffice.post(
+        devices_url(organizer),
+        {f"role_{device.pk}": "pos", f"reader_{device.pk}": "rdr_ABC"},
+    )
 
     stored = PosDevice.objects.get(device=device)
-    assert stored.role == PosDevice.ROLE_DOOR
+    assert stored.role == PosDevice.ROLE_TILL
     assert stored.sumup_reader_id == "rdr_ABC"
 
 

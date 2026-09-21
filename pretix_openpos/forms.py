@@ -1,8 +1,51 @@
 from django import forms
 from django.utils.translation import gettext_lazy as _
-from pretix.base.forms import SettingsForm
+from pretix.base.forms import SecretKeySettingsField, SettingsForm
 
 from .invoicing import pos_invoices_enabled, set_pos_invoices
+
+
+class SumUpSettingsForm(SettingsForm):
+    """
+    The organizer's SumUp credentials.
+
+    Organizer-level rather than per event, because a card reader belongs to the
+    association and not to the evening it is used at — and because the devices
+    it is attached to are organizer-level too.
+    """
+
+    openpos_sumup_merchant_code = forms.CharField(
+        label=_("Merchant code"),
+        help_text=_(
+            "The short code identifying your SumUp account, shown in the SumUp "
+            "dashboard — something like MH4H92C7."
+        ),
+        required=False,
+        max_length=64,
+    )
+
+    #: A secret field, so the stored key is never rendered back into the page:
+    #: pretix replaces it with a placeholder and puts the real one back on save.
+    openpos_sumup_api_key = SecretKeySettingsField(
+        label=_("API key"),
+        help_text=_(
+            "Created in the SumUp dashboard under Settings → For Developers → "
+            "API keys. It is stored on this server and never sent to a till."
+        ),
+        required=False,
+    )
+
+    def clean(self):
+        data = super().clean()
+        # Half-configured is the state that produces a reader which accepts a
+        # basket and then cannot be asked what happened to it.
+        code = (data.get("openpos_sumup_merchant_code") or "").strip()
+        key = (data.get("openpos_sumup_api_key") or "").strip()
+        if bool(code) != bool(key):
+            raise forms.ValidationError(
+                _("Give both the merchant code and the API key, or neither.")
+            )
+        return data
 
 
 class OpenPosSettingsForm(SettingsForm):

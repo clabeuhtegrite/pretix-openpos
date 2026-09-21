@@ -69,4 +69,15 @@ def openpos_nav_organizer(sender, request=None, **kwargs):
                 "active": here and url.url_name == "devices",
             }
         )
+        nav.append(
+            {
+                "label": _("Card readers"),
+                "url": reverse(
+                    "plugins:pretix_openpos:sumup",
+                    kwargs={"organizer": request.organizer.slug},
+                ),
+                "icon": "credit-card",
+                "active": here and url.url_name == "sumup",
+            }
+        )
     return nav

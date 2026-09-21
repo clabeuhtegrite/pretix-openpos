@@ -481,11 +481,12 @@ class PosDevice(models.Model):
     #: app, and tells the till it happened — which is all the till has ever
     #: done, and all the door will ever do.
     #:
-    #: Deliberately not editable from the back office yet: setting it would turn
-    #: the refusal on for a till that has no way to satisfy it, since the code
-    #: that talks to SumUp does not exist. The rule is written and tested here
-    #: so that the integration only has to supply the reference, not invent the
-    #: guard rail at the same time.
+    #: Chosen on the till device screen, from the readers paired to the
+    #: organizer's SumUp account, and only for a device whose role is
+    #: :attr:`ROLE_TILL`: one reader, one till. It is stored as SumUp's own id
+    #: rather than as a foreign key to a reader of ours, because the paired
+    #: readers live on SumUp's side and a copy here would be one more thing
+    #: that can go stale.
     sumup_reader_id = models.CharField(
         max_length=190, blank=True, default="",
         verbose_name=_("SumUp reader"),

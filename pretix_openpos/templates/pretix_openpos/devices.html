@@ -21,6 +21,17 @@
             {% endblocktrans %}
         </div>
     {% else %}
+        {% if reader_error %}
+            <div class="alert alert-warning">
+                <strong>{% trans "SumUp could not be asked which readers you have." %}</strong>
+                <br>{{ reader_error }}
+                <br>{% blocktrans trimmed %}
+                    The roles below can still be changed, and a reader already given to a till
+                    stays where it is.
+                {% endblocktrans %}
+            </div>
+        {% endif %}
+
         <form action="" method="post">
             {% csrf_token %}
             <div class="table-responsive">
@@ -53,11 +64,20 @@
                                     </td>
                                 {% endfor %}
                                 <td>
-                                    {% if row.reader %}
-                                        <code>{{ row.reader }}</code>
-                                    {% else %}
-                                        <span class="text-muted">{% trans "None" %}</span>
-                                    {% endif %}
+                                    <select name="reader_{{ row.device.pk }}" class="form-control input-sm">
+                                        <option value="">{% trans "None" %}</option>
+                                        {% for reader_id, reader_name in readers %}
+                                            <option value="{{ reader_id }}"
+                                                    {% if row.reader == reader_id %}selected{% endif %}>
+                                                {{ reader_name }}
+                                            </option>
+                                        {% endfor %}
+                                        {% if row.reader_unknown %}
+                                            <option value="{{ row.reader }}" selected>
+                                                {{ row.reader }} — {% trans "unknown to SumUp" %}
+                                            </option>
+                                        {% endif %}
+                                    </select>
                                 </td>
                             </tr>
                         {% endfor %}
@@ -67,12 +87,14 @@
 
             <div class="alert alert-info">
                 {% blocktrans trimmed %}
-                    A card reader is not assigned here yet. Once one is, that till takes card
-                    payments through it and nowhere else: the server refuses a card sale the
-                    reader did not validate, so a stale or edited app cannot record one. Every
-                    other device goes on as before — the cashier takes the card in the card
-                    provider's own app and tells the till it happened.
+                    A till with a card reader takes card payments through it and nowhere else:
+                    the server refuses a card sale the reader did not validate, so a stale or
+                    edited app cannot record one. Every other device goes on as before — the
+                    cashier takes the card in the card provider's own app and tells the till it
+                    happened. A reader belongs to one till, and only to a till.
                 {% endblocktrans %}
+                <br>
+                <a href="{{ sumup_url }}">{% trans "Set up the card readers" %}</a>
             </div>
 
             <div class="form-group submit-group">
