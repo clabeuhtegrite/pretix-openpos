@@ -144,8 +144,14 @@ async function ringUp(user: ReturnType<typeof userEvent.setup>, product = /Bièr
   await user.click(screen.getByRole("button", { name: t("sale.charge") }));
 }
 
-/** Confirm the payment panel as it stands. */
+/** Answer the panel's first question — how the customer is paying — with cash. */
+async function payCash(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(screen.getByRole("button", { name: t("payment.cash") }));
+}
+
+/** Answer the panel's first question with cash, then confirm it as it stands. */
 async function confirm(user: ReturnType<typeof userEvent.setup>) {
+  await payCash(user);
   await user.click(screen.getByRole("button", { name: t("payment.confirm") }));
 }
 
@@ -634,8 +640,9 @@ describe("the two buttons that are not products", () => {
     await user.click(screen.getByRole("button", { name: t("sale.charge") }));
 
     // Nothing to take, so nothing to type: the panel says what to count out.
+    await payCash(user);
     expect(screen.getByText(t("payment.nothingToTake"))).toBeDefined();
-    await confirm(user);
+    await user.click(screen.getByRole("button", { name: t("payment.confirm") }));
 
     await waitFor(() =>
       expect(apiMock.checkout).toHaveBeenCalledWith(

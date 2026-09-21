@@ -26,7 +26,11 @@ interface Props {
 export default function PaymentPanel({
   totalCents, currency, denominations, busy, error, credit, onConfirm, onCancel,
 }: Props) {
-  const [method, setMethod] = useState<PaymentType>("cash");
+  // Deliberately unanswered to begin with. A panel that opened on cash got
+  // confirmed on cash: a card sale rung up as a cash one, and the drawer at
+  // closing time the only thing that ever noticed. So the method is the first
+  // thing the panel asks, and nothing else is shown until it has an answer.
+  const [method, setMethod] = useState<PaymentType | null>(null);
   // Digits only, read as cents. This is how a real till behaves: typing 1-2-3-4
   // means 12.34, and there is no decimal point to fumble mid-queue.
   const [entry, setEntry] = useState("");
@@ -39,7 +43,9 @@ export default function PaymentPanel({
     totalCents,
     creditCents,
     tenderedCents: given,
-    method,
+    // While the question is still open only the two amounts below are read off
+    // this, and what is due is the same arithmetic whichever way it is paid.
+    method: method ?? "cash",
   });
 
   const press = (digit: string) => setEntry((current) => (current + digit).replace(/^0+/, "").slice(0, 8));
@@ -54,24 +60,28 @@ export default function PaymentPanel({
         {/* Everything the operator taps to build the amount. Scrolls on a phone;
             what it produces is read off the pinned footer below. */}
         <div className="pay-body">
-          <div className="pay-toggle">
-            <button
-              className="btn"
-              aria-pressed={method === "cash"}
-              onClick={() => setMethod("cash")}
-              disabled={busy}
-            >
-              {t("payment.cash")}
-            </button>
-            <button
-              className="btn"
-              aria-pressed={method === "card"}
-              onClick={() => setMethod("card")}
-              disabled={busy}
-            >
-              {t("payment.card")}
-            </button>
-          </div>
+          {/* Once answered the question stays on screen as a toggle, so a
+              mis-tap is one tap to undo rather than a trip back to the basket. */}
+          {method !== null && (
+            <div className="pay-toggle">
+              <button
+                className="btn"
+                aria-pressed={method === "cash"}
+                onClick={() => setMethod("cash")}
+                disabled={busy}
+              >
+                {t("payment.cash")}
+              </button>
+              <button
+                className="btn"
+                aria-pressed={method === "card"}
+                onClick={() => setMethod("card")}
+                disabled={busy}
+              >
+                {t("payment.card")}
+              </button>
+            </div>
+          )}
 
           {/* A basket that nets out below zero has no amount due to state, and
               showing one as a minus figure reads as a price rather than as
@@ -99,7 +109,21 @@ export default function PaymentPanel({
             </div>
           )}
 
-          {method === "cash" ? (
+          {method === null ? (
+            /* The amounts above are already on screen, so the operator asks the
+               customer with the figure in front of them and answers here. */
+            <>
+              <p className="pay-question">{t("payment.chooseMethod")}</p>
+              <div className="pay-choice">
+                <button className="btn" onClick={() => setMethod("cash")} disabled={busy}>
+                  {t("payment.cash")}
+                </button>
+                <button className="btn" onClick={() => setMethod("card")} disabled={busy}>
+                  {t("payment.card")}
+                </button>
+              </div>
+            </>
+          ) : method === "cash" ? (
             <>
               {/* Nothing left to take: the credit covers the corrected order, and
                   the keypad would only invite an entry that means nothing. */}
@@ -182,18 +206,23 @@ export default function PaymentPanel({
             <button className="btn ghost" style={{ flex: 1 }} onClick={onCancel} disabled={busy}>
               {t("payment.back")}
             </button>
-            <button
-              className="btn success"
-              style={{ flex: 2 }}
-              disabled={busy || (method === "cash" && short)}
-              onClick={() => onConfirm(method, cashGiven)}
-            >
-              {busy
-                ? t("payment.working")
-                : method === "card"
-                  ? t("payment.cardConfirm")
-                  : t("payment.confirm")}
-            </button>
+            {/* Absent rather than disabled: the two buttons above are the step,
+                and a greyed-out "Valider" beside them reads as a till that is
+                stuck rather than as a question waiting for an answer. */}
+            {method !== null && (
+              <button
+                className="btn success"
+                style={{ flex: 2 }}
+                disabled={busy || (method === "cash" && short)}
+                onClick={() => onConfirm(method, cashGiven)}
+              >
+                {busy
+                  ? t("payment.working")
+                  : method === "card"
+                    ? t("payment.cardConfirm")
+                    : t("payment.confirm")}
+              </button>
+            )}
           </div>
         </div>
       </div>
