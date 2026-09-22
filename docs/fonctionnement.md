@@ -1,6 +1,6 @@
 # Fonctionnement de pretix-openpos
 
-Documentation de fonctionnement du plugin, version 0.17.0. Elle couvre trois
+Documentation de fonctionnement du plugin, version 0.18.0. Elle couvre trois
 choses, dans cet ordre : ce que le plugin ajoute à pretix, comment le mettre en
 service, et ce qui se passe exactement quand un bénévole encaisse.
 
@@ -338,7 +338,7 @@ En Docker/Kubernetes, [`deploy/Dockerfile`](../deploy/Dockerfile) intègre le pl
 
 ```bash
 cd frontend && npm run build && cd ..
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.17.0 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.18.0 .
 ```
 
 Deux pièges :
@@ -1008,9 +1008,9 @@ Un survendu reste un survendu : c'est un fait à réconcilier après la soirée,
 - **Le scan hors ligne ne voit que sa liste embarquée.** Un billet vendu en ligne
   pendant la coupure y est absent : il sera refusé à la porte. Un billet déjà
   scanné à une autre porte pendant la coupure sera accepté ici, et enregistré par
-  pretix comme un passage forcé. Et la liste embarquée ne répond **que pour sa propre porte** : changer
-  de liste pendant la coupure affiche « pas de liste embarquée » plutôt que de
-  faire entrer les invités de l'autre porte.
+  pretix comme un passage forcé. Et la liste embarquée ne répond **que pour sa
+  propre porte** : changer de liste pendant la coupure affiche « pas de liste
+  embarquée » plutôt que de faire entrer les invités de l'autre porte.
 - **Pas de moteur de règles hors ligne.** Les règles de check-in de pretix
   (horaires, quotas d'entrée) ne s'appliquent qu'au retour du réseau.
 - **Pas d'annulation hors ligne.** Un avoir demande le serveur.
