@@ -262,7 +262,7 @@ En Docker/Kubernetes, [`deploy/Dockerfile`](../deploy/Dockerfile) intègre le pl
 
 ```bash
 cd frontend && npm run build && cd ..
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.12.0 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.11.0 .
 ```
 
 Deux pièges :
@@ -869,8 +869,8 @@ la consigne rendue est une ligne de frais négative de −3 € à côté — la
 pretix utilise lui-même pour une carte cadeau utilisée. La recette du bar n'est
 donc pas minorée : les 12 € sont toujours là, en lignes de commande.
 
-C'est un changement par rapport aux versions ≤ 0.11.0, où la commande valait les
-12 € des bières. Le compte de pretix était alors gonflé de chaque consigne rendue
+C'est un changement par rapport à ce qui a tourné à la première soirée, le
+19 septembre 2026, où la commande valait les 12 € des bières. Le compte de pretix était alors gonflé de chaque consigne rendue
 — contre le tiroir, et contre SumUp sur un panier carte, puisque le lecteur ne
 prélève que le net. Et l'annulation rendait ces 12 € : SumUp ne rembourse que sa
 propre transaction, soit 9 €, et la caisse annonçait « déjà remboursé » — le
