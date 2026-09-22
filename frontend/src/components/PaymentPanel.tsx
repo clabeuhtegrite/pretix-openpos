@@ -67,7 +67,9 @@ function TerminalPrompt({
   onRetry: () => void;
 }) {
   if (terminal === null || terminal.phase === "starting") {
-    return <p className="pay-reader">{t("payment.readerStarting")}</p>;
+    return (
+      <p className="pay-reader is-waiting">{t("payment.readerStarting")}</p>
+    );
   }
 
   if (terminal.phase === "failed") {
@@ -88,13 +90,22 @@ function TerminalPrompt({
   // Waiting. The amount is the server's, which is the figure the reader is
   // showing the customer — not the basket's, which can be a catalogue behind.
   const asked = terminal.amount === null ? fallbackCents : toCents(terminal.amount);
+  // Said twice, the two figures stop being read: "À payer 10,00 €" directly
+  // above "Sur le lecteur 10,00 €" is one number wearing two labels, and it
+  // is the row the cashier reads out to the customer. So it is shown only
+  // when it is actually telling them something — when the server priced the
+  // basket at something other than what this till had on screen, which is
+  // exactly the moment somebody has to notice.
+  const differs = asked !== fallbackCents;
   return (
-    <div className="pay-reader">
-      <div className="amount-display">
-        <span>{t("payment.readerAsking")}</span>
-        <span className="value">{formatMoney(asked, currency)}</span>
-      </div>
-      <p>{t("payment.readerPrompt")}</p>
+    <div className="pay-reader is-waiting">
+      {differs && (
+        <div className="amount-display">
+          <span>{t("payment.readerAsking")}</span>
+          <span className="value">{formatMoney(asked, currency)}</span>
+        </div>
+      )}
+      <p className="pay-reader-prompt">{t("payment.readerPrompt")}</p>
       {terminal.stalled && (
         <p className="pay-reader-note">{t("payment.readerStalled")}</p>
       )}

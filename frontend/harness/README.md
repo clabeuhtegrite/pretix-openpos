@@ -23,9 +23,11 @@ Paramètres d'URL, cumulables :
 |---|---|
 | `role=pos` / `role=door` | le rôle attribué à l'appareil |
 | `card=terminal` | un lecteur SumUp est attribué à cette caisse |
+| `terminal=paid` / `failed` / `stalled` / `reprice` | ce que fait le lecteur (défaut : il attend la carte) |
 | `theme=light` / `theme=dark` | force la palette |
 | `offline=1` | le serveur ne répond plus |
 | `queue=3` | trois ventes en attente dans la file |
+| `checkout=fail` | le serveur refuse d’enregistrer la vente |
 | `testmode=1` | événement en mode test |
 | `update=1` | le serveur annonce une version plus récente |
 

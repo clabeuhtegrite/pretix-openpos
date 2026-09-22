@@ -83,20 +83,33 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.includes("/openpos/attendance/")) return json(fx.attendance);
   if (url.includes("/openpos/offline/"))
     return json({ list: 7, generated_at: new Date().toISOString(), positions: [] });
+  // ?terminal= pilote le lecteur : waiting (défaut), paid, failed, stalled,
+  // reprice (le serveur tarife autrement que la caisse).
+  const reader = q.get("terminal") ?? "waiting";
+  const readerAmount = reader === "reprice" ? "12.50" : null;
   if (url.includes("/openpos/terminal/start/")) {
     terminalPolls = 0;
-    return json({ status: "pending", amount: "12.50", currency: "EUR", failure: "" });
+    if (reader === "failed")
+      return json({ status: "failed", amount: "0.00", currency: "EUR", failure: "card_declined" });
+    return json({ status: "pending", amount: readerAmount, currency: "EUR", failure: "" });
   }
   if (url.includes("/openpos/terminal/status/")) {
     terminalPolls += 1;
-    return json(
-      terminalPolls > 200
-        ? { status: "successful", amount: "12.50", currency: "EUR", failure: "" }
-        : { status: "pending", amount: "12.50", currency: "EUR", failure: "" },
-    );
+    // « stalled » est l'écran d'une caisse qui a perdu le serveur pendant que
+    // le lecteur tient encore la carte : on ne répond donc plus du tout.
+    if (reader === "stalled" && terminalPolls > 1) throw new TypeError("harness: stalled");
+    if (reader === "paid" && terminalPolls > 1)
+      return json({ status: "successful", amount: "12.50", currency: "EUR", failure: "" });
+    if (reader === "failed")
+      return json({ status: "failed", amount: "0.00", currency: "EUR", failure: "card_declined" });
+    return json({ status: "pending", amount: readerAmount, currency: "EUR", failure: "" });
   }
   if (url.includes("/openpos/terminal/cancel/")) return json({ status: "cancelled" });
-  if (url.includes("/openpos/checkout/"))
+  if (url.includes("/openpos/checkout/")) {
+    // ?checkout=fail : la carte a été débitée et la vente ne s'enregistre pas.
+    // C'est l'écran que personne ne voit jamais et qu'il faut pouvoir regarder.
+    if (q.get("checkout") === "fail")
+      return json({ detail: "harness : le serveur refuse d’enregistrer cette vente." }, 400);
     return json({
       order: { code: "POS4L", total: "12.50", url: null },
       journal_seq: 42,
@@ -109,6 +122,7 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       checkin_errors: [],
       net_total: "12.50",
     });
+  }
   if (url.includes("/openpos/cancel/"))
     return json({
       cancellation: { seq: 43, total: "-8.50", payment_type: "cash" },

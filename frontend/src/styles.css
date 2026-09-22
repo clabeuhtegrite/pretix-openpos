@@ -823,6 +823,110 @@ button {
   gap: 10px;
 }
 
+/*
+ * ---------- the card reader's half of the panel ----------
+ *
+ * These three class names have been in the markup since the reader was wired
+ * up and had no rules at all behind them: the whole card flow rendered as
+ * default paragraphs. It did not look broken, which is why it lasted — the
+ * amount came from .amount-display and the refusal from .error-banner, so the
+ * only unstyled parts were the two that matter most and are read at a glance
+ * rather than word by word: the moment the money arrives, and the warning that
+ * the till has lost the server mid-payment.
+ */
+.pay-reader {
+  margin: 6px 0 0;
+  padding: 16px 18px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  line-height: 1.4;
+}
+
+.pay-reader .amount-display {
+  padding-top: 0;
+}
+
+.pay-reader-prompt {
+  margin: 0;
+  font-size: 18px;
+}
+
+/*
+ * Something is happening at the other end of a cable nobody can see.
+ *
+ * A bar of light rather than a spinner: it reads from across the counter, and
+ * it is the one place in this app where a wait is somebody else's — the
+ * customer's hand, the reader, the network — so the screen has to look alive
+ * for as long as it lasts, or the cashier starts pressing things.
+ */
+.pay-reader.is-waiting::before {
+  content: "";
+  display: block;
+  height: 4px;
+  margin-bottom: 14px;
+  border-radius: 999px;
+  background:
+    linear-gradient(90deg, transparent 0 25%, var(--accent) 25% 75%, transparent 75% 100%)
+    0 0 / 250% 100% no-repeat,
+    var(--border);
+  animation: reader-wait 1.6s linear infinite;
+}
+
+@keyframes reader-wait {
+  from {
+    background-position: -150% 0;
+  }
+  to {
+    background-position: 150% 0;
+  }
+}
+
+/* Somebody has told their phone that motion makes them ill; a till is not the
+   place to argue. The bar stays, it simply stops moving. */
+@media (prefers-reduced-motion: reduce) {
+  .pay-reader.is-waiting::before {
+    animation: none;
+    background: var(--accent);
+  }
+}
+
+/*
+ * The money is in. Loud, because everything after it is the cashier's job
+ * again — hand the card back, hand the drinks over — and because a line of
+ * body text saying "Paiement accepté." was indistinguishable from the line
+ * that had been asking for the card a second earlier.
+ */
+.pay-reader.paid::before {
+  /* A statement, not a button: the confirm button below it is also green, and
+     at a glance two green blocks look like two things to press. */
+  content: "✓ ";
+}
+
+.pay-reader.paid {
+  margin-top: 6px;
+  background: var(--tint-success);
+  border-color: var(--success-text);
+  color: var(--success-text);
+  font-size: 22px;
+  font-weight: 800;
+  text-align: center;
+}
+
+/* The till has lost the server while the reader still has the customer's card.
+   Amber and boxed, like every other "this is not over" in the app: what it is
+   really saying is do not take this money twice. */
+.pay-reader-note {
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--tint-warning);
+  border: 1px solid var(--warning-text);
+  color: var(--warning-text);
+  font-size: 15px;
+  font-weight: 700;
+}
+
 /* ---------- done screen ---------- */
 
 .done {
