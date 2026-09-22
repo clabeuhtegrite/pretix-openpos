@@ -301,7 +301,13 @@ class DevicesChanged(OrganizerLogEntryType):
             parts.append(self._reader(row.get("reader_before"), row.get("reader")))
         if not parts:
             return name
-        return format_html("{}: {}", name, format_html_join(", ", "{}", ((p,) for p in parts)))
+        # The colon inside the translated string, like every other line here:
+        # French sets a space before it.
+        return format_html(
+            _("{device}: {changes}"),
+            device=name,
+            changes=format_html_join(", ", "{}", ((p,) for p in parts)),
+        )
 
     @staticmethod
     def _reader(before, after):
