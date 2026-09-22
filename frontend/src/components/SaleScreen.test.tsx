@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { t } from "../i18n";
 import { formatMoney } from "../money";
 import type { CartLine, Catalog } from "../types";
-import SaleScreen from "./SaleScreen";
+import SaleScreen, { pictureBackground } from "./SaleScreen";
 
 /**
  * The screen a cashier spends the whole evening on.
@@ -93,7 +93,10 @@ function show(
   // basket's own assertions are scoped to it.
   const basket = () => within(container.querySelector(".cart") as HTMLElement);
   const firstLine = () => within(container.querySelector(".line") as HTMLElement);
-  return { user: userEvent.setup(), basket, firstLine, ...handlers };
+  /** The product buttons, in the order a thumb meets them. */
+  const tiles = () =>
+    [...container.querySelectorAll(".grid .product")].map((tile) => tile.textContent ?? "");
+  return { user: userEvent.setup(), basket, firstLine, tiles, container, ...handlers };
 }
 
 describe("the product grid", () => {
@@ -203,11 +206,11 @@ describe("the categories", () => {
     expect(screen.queryByRole("heading", { name: "Bar" })).toBeNull();
   });
 
-  it("goes back to everything on the star", async () => {
+  it("goes back to everything on the first tab", async () => {
     const { user } = show();
     await user.click(screen.getByRole("tab", { name: "Bar" }));
 
-    await user.click(screen.getByRole("tab", { name: "★" }));
+    await user.click(screen.getByRole("tab", { name: t("sale.all") }));
 
     expect(screen.getByRole("button", { name: /T-shirt · S/ })).toBeDefined();
   });
@@ -218,7 +221,7 @@ describe("the categories", () => {
     await user.click(screen.getByRole("tab", { name: "Bar" }));
 
     expect(screen.getByRole("tab", { name: "Bar" }).getAttribute("aria-selected")).toBe("true");
-    expect(screen.getByRole("tab", { name: "★" }).getAttribute("aria-selected")).toBe("false");
+    expect(screen.getByRole("tab", { name: t("sale.all") }).getAttribute("aria-selected")).toBe("false");
   });
 });
 
@@ -352,5 +355,221 @@ describe("the buttons that are not products", () => {
 
     // 4 × 3 € sold, 3 × 1 € handed back.
     expect(basket().getByText(formatMoney(900, "EUR"))).toBeDefined();
+  });
+});
+
+describe("what has run out", () => {
+  it("sinks a sold-out product to the end of its own category", () => {
+    // "Entrée" is first in the catalogue and has nothing left; the shirts
+    // behind it are what can still be sold, so they come forward.
+    const { tiles } = show();
+
+    const grid = tiles();
+    expect(grid.findIndex((name) => name.includes("Entrée"))).toBe(grid.length - 1);
+    expect(grid.findIndex((name) => name.includes("T-shirt · S"))).toBeLessThan(
+      grid.findIndex((name) => name.includes("Entrée")),
+    );
+  });
+
+  it("leaves it in its own category rather than at the very end", async () => {
+    // It has to stay findable: the cashier still has to be able to see that
+    // the place sells it and has run out.
+    const { user, tiles } = show();
+
+    await user.click(screen.getByRole("tab", { name: "Entrées" }));
+
+    expect(tiles().some((name) => name.includes("Entrée"))).toBe(true);
+  });
+});
+
+describe("the product photographs", () => {
+  const withPicture: Catalog = {
+    categories: [
+      {
+        id: 1,
+        name: "Bar",
+        items: [
+          {
+            id: 10, name: "Bière", admission: false,
+            picture: "https://pretix.example/media/pub/demo/f/item-10-abc.png",
+            price: "3.00", available: null, variations: [],
+          },
+          {
+            id: 11, name: "Vin", admission: false, picture: null,
+            price: "4.00", available: null, variations: [],
+          },
+        ],
+      },
+    ],
+  };
+
+  function render_(catalog: Catalog) {
+    const { container } = render(
+      <SaleScreen
+        catalog={catalog}
+        cart={[]}
+        currency="EUR"
+        customSale={null}
+        depositBack={null}
+        onAdd={vi.fn()}
+        onCustomSale={vi.fn()}
+        onDepositBack={vi.fn()}
+        onSetCount={vi.fn()}
+        onClear={vi.fn()}
+        onCharge={vi.fn()}
+      />,
+    );
+    return container;
+  }
+
+  it("shows the picture the organiser uploaded", () => {
+    render_(withPicture);
+
+    const thumb = screen.getByRole("button", { name: /Bière/ }).querySelector(".thumb");
+    expect(thumb?.getAttribute("style")).toContain("item-10-abc.png");
+  });
+
+  it("is not something a screen reader has to read out", () => {
+    // The name is right underneath it; the picture is there to be recognised.
+    render_(withPicture);
+
+    const thumb = screen.getByRole("button", { name: /Bière/ }).querySelector(".thumb");
+    expect(thumb?.getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("shows nothing at all for a product without one", () => {
+    const container = render_(withPicture);
+
+    const wine = screen.getByRole("button", { name: /Vin/ });
+    expect(wine.querySelector(".thumb")).toBeNull();
+    expect(container.querySelectorAll(".thumb")).toHaveLength(1);
+  });
+
+  it("gives every variation its product's picture", () => {
+    // The picture belongs to the item; a size does not have one of its own.
+    const container = render_({
+      categories: [
+        {
+          id: 1,
+          name: "Bar",
+          items: [
+            {
+              id: 21, name: "T-shirt", admission: false,
+              picture: "https://pretix.example/media/pub/demo/f/item-21-xyz.png",
+              price: null, available: null,
+              variations: [
+                { id: 100, name: "S", price: "15.00", available: null },
+                { id: 101, name: "L", price: "18.00", available: null },
+              ],
+            },
+          ],
+        },
+      ],
+    });
+
+    expect(container.querySelectorAll(".thumb")).toHaveLength(2);
+  });
+
+  it("puts a url with a quote in it out of harm's way", () => {
+    // Asserted on the value rather than through the DOM: jsdom drops a
+    // declaration it dislikes altogether, which would pass this test for the
+    // wrong reason.
+    const value = pictureBackground('https://pretix.example/media/pub/a");evil("');
+
+    expect(value).toBe('url("https://pretix.example/media/pub/a\\");evil(\\"")');
+    // Which is to say: the only quotes left unescaped are the two that open
+    // and close the string.
+    expect([...value.replace(/\\"/g, "")].filter((c) => c === '"')).toHaveLength(2);
+  });
+
+  it("leaves a url that already carries an escape of its own alone", () => {
+    // Percent-encoding the whole url would turn this into %2520 and ask the
+    // server for a file it has never heard of.
+    expect(pictureBackground("https://pretix.example/media/pub/a%20b.png")).toBe(
+      'url("https://pretix.example/media/pub/a%20b.png")',
+    );
+  });
+
+  it("leaves an ordinary url alone", () => {
+    expect(pictureBackground("https://pretix.example/media/pub/demo/f/item-10-abc.png")).toBe(
+      'url("https://pretix.example/media/pub/demo/f/item-10-abc.png")',
+    );
+  });
+});
+
+describe("how many", () => {
+  it("asks on the count rather than counting taps", async () => {
+    const { user } = show([line()]);
+
+    await user.click(screen.getByRole("button", { name: t("sale.quantityOf", { label: "Bière", n: 2 }) }));
+
+    expect(screen.getByRole("heading", { name: t("sale.quantity") })).toBeDefined();
+  });
+
+  it("sets the line in one tap", async () => {
+    const { user, onSetCount } = show([line()]);
+    await user.click(screen.getByRole("button", { name: t("sale.quantityOf", { label: "Bière", n: 2 }) }));
+
+    await user.click(screen.getByRole("button", { name: "6" }));
+
+    expect(onSetCount).toHaveBeenCalledWith("10:", 6);
+    expect(screen.queryByRole("heading", { name: t("sale.quantity") })).toBeNull();
+  });
+
+  it("marks the count the line is already at", async () => {
+    const { user } = show([line()]);
+
+    await user.click(screen.getByRole("button", { name: t("sale.quantityOf", { label: "Bière", n: 2 }) }));
+
+    expect(screen.getByRole("button", { name: "2" }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.getByRole("button", { name: "3" }).getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("stops at what the quota allows", async () => {
+    const { user } = show([line({ available: 3 })]);
+
+    await user.click(screen.getByRole("button", { name: t("sale.quantityOf", { label: "Bière", n: 2 }) }));
+
+    expect((screen.getByRole("button", { name: "3" }) as HTMLButtonElement).disabled).toBe(false);
+    expect((screen.getByRole("button", { name: "4" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("offers every number when there is no quota at all", async () => {
+    const { user } = show([line()]);
+
+    await user.click(screen.getByRole("button", { name: t("sale.quantityOf", { label: "Bière", n: 2 }) }));
+
+    expect((screen.getByRole("button", { name: "12" }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it("takes the line out of the basket", async () => {
+    const { user, onSetCount } = show([line()]);
+    await user.click(screen.getByRole("button", { name: t("sale.quantityOf", { label: "Bière", n: 2 }) }));
+
+    await user.click(screen.getByRole("button", { name: t("sale.remove") }));
+
+    expect(onSetCount).toHaveBeenCalledWith("10:", 0);
+  });
+
+  it("changes nothing when it is dismissed", async () => {
+    const { user, onSetCount } = show([line()]);
+    await user.click(screen.getByRole("button", { name: t("sale.quantityOf", { label: "Bière", n: 2 }) }));
+
+    await user.click(screen.getByRole("button", { name: t("payment.back") }));
+
+    expect(onSetCount).not.toHaveBeenCalled();
+    expect(screen.queryByRole("heading", { name: t("sale.quantity") })).toBeNull();
+  });
+
+  it("asks about the line that was tapped, not the first one", async () => {
+    const { user, onSetCount } = show([
+      line(),
+      line({ key: "11:", itemId: 11, label: "Vin", unitPrice: 400, count: 1 }),
+    ]);
+
+    await user.click(screen.getByRole("button", { name: t("sale.quantityOf", { label: "Vin", n: 1 }) }));
+    await user.click(screen.getByRole("button", { name: "4" }));
+
+    expect(onSetCount).toHaveBeenCalledWith("11:", 4);
   });
 });

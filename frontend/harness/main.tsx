@@ -3,7 +3,8 @@
  * looked at rather than only asserted on. Dev-only, never built or shipped.
  *
  * Query params: ?role=pos|door  ?card=terminal  ?theme=light|dark
- *               ?offline=1  ?queue=3  ?testmode=1  ?update=1
+ *               ?offline=1  ?queue=3  ?testmode=1  ?update=1  ?photos=1
+ *               ?terminal=waiting|paid|failed|stalled|reprice  ?checkout=fail
  */
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
@@ -77,7 +78,9 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   await new Promise((r) => setTimeout(r, 40));
 
   if (url.includes("/openpos/config/")) return json(conf);
-  if (url.includes("/openpos/catalog/")) return json(fx.catalog);
+  // ?photos=1 met des photos sur un produit sur deux.
+  if (url.includes("/openpos/catalog/"))
+    return json(q.get("photos") ? fx.withPhotos(fx.catalog) : fx.catalog);
   if (url.includes("/openpos/summary/")) return json(fx.summary);
   if (url.includes("/openpos/history/")) return json({ device: fx.pairing.serial, ...fx.history });
   if (url.includes("/openpos/attendance/")) return json(fx.attendance);

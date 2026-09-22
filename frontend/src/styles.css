@@ -335,6 +335,9 @@ button {
   border: 1px solid var(--border);
   text-align: left;
   transition: transform 0.06s ease;
+  /* Both for the picture below, which is laid over the tile and clipped by it. */
+  position: relative;
+  overflow: hidden;
 }
 
 .product:active {
@@ -344,6 +347,39 @@ button {
 
 .product:disabled {
   opacity: 0.4;
+}
+
+/*
+ * The photograph the organiser has already uploaded to pretix.
+ *
+ * A name is read; a bottle is recognised, and recognising is faster than
+ * reading when there is a queue.
+ *
+ * It comes in from the right-hand edge and fades out before it reaches the
+ * text, rather than sitting above it as a band. That is what keeps the tile
+ * the height it has always been: a grid that grows a third taller to carry
+ * photographs is a grid the cashier now has to scroll, which costs more on a
+ * busy evening than the photographs are worth. The name and the price keep a
+ * clean background to be read on, which is the other half of the same choice.
+ *
+ * A background rather than an <img> on purpose: see the comment in
+ * SaleScreen.tsx. When it cannot load, nothing shows and nothing moves.
+ */
+.product .thumb {
+  position: absolute;
+  inset: 0 0 0 45%;
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 60%);
+  mask-image: linear-gradient(to right, transparent, #000 60%);
+}
+
+/* Above the picture, whatever the order in the markup. */
+.product .name,
+.product .price,
+.product .stock {
+  position: relative;
 }
 
 .product .name {
@@ -523,12 +559,67 @@ button {
   font-weight: 700;
 }
 
+/* The count is a button now: tapping it asks how many, which is one gesture
+   instead of five for a round of six. Outlined rather than filled, so it reads
+   as the value it is and not as a third arrow between the two. */
 .stepper .count {
-  min-width: 40px;
+  width: auto;
+  min-width: 56px;
+  height: 48px;
+  padding: 0 10px;
+  background: transparent;
+  border: 1px solid var(--border);
   text-align: center;
   font-size: 18px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
+}
+
+/*
+ * How many, asked once.
+ *
+ * The numbers a bar actually rings up, each of them a single tap that sets the
+ * line and closes: no confirm step, because the number IS the answer and a
+ * wrong one is one more tap away from being right. Bigger targets than the
+ * keypad's, since this is the screen an operator uses mid-service with a
+ * queue in front of them.
+ */
+/* Two class names, so this wins over .panel's own width rather than depending
+   on which of the two comes last in the file. */
+.panel.quantity-panel {
+  width: min(420px, 100%);
+}
+
+.quantity-label {
+  margin: -8px 0 16px;
+  color: var(--text-dim);
+}
+
+.quantity-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.quantity-grid button {
+  min-height: 64px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: 22px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.quantity-grid button.is-current {
+  background: var(--accent-strong);
+  color: var(--on-fill);
+}
+
+/* Past what the quota allows. Dimmed rather than gone, so the row of numbers
+   keeps its shape and the operator can see where the stock stops. */
+.quantity-grid button:disabled {
+  opacity: 0.35;
 }
 
 .cart-footer {
@@ -818,7 +909,9 @@ button {
   padding-top: 0;
 }
 
-.pay-panel .pay-buttons {
+/* A row of buttons at the foot of a panel. Named after the payment panel it
+   started in; the quantity pad uses the same row. */
+.pay-buttons {
   display: flex;
   gap: 10px;
 }
@@ -2058,5 +2151,14 @@ table.takings thead th {
      target a thumb can find; everything above them is what gave way. */
   .pay-panel .pay-actions .btn {
     min-height: 52px;
+  }
+
+  .quantity-grid {
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  .quantity-grid button {
+    min-height: 48px;
   }
 }

@@ -121,7 +121,9 @@ describe("taking over", () => {
   it("throws away every cache but its own on activation", async () => {
     // A shell from an older build, served to a till that has been upgraded, is
     // an update no reload can ever apply.
-    cacheNames = ["openpos-shell-v1", "openpos-shell-v2", "something-else"];
+    cacheNames = [
+      "openpos-shell-v1", "openpos-shell-v2", "openpos-pictures-v1", "something-else",
+    ];
     let waited: Promise<unknown> = Promise.resolve();
     listeners.activate({
       waitUntil: (promise: Promise<unknown>) => {
@@ -130,6 +132,9 @@ describe("taking over", () => {
     } as unknown as FetchEvent);
     await waited;
 
+    // The pictures are not the shell and survive a rebuild: they are large,
+    // their names carry a uuid, and a bar that has just been upgraded is a bar
+    // about to lose its network.
     expect(deleted).toEqual(["openpos-shell-v1", "something-else"]);
     expect(claim).toHaveBeenCalled();
   });
@@ -269,5 +274,53 @@ describe("the bundle and the icons", () => {
     const answered = (await fetchEvent(asset)) as unknown as Response;
 
     expect(answered.type).toBe("error");
+  });
+});
+
+describe("the product photographs", () => {
+  const picture = `${ORIGIN}/media/pub/demo/f/item-10-abc.png`;
+
+  it("is fetched and kept the first time it is asked for", async () => {
+    await fetchEvent(picture);
+
+    expect(fetchMock).toHaveBeenCalled();
+    expect(cachePut).toHaveBeenCalled();
+  });
+
+  it("comes straight out of the cache afterwards, network or no network", async () => {
+    // The point of keeping them: the bar drops off the network regularly, and
+    // a grid whose photographs vanish when it gets busy is worse than one that
+    // never had any.
+    stored.set(picture, response({ cached: true }));
+
+    const answered = await fetchEvent(picture);
+
+    expect(answered).toMatchObject({ cached: true });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("is not kept when the server would not serve it", async () => {
+    fetchMock.mockResolvedValue(response({ ok: false, status: 404 }));
+
+    await fetchEvent(picture);
+
+    expect(cachePut).not.toHaveBeenCalled();
+  });
+
+  it("fails honestly when it is neither cached nor reachable", async () => {
+    fetchMock.mockRejectedValue(new Error("offline"));
+
+    const answered = await fetchEvent(picture);
+
+    expect((answered as unknown as Response).type).toBe("error");
+  });
+
+  it("leaves the rest of /media/ alone", async () => {
+    // Everything outside pub/ belongs to somebody — an invoice, a file an
+    // attendee uploaded — and has no business in a shared tablet's cache.
+    const answered = await fetchEvent(`${ORIGIN}/media/invoices/demo-00001.pdf`);
+
+    expect(answered).toBeNull();
+    expect(cachePut).not.toHaveBeenCalled();
   });
 });

@@ -27,6 +27,7 @@ Paramètres d'URL, cumulables :
 | `theme=light` / `theme=dark` | force la palette |
 | `offline=1` | le serveur ne répond plus |
 | `queue=3` | trois ventes en attente dans la file |
+| `photos=1` | une photo sur un produit sur deux |
 | `checkout=fail` | le serveur refuse d’enregistrer la vente |
 | `testmode=1` | événement en mode test |
 | `update=1` | le serveur annonce une version plus récente |

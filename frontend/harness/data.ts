@@ -134,3 +134,36 @@ export const attendance = {
     { id: 21, name: "Entrée tarif réduit", inside: 46, entered: 48, expected: 70 },
   ],
 };
+
+/**
+ * The same catalogue with photographs on it.
+ *
+ * Inline SVG rather than real files, so a screenshot run needs no network and
+ * no media directory. What is being looked at is the shape of a tile carrying
+ * a picture, not the picture.
+ */
+const swatches = ["#b45309", "#7c2d12", "#166534", "#7e22ce", "#0369a1", "#9f1239"];
+
+function swatch(index: number, label: string): string {
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="240" height="160">
+    <rect width="240" height="160" fill="${swatches[index % swatches.length]}"/>
+    <text x="120" y="92" font-family="sans-serif" font-size="28" fill="#fff"
+      text-anchor="middle">${label}</text>
+  </svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
+export function withPhotos(source: typeof catalog): typeof catalog {
+  let n = 0;
+  return {
+    categories: source.categories.map((category) => ({
+      ...category,
+      // Every other product, because that is how a real catalogue looks and
+      // the ragged case is the one worth seeing.
+      items: category.items.map((item) => ({
+        ...item,
+        picture: n++ % 2 === 0 ? swatch(n, item.name.slice(0, 2)) : null,
+      })),
+    })),
+  };
+}
