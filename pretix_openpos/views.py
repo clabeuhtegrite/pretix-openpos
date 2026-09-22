@@ -283,6 +283,69 @@ def off_tariff_total(sale):
     )
 
 
+def refused_card_refunds(event):
+    """
+    Cancellations whose money SumUp would not give back.
+
+    A card refund is asked for over the network, and the network can say no —
+    a transaction already refunded, an account limit, a reader long gone. The
+    till says so in red, to whoever pressed the button, once. Nobody else ever
+    heard: pretix marks the refund failed and moves on, and the customer is
+    standing at the counter being told the cancellation went through.
+
+    So the money is still on their card, and the only other record of that is
+    SumUp's dashboard. This is the list the organiser reconciling the next
+    morning did not have. Read-only, like the section above it: refunding one
+    of these from the SumUp app is a decision, not a page load.
+
+    Not filtered by evening, deliberately, and for the same reason: an unpaid
+    debt to a customer does not stop mattering because the screen is showing a
+    different night.
+    """
+    from pretix.base.models.orders import OrderRefund
+
+    from .payment import CARD
+
+    refunds = list(
+        OrderRefund.objects.filter(
+            order__event=event,
+            provider=CARD,
+            state=OrderRefund.REFUND_STATE_FAILED,
+        )
+        .select_related("order")
+        .order_by("-created")[:200]
+    )
+    if not refunds:
+        return []
+
+    # The SumUp handle for each, so the dashboard can be searched. It lives on
+    # the payment row rather than on the refund, which knows only pretix.
+    keys = {
+        sale.order_id: sale.idempotency_key
+        for sale in PosSale.objects.filter(
+            event=event,
+            order_id__in=[refund.order_id for refund in refunds],
+            kind=PosSale.KIND_SALE,
+        )
+    }
+    from .models import PosTerminalPayment
+
+    transactions = {
+        payment.idempotency_key: payment.transaction_id
+        for payment in PosTerminalPayment.objects.filter(
+            event=event, idempotency_key__in=list(keys.values())
+        )
+    }
+    return [
+        {
+            "refund": refund,
+            "order": refund.order,
+            "transaction": transactions.get(keys.get(refund.order_id), ""),
+        }
+        for refund in refunds
+    ]
+
+
 def unresolved_terminal_payments(event):
     """
     Card payments that never became a sale, for the one screen that can say so.
@@ -617,6 +680,7 @@ class SalesView(EventPermissionRequiredMixin, ListView):
         # that belongs to the evening being reconciled, not a loose end that
         # needs seeing whatever range is on screen.
         ctx["off_tariff"], ctx["off_tariff_difference"] = sold_off_tariff(all_sales)
+        ctx["refused_refunds"] = refused_card_refunds(self.request.event)
         # Echoed back so the form keeps what was asked for, and so the export
         # link can carry it.
         ctx["filter_from"] = (self.request.GET.get("from") or "").strip()

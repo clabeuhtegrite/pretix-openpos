@@ -703,3 +703,74 @@ def test_the_export_carries_the_tariff_the_screen_compares_against(
     # different answers.
     assert sorted(cells[tariff] for cells in values) == ["", "24.00"]
     assert sorted(cells[gap] for cells in values) == ["", "-4.00"]
+
+
+# -- refunds SumUp would not give back ------------------------------------
+
+def refused_refund(till, event, ticket, sumup):
+    """Cancel a card sale with SumUp answering no, and return the sale."""
+    from .sumup_stub import FakeResponse
+    from .test_terminal import KEY, start, status
+
+    start(till, [{"item": ticket.pk, "count": 1}])
+    sumup.pay()
+    status(till)
+    sale = sell(
+        till, [{"item": ticket.pk, "count": 1}], payment_type="card", idempotency_key=KEY
+    ).json()
+    sumup.next_response = FakeResponse(422, {"message": "too late"})
+    till.post("cancel", {"seq": sale["journal_seq"], "idempotency_key": "annule-01"})
+    return sale
+
+
+@pytest.mark.django_db
+def test_a_refund_sumup_refused_is_listed_with_its_reference(
+    backoffice, till, event, ticket, reader_till, sumup
+):
+    """
+    The money is still on the customer's card, and until this section the only
+    people who ever heard were a volunteer who saw a red banner and the
+    customer being told the cancellation went through.
+    """
+    sale = refused_refund(till, event, ticket, sumup)
+
+    page = backoffice.get(sales_url(event)).content.decode()
+
+    assert "Card refunds SumUp refused" in page
+    assert sale["order"]["code"] in page
+    # Searchable in the SumUp dashboard, which is the only other record.
+    assert "tx_1" in page
+
+
+@pytest.mark.django_db
+def test_a_refund_that_went_through_is_not_listed(
+    backoffice, till, event, ticket, reader_till, sumup
+):
+    from .test_terminal import KEY, start, status
+
+    start(till, [{"item": ticket.pk, "count": 1}])
+    sumup.pay()
+    status(till)
+    sale = sell(
+        till, [{"item": ticket.pk, "count": 1}], payment_type="card", idempotency_key=KEY
+    ).json()
+    till.post("cancel", {"seq": sale["journal_seq"], "idempotency_key": "annule-01"})
+
+    page = backoffice.get(sales_url(event)).content.decode()
+
+    assert "Card refunds SumUp refused" not in page
+
+
+@pytest.mark.django_db
+def test_the_list_ignores_the_evening_filter(
+    backoffice, till, event, ticket, reader_till, sumup
+):
+    refused_refund(till, event, ticket, sumup)
+
+    page = backoffice.get(
+        sales_url(event) + "?from=2020-01-01&to=2020-01-01"
+    ).content.decode()
+
+    # A debt to a customer does not stop mattering because the screen is
+    # showing a different night.
+    assert "Card refunds SumUp refused" in page

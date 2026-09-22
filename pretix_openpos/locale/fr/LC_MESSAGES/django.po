@@ -18,7 +18,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: pretix-openpos\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-09-22 10:50+0000\n"
+"POT-Creation-Date: 2026-09-22 10:52+0000\n"
 "PO-Revision-Date: 2026-09-22 09:51+0000\n"
 "Last-Translator: clabeuhtegrite\n"
 "Language-Team: French\n"
@@ -545,7 +545,7 @@ msgstr "Non attribué"
 #: models.py:463 templates/pretix_openpos/payment_control.html:14
 #: templates/pretix_openpos/sales.html:24
 #: templates/pretix_openpos/sales.html:100
-#: templates/pretix_openpos/sales.html:258
+#: templates/pretix_openpos/sales.html:305
 #: templates/pretix_openpos/sumup.html:64
 msgid "Till"
 msgstr "Caisse"
@@ -778,8 +778,9 @@ msgstr "Événement"
 
 #: templates/pretix_openpos/arrivals.html:124
 #: templates/pretix_openpos/sales.html:99
-#: templates/pretix_openpos/sales.html:158
-#: templates/pretix_openpos/sales.html:256
+#: templates/pretix_openpos/sales.html:156
+#: templates/pretix_openpos/sales.html:205
+#: templates/pretix_openpos/sales.html:303
 msgid "Date"
 msgstr "Date"
 
@@ -881,7 +882,7 @@ msgid "Save"
 msgstr "Enregistrer"
 
 #: templates/pretix_openpos/payment_control.html:10
-#: templates/pretix_openpos/sales.html:259
+#: templates/pretix_openpos/sales.html:306
 msgid "Cashier"
 msgstr "Personne en caisse"
 
@@ -908,7 +909,7 @@ msgstr ""
 "prix que la boutique en ligne."
 
 #: templates/pretix_openpos/prices.html:21
-#: templates/pretix_openpos/sales.html:160
+#: templates/pretix_openpos/sales.html:207
 msgid "Product"
 msgstr "Produit"
 
@@ -940,7 +941,7 @@ msgid "Takings"
 msgstr "Recette"
 
 #: templates/pretix_openpos/sales.html:28
-#: templates/pretix_openpos/sales.html:261
+#: templates/pretix_openpos/sales.html:308
 msgid "Total"
 msgstr "Total"
 
@@ -980,10 +981,12 @@ msgid "State"
 msgstr "État"
 
 #: templates/pretix_openpos/sales.html:102
+#: templates/pretix_openpos/sales.html:158
 msgid "SumUp reference"
 msgstr "Référence SumUp"
 
 #: templates/pretix_openpos/sales.html:103
+#: templates/pretix_openpos/sales.html:159
 msgid "Amount"
 msgstr "Montant"
 
@@ -996,10 +999,28 @@ msgid "Still waiting"
 msgstr "Toujours en attente"
 
 #: templates/pretix_openpos/sales.html:144
+msgid "Card refunds SumUp refused"
+msgstr "Remboursements carte refusés par SumUp"
+
+#: templates/pretix_openpos/sales.html:146
+msgid ""
+"These sales were cancelled, and the refund did not go through. The money is "
+"still on the customer's card. Refund it from the SumUp dashboard using the "
+"reference below — pretix will not try again on its own, and the cancellation "
+"itself stands."
+msgstr "Ces ventes ont été annulées, et le remboursement n’est pas passé. L’argent est toujours sur la carte du client. Remboursez-le depuis le tableau de bord SumUp avec la référence ci-dessous — pretix ne réessaiera pas de lui-même, et l’annulation, elle, tient."
+
+#: templates/pretix_openpos/sales.html:157
+#: templates/pretix_openpos/sales.html:206
+#: templates/pretix_openpos/sales.html:304
+msgid "Order"
+msgstr "Commande"
+
+#: templates/pretix_openpos/sales.html:191
 msgid "Sold at a price that had changed"
 msgstr "Vendu à un prix qui avait changé"
 
-#: templates/pretix_openpos/sales.html:146
+#: templates/pretix_openpos/sales.html:193
 msgid ""
 "These sales were rung up while the till was cut off, priced from the tariff "
 "it had cached, and the customer paid that. The order is recorded at what was "
@@ -1013,57 +1034,52 @@ msgstr ""
 "personne n’a versée serait pire — donc l’écart ci-dessous est de l’argent "
 "réel, présent dans la caisse et absent du tarif."
 
-#: templates/pretix_openpos/sales.html:159
-#: templates/pretix_openpos/sales.html:257
-msgid "Order"
-msgstr "Commande"
-
-#: templates/pretix_openpos/sales.html:167
+#: templates/pretix_openpos/sales.html:214
 msgid "Charged, each"
 msgstr "Débité, l’unité"
 
-#: templates/pretix_openpos/sales.html:168
+#: templates/pretix_openpos/sales.html:215
 msgid "Price list, each"
 msgstr "Tarif, l’unité"
 
-#: templates/pretix_openpos/sales.html:206
+#: templates/pretix_openpos/sales.html:253
 msgid "Difference against the price list"
 msgstr "Écart par rapport au tarif"
 
-#: templates/pretix_openpos/sales.html:223
+#: templates/pretix_openpos/sales.html:270
 msgid "Evenings from"
 msgstr "Soirées du"
 
-#: templates/pretix_openpos/sales.html:227
+#: templates/pretix_openpos/sales.html:274
 msgctxt "end of a range of evenings"
 msgid "to"
 msgstr "au"
 
-#: templates/pretix_openpos/sales.html:230
+#: templates/pretix_openpos/sales.html:277
 msgid "Show"
 msgstr "Afficher"
 
-#: templates/pretix_openpos/sales.html:232
+#: templates/pretix_openpos/sales.html:279
 msgid "All evenings"
 msgstr "Toutes les soirées"
 
-#: templates/pretix_openpos/sales.html:237
+#: templates/pretix_openpos/sales.html:284
 msgid "Journal"
 msgstr "Journal"
 
-#: templates/pretix_openpos/sales.html:248
+#: templates/pretix_openpos/sales.html:295
 msgid "Export CSV"
 msgstr "Exporter en CSV"
 
-#: templates/pretix_openpos/sales.html:260
+#: templates/pretix_openpos/sales.html:307
 msgid "Payment"
 msgstr "Paiement"
 
-#: templates/pretix_openpos/sales.html:290
+#: templates/pretix_openpos/sales.html:337
 msgid "test"
 msgstr "test"
 
-#: templates/pretix_openpos/sales.html:298
+#: templates/pretix_openpos/sales.html:345
 msgid "No sales recorded."
 msgstr "Aucune vente enregistrée."
 
@@ -1292,20 +1308,20 @@ msgstr "{label} : le prix ne peut pas être négatif."
 msgid "The on-site prices have been saved."
 msgstr "Les tarifs sur place ont été enregistrés."
 
-#: views.py:377
+#: views.py:440
 #, python-brace-format
 msgid "“{value}” is not a date. The first evening goes in as YYYY-MM-DD."
 msgstr "« {value} » n'est pas une date. La première soirée s'écrit AAAA-MM-JJ."
 
-#: views.py:381
+#: views.py:444
 #, python-brace-format
 msgid "“{value}” is not a date. The last evening goes in as YYYY-MM-DD."
 msgstr "« {value} » n'est pas une date. La dernière soirée s'écrit AAAA-MM-JJ."
 
-#: views.py:384
+#: views.py:447
 msgid "The end of the range is before its beginning."
 msgstr "La fin de l'intervalle est avant son début."
 
-#: views.py:572
+#: views.py:635
 msgid "unknown till"
 msgstr "caisse inconnue"

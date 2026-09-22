@@ -1483,6 +1483,16 @@ précisément la raison pour laquelle l'écran des réglages SumUp n'utilise pas
 celui de pretix — ce dernier écrit la *valeur* de chaque champ modifié dans
 l'historique.
 
+**Remboursements carte refusés par SumUp.** Une annulation de vente carte demande
+le remboursement par API, et le réseau peut répondre non : transaction déjà
+remboursée, plafond, lecteur disparu depuis. La caisse le dit en rouge, une fois,
+à la personne qui a appuyé — pendant qu'on annonce au client que l'annulation est
+passée. L'argent est toujours sur sa carte. Cette section est la liste qui
+manquait, avec la référence SumUp pour la retrouver dans le tableau de bord ;
+l'annulation, elle, tient, et pretix ne réessaie pas de lui-même. Comme les
+paiements carte sans vente, elle ignore le filtre par soirée : une dette envers un
+client ne cesse pas de compter parce que l'écran montre une autre soirée.
+
 Les commandes elles-mêmes sont des commandes pretix ordinaires : elles
 apparaissent dans les listes, les exports et les rapports habituels, sur le canal
 Open POS, avec la répartition espèces/carte. Le bloc de paiement de la page de

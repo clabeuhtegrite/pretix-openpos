@@ -130,6 +130,52 @@
     {% endif %}
 
     {% comment %}
+        Cancellations whose money SumUp would not give back. Said in red on the
+        till, once, to whoever pressed the button — while the customer is being
+        told the cancellation went through. Not filtered by evening: a debt to a
+        customer does not stop mattering because the screen shows another night.
+    {% endcomment %}
+    {% if refused_refunds %}
+        <div class="row">
+            <div class="col-md-12">
+                <h3>{% trans "Card refunds SumUp refused" %}</h3>
+                <div class="alert alert-danger">
+                    {% blocktrans trimmed %}
+                        These sales were cancelled, and the refund did not go through. The money
+                        is still on the customer's card. Refund it from the SumUp dashboard using
+                        the reference below — pretix will not try again on its own, and the
+                        cancellation itself stands.
+                    {% endblocktrans %}
+                </div>
+                <table class="table table-condensed">
+                    <thead>
+                    <tr>
+                        <th>{% trans "Date" %}</th>
+                        <th>{% trans "Order" %}</th>
+                        <th>{% trans "SumUp reference" %}</th>
+                        <th class="text-right">{% trans "Amount" %}</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    {% for row in refused_refunds %}
+                        <tr>
+                            <td>{{ row.refund.created|date:"SHORT_DATETIME_FORMAT" }}</td>
+                            <td>
+                                <a href="{% url "control:event.order" organizer=request.event.organizer.slug event=request.event.slug code=row.order.code %}">
+                                    {{ row.order.code }}
+                                </a>
+                            </td>
+                            <td><code>{{ row.transaction|default:"—" }}</code></td>
+                            <td class="text-right">{{ row.refund.amount|money:currency }}</td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    {% endif %}
+
+    {% comment %}
         Sales replayed at a price the tariff no longer carries. Said once to
         whoever held the tablet at resync, and until this section to nobody
         else — least of all the person reconciling the evening two days later,
