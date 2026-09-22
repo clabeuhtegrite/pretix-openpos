@@ -8,20 +8,23 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
  * code.
  */
 
-const { checkout, redeem } = vi.hoisted(() => ({
+const { checkout, redeem, reportRefusal } = vi.hoisted(() => ({
   checkout: vi.fn(),
   redeem: vi.fn(),
+  reportRefusal: vi.fn(),
 }));
 
 vi.mock("./api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./api")>();
-  return { ...actual, api: { ...actual.api, checkout, redeem } };
+  return { ...actual, api: { ...actual.api, checkout, redeem, reportRefusal } };
 });
 
 import { ApiError } from "./api";
-import { enqueue, loadFailures, loadQueue, saveQueue } from "./storage";
-import { drainQueue } from "./sync";
-import type { Pairing, QueuedCheckin, QueuedSale } from "./types";
+import {
+  enqueue, loadDoorScans, loadFailures, loadQueue, saveDoorScans, saveQueue,
+} from "./storage";
+import { drainQueue, sendable } from "./sync";
+import type { DoorScans, Pairing, QueuedCheckin, QueuedSale } from "./types";
 
 const pairing: Pairing = {
   token: "tok",
@@ -48,7 +51,7 @@ function sale(id: string, event = "festival"): QueuedSale {
   };
 }
 
-function checkin(id: string, secret: string): QueuedCheckin {
+function checkin(id: string, secret: string, overrides: Partial<QueuedCheckin> = {}): QueuedCheckin {
   return {
     kind: "checkin",
     id,
@@ -57,6 +60,7 @@ function checkin(id: string, secret: string): QueuedCheckin {
     list: 7,
     secret,
     name: "Alice",
+    ...overrides,
   };
 }
 
@@ -66,6 +70,7 @@ beforeEach(() => {
   localStorage.clear();
   checkout.mockReset();
   redeem.mockReset();
+  reportRefusal.mockReset();
 });
 
 describe("drainQueue", () => {
@@ -207,6 +212,65 @@ describe("drainQueue", () => {
     );
   });
 
+  it("sends it the way pretix expects a scan made offline", async () => {
+    // Forced: the person walked in on the answer the door gave at the time,
+    // and pretix records it whatever it would say now — and marks it as an
+    // offline scan, with the time it arrived, in its history and its export.
+    saveQueue([checkin("nonce-1", "alice-secret")]);
+    redeem.mockResolvedValue({ status: "ok" });
+
+    await drainQueue(pairing);
+
+    expect(redeem).toHaveBeenCalledWith(pairing, expect.objectContaining({ force: true }));
+  });
+
+  it("sends a refusal made offline to pretix' own record of refused scans", async () => {
+    saveQueue([
+      checkin("nonce-2", "nobody", {
+        name: "", refused: "error", explanation: "not checked",
+      }),
+    ]);
+    reportRefusal.mockResolvedValue({});
+
+    const report = await drainQueue(pairing);
+
+    expect(redeem).not.toHaveBeenCalled();
+    expect(reportRefusal).toHaveBeenCalledWith(pairing, {
+      event: "festival",
+      list: 7,
+      secret: "nobody",
+      reason: "error",
+      explanation: "not checked",
+      datetime: "2026-08-16T22:10:00.000Z",
+      nonce: "nonce-2",
+    });
+    expect(report.checkins).toBe(1);
+    expect(loadQueue()).toEqual([]);
+  });
+
+  it("keeps a refusal in line when the network goes again", async () => {
+    saveQueue([checkin("nonce-2", "nobody", { refused: "invalid" })]);
+    reportRefusal.mockRejectedValue(new ApiError(0, "network"));
+
+    const report = await drainQueue(pairing);
+
+    expect(report.checkins).toBe(0);
+    expect(loadQueue().map((entry) => entry.id)).toEqual(["nonce-2"]);
+  });
+
+  it("sends a scan made for another event instead of holding it back", async () => {
+    // A door phone moved on to the next evening kept the previous one's
+    // entries to itself. A scan names its list, and the list its event.
+    saveQueue([checkin("nonce-1", "alice-secret", { event: "last-night" })]);
+    redeem.mockResolvedValue({ status: "ok" });
+
+    const report = await drainQueue(pairing);
+
+    expect(redeem).toHaveBeenCalledOnce();
+    expect(report.stranded).toBe(0);
+    expect(loadQueue()).toEqual([]);
+  });
+
   it("reports a check-in the server contests on replay", async () => {
     saveQueue([checkin("nonce-1", "alice-secret")]);
     redeem.mockResolvedValue({ status: "error", reason: "already_redeemed" });
@@ -234,5 +298,77 @@ describe("drainQueue", () => {
 
     expect(report.sales).toBe(2);
     expect(loadQueue()).toEqual([]);
+  });
+});
+
+describe("sendable", () => {
+  it("holds back a sale of another event only", () => {
+    expect(sendable(sale("a", "other-event"), "festival")).toBe(false);
+    expect(sendable(sale("a"), "festival")).toBe(true);
+    expect(sendable(checkin("n", "s", { event: "other-event" }), "festival")).toBe(true);
+  });
+});
+
+describe("the figure kept for a reload", () => {
+  const tonight: DoorScans = {
+    since: new Date(Date.now() - 3_600_000).toISOString(),
+    device: { admitted: 5, refused: 1, other: 0, offline: 0 },
+    event: { admitted: 50, refused: 2, other: 0, offline: 0 },
+    devices: [],
+  };
+
+  it("counts a scan the drain has sent", async () => {
+    // Out of the queue and not yet in the figure: without this, a phone
+    // reloaded with no network right after a drain opened short of it.
+    saveDoorScans("festival", tonight);
+    saveQueue([checkin("nonce-1", "alice-secret", { at: new Date().toISOString() })]);
+    redeem.mockResolvedValue({ status: "ok" });
+
+    await drainQueue(pairing);
+
+    expect(loadDoorScans("festival")).toEqual({
+      ...tonight,
+      device: { admitted: 6, refused: 1, other: 0, offline: 1 },
+      event: { admitted: 51, refused: 2, other: 0, offline: 1 },
+    });
+  });
+
+  it("counts a refusal as one", async () => {
+    saveDoorScans("festival", tonight);
+    saveQueue([checkin("n", "nobody", { at: new Date().toISOString(), refused: "invalid" })]);
+    reportRefusal.mockResolvedValue({});
+
+    await drainQueue(pairing);
+
+    expect(loadDoorScans("festival")?.device?.refused).toBe(2);
+  });
+
+  it("leaves out a scan the server would not take", async () => {
+    saveDoorScans("festival", tonight);
+    saveQueue([checkin("nonce-1", "alice-secret", { at: new Date().toISOString() })]);
+    redeem.mockRejectedValue(new ApiError(400, "unknown list"));
+
+    await drainQueue(pairing);
+
+    expect(loadDoorScans("festival")).toEqual(tonight);
+  });
+
+  it("leaves out a scan from before tonight", async () => {
+    saveDoorScans("festival", tonight);
+    saveQueue([checkin("nonce-1", "alice-secret")]);
+    redeem.mockResolvedValue({ status: "ok" });
+
+    await drainQueue(pairing);
+
+    expect(loadDoorScans("festival")).toEqual(tonight);
+  });
+
+  it("is not made up when there is none", async () => {
+    saveQueue([checkin("nonce-1", "alice-secret", { at: new Date().toISOString() })]);
+    redeem.mockResolvedValue({ status: "ok" });
+
+    await drainQueue(pairing);
+
+    expect(loadDoorScans("festival")).toBeNull();
   });
 });

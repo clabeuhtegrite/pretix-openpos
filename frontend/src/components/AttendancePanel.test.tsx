@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
 import { t } from "../i18n";
-import type { Attendance } from "../types";
+import type { Attendance, DoorScans } from "../types";
 import AttendancePanel from "./AttendancePanel";
 
 /**
@@ -155,6 +155,63 @@ describe("the breakdown per product", () => {
     show({ data: attendance({ inside: 90, entered: 120, exited: 30 }) });
 
     expect(screen.getByRole("columnheader", { name: t("attendance.entered") })).toBeDefined();
+  });
+});
+
+describe("the scans per device", () => {
+  const scans: DoorScans = {
+    since: "2026-08-16T04:00:00.000Z",
+    device: { admitted: 64, refused: 3, other: 0, offline: 12 },
+    event: { admitted: 120, refused: 4, other: 0, offline: 12 },
+    devices: [
+      { name: "Porte 1", current: true, admitted: 64, refused: 3, other: 0, offline: 12 },
+      { name: "Porte 2", current: false, admitted: 55, refused: 1, other: 0, offline: 0 },
+      { name: null, current: false, admitted: 1, refused: 0, other: 0, offline: 0 },
+    ],
+  };
+
+  function row(name: RegExp): string[] {
+    const cells = within(screen.getByText(name).closest("tr") as HTMLElement).getAllByRole("cell");
+    return cells.map((cell) => cell.textContent ?? "");
+  }
+
+  it("gives each door its admitted, refused and offline scans", () => {
+    // The figure that answers "did we lose scans?": a phone whose line is
+    // short of what its volunteer remembers let in people pretix never saw.
+    show({ data: attendance({ scans }) });
+
+    expect(screen.getByText(t("attendance.byDevice"))).toBeDefined();
+    expect(row(/Porte 2/)).toEqual(["Porte 2", "55", "1", "0"]);
+  });
+
+  it("points out the device reading it", () => {
+    show({ data: attendance({ scans }) });
+
+    expect(row(/Porte 1/)).toEqual([`Porte 1 · ${t("attendance.thisDevice")}`, "64", "3", "12"]);
+  });
+
+  it("files scans made from the back office under it", () => {
+    show({ data: attendance({ scans }) });
+
+    expect(row(new RegExp(t("attendance.backOffice")))[1]).toBe("1");
+  });
+
+  it("says what the offline column means, and where pretix shows it", () => {
+    show({ data: attendance({ scans }) });
+
+    expect(screen.getByText(t("attendance.byDeviceExplain"))).toBeDefined();
+  });
+
+  it("is left out before anybody has scanned anything", () => {
+    show({ data: attendance({ scans: { ...scans, devices: [] } }) });
+
+    expect(screen.queryByText(t("attendance.byDevice"))).toBeNull();
+  });
+
+  it("is left out by a server that does not count them", () => {
+    show();
+
+    expect(screen.queryByText(t("attendance.byDevice"))).toBeNull();
   });
 });
 

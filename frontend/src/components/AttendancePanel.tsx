@@ -1,5 +1,5 @@
 import { locale, t } from "../i18n";
-import type { Attendance } from "../types";
+import type { Attendance, DoorScans } from "../types";
 
 /**
  * How many people are in the room, and how they got there.
@@ -164,6 +164,51 @@ function FlowChart({ data, withExits }: { data: Attendance; withExits: boolean }
   );
 }
 
+/**
+ * Every door's scans tonight, one line per device.
+ *
+ * The figure that answers "did we lose scans?": a phone whose line is short of
+ * what its volunteer remembers let people in that pretix never heard of, and
+ * the offline column says how many of the others spent a while in a phone
+ * before they arrived.
+ */
+function DeviceTable({ scans }: { scans: DoorScans }) {
+  return (
+    <>
+      <h3 className="attendance-subtitle">{t("attendance.byDevice")}</h3>
+      <table className="takings">
+        <thead>
+          <tr>
+            <th>{t("attendance.device")}</th>
+            <th>{t("attendance.entered")}</th>
+            <th>{t("attendance.refused")}</th>
+            <th>{t("attendance.offline")}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {scans.devices.map((device, i) => (
+            // By position: two phones may well carry the same name.
+            <tr key={i}>
+              <td>
+                {device.name ?? t("attendance.backOffice")}
+                {device.current && (
+                  <span className="attendance-this"> · {t("attendance.thisDevice")}</span>
+                )}
+              </td>
+              <td>
+                <strong>{device.admitted}</strong>
+              </td>
+              <td>{device.refused}</td>
+              <td>{device.offline}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div className="attendance-note">{t("attendance.byDeviceExplain")}</div>
+    </>
+  );
+}
+
 export default function AttendancePanel({ data, busy, error, onRefresh, onClose }: Props) {
   const percent = data && data.expected ? Math.round((data.entered * 100) / data.expected) : 0;
   // One rule for the whole panel: the "who came in at all" dimension only earns
@@ -232,6 +277,8 @@ export default function AttendancePanel({ data, busy, error, onRefresh, onClose 
                 </table>
               </>
             )}
+
+            {data.scans && data.scans.devices.length > 0 && <DeviceTable scans={data.scans} />}
 
             <div className="attendance-note">
               {t("attendance.explain")}

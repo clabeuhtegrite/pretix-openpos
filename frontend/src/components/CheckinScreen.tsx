@@ -1,13 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { api, ApiError } from "../api";
+import { api, ApiError, isRetryable } from "../api";
 import { useConnectivity } from "../connectivity";
+import { addScans, doorCount, NO_SCANS, subtractScans, waitingScans } from "../doorCount";
 import { t, type MessageKey } from "../i18n";
 import { newNonce } from "../nonce";
 import { indexSnapshot, offlineVerdict } from "../offline";
 import { play } from "../sound";
-import { enqueue, loadQueue } from "../storage";
-import type { Attendance, CheckinListInfo, Pairing, RedeemResult } from "../types";
+import { enqueue, loadDoorScans, loadQueue, saveDoorScans } from "../storage";
+import type {
+  Attendance, CheckinListInfo, DoorScans, Pairing, QueuedCheckin, QueueEntry, RedeemResult,
+  ScanFigures,
+} from "../types";
 import { useBackClose } from "../useBackClose";
 import { useOfflineSnapshot } from "../useOfflineSnapshot";
 import AttendancePanel from "./AttendancePanel";
@@ -39,12 +43,35 @@ const REPEAT_GUARD_MS = 6000;
  */
 const ATTENDANCE_REFRESH_MS = 60_000;
 /**
- * Delay before re-reading it after a successful scan.
+ * Delay before re-reading it after a scan answered online.
  *
  * Long enough for a burst of tickets to collapse into one request, short enough
  * that the count has moved by the time the operator looks up from the verdict.
  */
 const ATTENDANCE_SETTLE_MS = 1200;
+/**
+ * How long a scan may wait for pretix before the door answers it itself.
+ *
+ * A sale can afford the thirty seconds every write gets; a door cannot. With
+ * the queue outside, nobody holds a ticket in front of the camera for half a
+ * minute of "Checking…": the volunteer waves the person in, and when the
+ * request finally failed the scan was dropped — no verdict, nothing queued,
+ * no trace in pretix. Past this the guest list held on the device answers
+ * instead, and the scan is queued under the nonce it was sent with, so a
+ * request that did reach pretix is recognised on replay rather than doubled.
+ * pretix answers a scan in well under a second; this is several times that.
+ */
+const LIVE_SCAN_TIMEOUT_MS = 8_000;
+
+/** Which pretix reason a refusal given offline is sent under. */
+function pretixReason(result: RedeemResult): { reason: string; explanation?: string } {
+  if (result.reason === "offline_no_snapshot") {
+    // Not a reason pretix knows: nothing was checked at all. Its generic one,
+    // with words that say what actually happened.
+    return { reason: "error", explanation: t("checkin.unchecked") };
+  }
+  return { reason: result.reason ?? "invalid" };
+}
 
 /**
  * Buzz on a refusal.
@@ -106,6 +133,14 @@ interface Props {
    */
   onSell?: () => void;
   /**
+   * How many entries the offline queue holds, as the app last counted them.
+   *
+   * Read for when it goes down: a drain has just handed scans to pretix, and
+   * the counter re-reads the server's figure rather than leave them out of it
+   * until the next minute.
+   */
+  pending?: number;
+  /**
    * Told when an entry has just been added to the offline queue.
    *
    * The app owns the badge and the automatic drain, and both are driven off a
@@ -120,15 +155,43 @@ interface Props {
 }
 
 export default function CheckinScreen({
-  pairing, lists, defaultListId, admissionItems, onListChange, onSell, onQueued, onClose,
+  pairing, lists, defaultListId, admissionItems, onListChange, onSell, pending = 0, onQueued,
+  onClose,
 }: Props) {
   const [listId, setListId] = useState<number | null>(
     defaultListId ?? (lists.length ? lists[0].id : null),
   );
   const [verdict, setVerdict] = useState<RedeemResult | null>(null);
+  /** The verdict on screen was given from the device's own guest list. */
+  const [verdictOffline, setVerdictOffline] = useState(false);
   const [busy, setBusy] = useState(false);
   const [fatal, setFatal] = useState<string | null>(null);
-  const [counts, setCounts] = useState({ ok: 0, ko: 0, other: 0 });
+  /**
+   * Tonight's scans as the server last counted them — or, until it answers,
+   * as it counted them before this page was last loaded.
+   */
+  const [doorScans, setDoorScans] = useState<DoorScans | null>(() =>
+    loadDoorScans(pairing.event),
+  );
+  /**
+   * Every scan answered online on this screen, and how many of them the figure
+   * on screen already counts.
+   *
+   * A refresh counts the scans answered before it was sent; the ones answered
+   * since are added on top until the next one. Kept as a running total and a
+   * mark rather than a count that goes up and down, so that two refreshes in
+   * flight at once — a scan's, and the minute's — cannot take the same scans
+   * off twice. `live` is the difference, for rendering.
+   */
+  const liveTotalRef = useRef<ScanFigures>(NO_SCANS);
+  const countedRef = useRef<{ run: number; scans: ScanFigures }>({ run: 0, scans: NO_SCANS });
+  const [live, setLive] = useState<ScanFigures>(NO_SCANS);
+  /**
+   * The queue as it stood when the server's figure came in, and what this
+   * screen has queued since: what the figure does not count yet. See
+   * doorCount for why it is not simply the queue as it stands.
+   */
+  const [queueSeen, setQueueSeen] = useState<QueueEntry[]>(loadQueue);
   const [searchOpen, setSearchOpen] = useState(false);
   const [attendanceOpen, setAttendanceOpen] = useState(false);
   const [attendance, setAttendance] = useState<Attendance | null>(null);
@@ -144,10 +207,13 @@ export default function CheckinScreen({
   // rather than with the other door's.
   const snapshotIndex = useMemo(() => indexSnapshot(snapshot), [snapshot]);
   const snapshotUsable = snapshotIndex !== null && snapshotIndex.listId === listId;
-  // Scanned on this device since the snapshot was taken, so a second scan of the
-  // same ticket is caught without waiting for the network to come back.
+  // Admitted on this device since the snapshot was taken, so a second scan of
+  // the same ticket is caught without waiting for the network to come back.
+  // Refusals are in the queue too, and do not count as the ticket being used.
   const scannedHereRef = useRef<Set<string>>(
-    new Set(loadQueue().filter((e) => e.kind === "checkin").map((e) => e.secret)),
+    new Set(
+      loadQueue().flatMap((e) => (e.kind === "checkin" && !e.refused ? [e.secret] : [])),
+    ),
   );
 
   // Refs, not state: these gate the decode callback and must not re-render it.
@@ -170,9 +236,19 @@ export default function CheckinScreen({
   const loadAttendance = useCallback(async () => {
     if (!listId) return;
     const run = ++attendanceRunRef.current;
+    const asked = liveTotalRef.current;
     setAttendanceBusy(true);
     try {
       const data = await api.attendance(pairing, listId);
+      // Taken from any answer newer than the one on screen, even one a later
+      // request has overtaken for the list: the scans are the event's.
+      if (data.scans && run > countedRef.current.run) {
+        countedRef.current = { run, scans: asked };
+        setLive(subtractScans(liveTotalRef.current, asked));
+        setDoorScans(data.scans);
+        setQueueSeen(loadQueue());
+        saveDoorScans(pairing.event, data.scans);
+      }
       if (attendanceRunRef.current !== run) return;
       setAttendance(data);
       setAttendanceError(null);
@@ -195,6 +271,29 @@ export default function CheckinScreen({
     return () => window.clearInterval(timer);
   }, [listId, loadAttendance]);
 
+  // The queue went down: a drain has just handed scans to pretix, and the
+  // figure is read again rather than a minute later. Not on the network
+  // merely coming back: that is also what a failed request followed by one
+  // that got through looks like, and on a network that drops writes but not
+  // reads it alternates as fast as the requests go. The minute's refresh
+  // catches up the other doors' figure either way.
+  const pendingRef = useRef(pending);
+  useEffect(() => {
+    if (pending < pendingRef.current) void loadAttendance();
+    pendingRef.current = pending;
+  }, [pending, loadAttendance]);
+
+  const count = useMemo(
+    () => doorCount(doorScans, live, queueSeen, pairing.event),
+    [doorScans, live, queueSeen, pairing.event],
+  );
+  const waiting = useMemo(
+    () => waitingScans(loadQueue(), pairing.event),
+    // Both stand for the queue, which lives in storage: what this screen
+    // queued, and what the app last counted after a drain.
+    [queueSeen, pending, pairing.event],
+  );
+
   useBackClose(searchOpen, () => setSearchOpen(false));
   useBackClose(attendanceOpen, () => setAttendanceOpen(false));
 
@@ -202,6 +301,46 @@ export default function CheckinScreen({
     window.clearTimeout(holdRef.current);
     setVerdict(null);
   }, []);
+
+  /**
+   * Answer a scan from the guest list on the device, and keep it for pretix.
+   *
+   * Refusals are kept too: online, pretix writes down every scan it refuses,
+   * and a door that was offline used to leave no trace of the tickets it
+   * turned away. Written to storage before the answer is shown, and throws
+   * when it cannot be — the operator is then told to check the ticket another
+   * way rather than shown a verdict nobody will ever hear about.
+   */
+  const answerHere = useCallback(
+    (code: string, nonce: string, list: number): RedeemResult => {
+      const result = offlineVerdict(snapshotIndex, list, code, scannedHereRef.current);
+      const admitted = result.status === "ok";
+      const entry: QueuedCheckin = {
+        kind: "checkin",
+        id: nonce,
+        at: new Date().toISOString(),
+        event: pairing.event,
+        list,
+        secret: code,
+        name: result.position?.attendee_name ?? "",
+      };
+      if (admitted) {
+        entry.admits = admits(result, admissionItems);
+      } else {
+        const { reason, explanation } = pretixReason(result);
+        entry.refused = reason;
+        if (explanation) entry.explanation = explanation;
+      }
+      enqueue(entry);
+      // Only once it is on disk: a scan that could not be kept must not come
+      // back as "already scanned" when it is presented again.
+      if (admitted) scannedHereRef.current.add(code);
+      setQueueSeen((seen) => [...seen, entry]);
+      onQueued?.();
+      return result;
+    },
+    [snapshotIndex, pairing.event, admissionItems, onQueued],
+  );
 
   const submit = useCallback(
     async (secret: string) => {
@@ -223,38 +362,43 @@ export default function CheckinScreen({
       setBusy(true);
       setFatal(null);
       try {
-        let result: RedeemResult;
+        const nonce = newNonce();
+        let result: RedeemResult | null = null;
         if (online) {
-          result = await api.redeem(pairing, {
-            secret: code,
-            lists: [listId],
-            nonce: newNonce(),
-          });
-        } else {
-          // No server to ask: answer from the snapshot, and queue what was
-          // admitted so pretix hears about it — with this timestamp — later.
-          result = offlineVerdict(snapshotIndex, listId, code, scannedHereRef.current);
-          if (result.status === "ok") {
-            scannedHereRef.current.add(code);
-            enqueue({
-              kind: "checkin",
-              id: newNonce(),
-              at: new Date().toISOString(),
-              event: pairing.event,
-              list: listId,
+          try {
+            result = await api.redeem(pairing, {
               secret: code,
-              name: result.position?.attendee_name ?? "",
+              lists: [listId],
+              nonce,
+              timeoutMs: LIVE_SCAN_TIMEOUT_MS,
             });
-            onQueued?.();
+          } catch (e) {
+            // "Not now" rather than "no": the network died under the scan, or
+            // pretix is restarting. That used to end on an error banner with
+            // the scan kept nowhere, so a person waved in meanwhile never
+            // reached pretix. It is answered here instead, like any scan made
+            // offline. A refusal of the device itself is still an error.
+            if (!isRetryable(e)) throw e;
           }
         }
+        const answeredHere = result === null;
+        if (result === null) {
+          // No server to ask: answer from the snapshot, and queue the scan so
+          // pretix hears about it — with this timestamp — later.
+          result = answerHere(code, nonce, listId);
+        } else {
+          liveTotalRef.current = addScans(
+            liveTotalRef.current,
+            result.status !== "ok"
+              ? { ...NO_SCANS, refused: 1 }
+              : admits(result, admissionItems)
+                ? { ...NO_SCANS, admitted: 1 }
+                : { ...NO_SCANS, other: 1 },
+          );
+          setLive(subtractScans(liveTotalRef.current, countedRef.current.scans));
+        }
         setVerdict(result);
-        setCounts((c) => {
-          if (result.status !== "ok") return { ...c, ko: c.ko + 1 };
-          return admits(result, admissionItems)
-            ? { ...c, ok: c.ok + 1 }
-            : { ...c, other: c.other + 1 };
-        });
+        setVerdictOffline(answeredHere);
         // Heard, not felt: the door is all iPhones and none of them vibrate.
         // A scan that went through says so too, quietly, because silence on a
         // scan reads as "did it even read it?" and gets the ticket presented
@@ -265,10 +409,12 @@ export default function CheckinScreen({
           play("refused");
           buzz();
         }
-        if (result.status === "ok" && online) {
+        if (!answeredHere && result.status === "ok") {
           // The room may just have changed. Still asked of the server rather
           // than added up here: the figure counts every door and every till,
-          // and one kept locally would drift from the first scan made elsewhere.
+          // and one kept locally would drift from the first scan made
+          // elsewhere. A refusal moves nothing but the counter below, which
+          // counts it already.
           window.clearTimeout(settleRef.current);
           settleRef.current = window.setTimeout(() => void loadAttendance(), ATTENDANCE_SETTLE_MS);
         }
@@ -278,15 +424,22 @@ export default function CheckinScreen({
           result.status === "ok" ? HOLD_OK_MS : HOLD_ERROR_MS,
         );
       } catch (e) {
-        // Transport or auth failure: let the operator retry the same ticket.
+        // The device refused by the server, or a scan the device could not
+        // keep: let the operator retry the same ticket.
         lastCodeRef.current = null;
-        setFatal(e instanceof ApiError && e.isNetwork ? t("error.offline") : String(e));
+        setFatal(
+          e instanceof ApiError
+            ? e.message
+            : e instanceof Error && e.message === "queue-write-failed"
+              ? t("checkin.queueFailed")
+              : String(e),
+        );
       } finally {
         busyRef.current = false;
         setBusy(false);
       }
     },
-    [listId, pairing, loadAttendance, admissionItems, online, snapshotIndex],
+    [listId, pairing, loadAttendance, admissionItems, online, answerHere],
   );
 
   if (!lists.length) {
@@ -383,10 +536,27 @@ export default function CheckinScreen({
             </div>
           )}
           <div className="scanner-counter">
-            {busy
-              ? t("checkin.busy")
-              : t("checkin.counter", { ok: counts.ok, ko: counts.ko }) +
-                (counts.other > 0 ? ` · ${t("checkin.counterOther", { n: counts.other })}` : "")}
+            <div>
+              {busy
+                ? t("checkin.busy")
+                : [
+                    t("checkin.counter", {
+                      ok: count.device.admitted,
+                      ko: count.device.refused,
+                    }),
+                    ...(count.device.other > 0
+                      ? [t("checkin.counterOther", { n: count.device.other })]
+                      : []),
+                    // Said, not hidden: these are scans pretix has not heard
+                    // of yet, and the badge in the topbar is not in view here.
+                    ...(waiting > 0 ? [t("checkin.counterWaiting", { n: waiting })] : []),
+                  ].join(" · ")}
+            </div>
+            <div className="scanner-counter-evening">
+              {count.evening === null
+                ? t("checkin.counterEveningUnknown")
+                : t("checkin.counterEvening", { n: count.evening })}
+            </div>
           </div>
           {fatal && <div className="error-banner">{fatal}</div>}
         </div>
@@ -437,6 +607,11 @@ export default function CheckinScreen({
           )}
           {verdict.status === "ok" && verdict.require_attention && (
             <div className="verdict-attention">{t("checkin.attention")}</div>
+          )}
+          {verdictOffline && (
+            // So the door knows this one is waiting on this device rather than
+            // in pretix, whichever way the verdict went.
+            <div className="verdict-offline">{t("checkin.offline")}</div>
           )}
           <div className="verdict-meta">
             {[verdict.position?.attendee_name, verdict.position?.order]

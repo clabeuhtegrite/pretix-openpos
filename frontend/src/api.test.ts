@@ -545,4 +545,77 @@ describe("redeeming a ticket", () => {
       ApiError,
     );
   });
+
+  it("forces a scan replayed from the queue, which is how pretix marks it offline", async () => {
+    respondWith({ status: "ok" });
+
+    await api.redeem(pairing, { secret: "s", lists: [7], nonce: "n1", force: true });
+
+    expect(JSON.parse(String(callArgs()[1].body))).toMatchObject({ force: true });
+  });
+
+  it("gives up as soon as the door asks it to, rather than after a sale's thirty seconds", async () => {
+    vi.useFakeTimers();
+    try {
+      fetchMock.mockImplementation(
+        (_url: string, init?: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () =>
+              reject(new DOMException("aborted", "AbortError")),
+            );
+          }),
+      );
+
+      const settled = api
+        .redeem(pairing, { secret: "s", lists: [7], nonce: "n", timeoutMs: 8000 })
+        .catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(8001);
+      const error = await settled;
+
+      expect(error).toBeInstanceOf(ApiError);
+      expect((error as { status: number }).status).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("reporting a refusal made offline", () => {
+  const refusal = {
+    event: "last-night",
+    list: 7,
+    secret: "nobody",
+    reason: "invalid",
+    datetime: "2026-08-16T22:10:00.000Z",
+    nonce: "n1",
+  };
+
+  it("goes to pretix' own endpoint for it, on the scan's own event", async () => {
+    respondWith({}, 201);
+
+    await api.reportRefusal(pairing, refusal);
+
+    const [url, options] = callArgs();
+    expect(url).toBe("/api/v1/organizers/demo/events/last-night/checkinlists/7/failed_checkins/");
+    expect(options.method).toBe("POST");
+    expect(JSON.parse(String(options.body))).toEqual({
+      raw_barcode: "nobody",
+      raw_source_type: "barcode",
+      error_reason: "invalid",
+      datetime: "2026-08-16T22:10:00.000Z",
+      type: "entry",
+      nonce: "n1",
+    });
+  });
+
+  it("carries words of its own when there are some", async () => {
+    respondWith({}, 201);
+
+    await api.reportRefusal(pairing, { ...refusal, reason: "error", explanation: "not checked" });
+
+    expect(JSON.parse(String(callArgs()[1].body))).toMatchObject({
+      error_reason: "error",
+      error_explanation: "not checked",
+    });
+  });
 });

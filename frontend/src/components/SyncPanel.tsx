@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 import { locale, t } from "../i18n";
 import { loadFailures, loadQueue, saveFailures } from "../storage";
+import { sendable } from "../sync";
 import type { QueueEntry, SyncReport } from "../types";
 
 /**
@@ -28,20 +29,27 @@ function time(iso: string): string {
   return new Date(iso).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
 }
 
+function kind(entry: QueueEntry): string {
+  if (entry.kind === "sale") return t("offline.aSale");
+  // A refusal waits here too: pretix writes down every scan it refuses, and
+  // one refused offline goes to it like any other scan.
+  return entry.refused ? t("offline.aRefusal") : t("offline.aCheckin");
+}
+
 /** One queued entry, whichever list it is in. */
 function queued(entry: QueueEntry) {
   return (
     <div key={entry.id} className="history-row is-cancellation">
       <span className="history-row-main">
         <span className="history-row-order">
-          {time(entry.at)} · {entry.kind === "sale" ? t("offline.aSale") : t("offline.aCheckin")}
+          {time(entry.at)} · {kind(entry)}
         </span>
         <span className="history-row-meta">
           {entry.kind === "sale" ? entry.label : entry.name || entry.secret.slice(0, 8)}
         </span>
       </span>
       <span className="history-row-total">
-        {entry.kind === "sale" ? entry.chargedTotal : "→"}
+        {entry.kind === "sale" ? entry.chargedTotal : entry.refused ? "✕" : "→"}
       </span>
     </div>
   );
@@ -59,8 +67,10 @@ export default function SyncPanel({ online, syncing, report, event, onSync, onCl
     setFailures(loadFailures());
   }, [syncing, report]);
 
-  const mine = queue.filter((entry) => entry.event === event);
-  const elsewhere = queue.filter((entry) => entry.event !== event);
+  // What the next drain will send, and what it will leave for later: sales of
+  // another event, which only that event's checkout can take.
+  const mine = queue.filter((entry) => sendable(entry, event));
+  const elsewhere = queue.filter((entry) => !sendable(entry, event));
   const sales = mine.filter((entry) => entry.kind === "sale");
   const checkins = mine.filter((entry) => entry.kind === "checkin");
   const otherEvents = [...new Set(elsewhere.map((entry) => entry.event))].join(", ");
@@ -106,6 +116,10 @@ export default function SyncPanel({ online, syncing, report, event, onSync, onCl
                 failed: report.failed,
               })}
             </div>
+            {report.checkins > 0 && (
+              // Where to look for them afterwards, and how to tell them apart.
+              <div className="attendance-note">{t("offline.marked")}</div>
+            )}
             {report.offTariff.map((line, i) => (
               // A price moved while this till could not be told: the customer
               // paid one figure, the tariff says another. Nobody can put that

@@ -47,10 +47,14 @@ vi.mock("./QrScanner", () => ({
   },
 }));
 
+import { ApiError } from "../api";
 import { markReachable, markUnreachable } from "../connectivity";
 import { t } from "../i18n";
-import { saveQueue, saveSnapshot } from "../storage";
-import type { Attendance, CheckinListInfo, OfflineSnapshot, Pairing, RedeemResult } from "../types";
+import { loadQueue, saveDoorScans, saveQueue, saveSnapshot } from "../storage";
+import { fillStorage } from "../test/setup";
+import type {
+  Attendance, CheckinListInfo, DoorScans, OfflineSnapshot, Pairing, QueuedCheckin, RedeemResult,
+} from "../types";
 import CheckinScreen from "./CheckinScreen";
 
 /**
@@ -101,9 +105,25 @@ function admitted(overrides: Partial<RedeemResult> = {}): RedeemResult {
   };
 }
 
+/** Tonight's scans as the server counts them, tonight having begun an hour ago. */
+const counted: DoorScans = {
+  since: new Date(Date.now() - 3_600_000).toISOString(),
+  device: { admitted: 41, refused: 2, other: 0, offline: 3 },
+  event: { admitted: 180, refused: 5, other: 1, offline: 7 },
+  devices: [],
+};
+
+/** A scan waiting in the queue, made just now. */
+function waitingScan(overrides: Partial<QueuedCheckin> = {}): QueuedCheckin {
+  return {
+    kind: "checkin", id: "n1", at: new Date().toISOString(), event: "festival",
+    list: 7, secret: "alice", name: "Alice", admits: true, ...overrides,
+  };
+}
+
 function show(props: Partial<Parameters<typeof CheckinScreen>[0]> = {}) {
   const onClose = vi.fn();
-  const { container } = render(
+  const screenWith = (more: Partial<Parameters<typeof CheckinScreen>[0]>) => (
     <CheckinScreen
       pairing={pairing}
       lists={lists}
@@ -111,12 +131,16 @@ function show(props: Partial<Parameters<typeof CheckinScreen>[0]> = {}) {
       admissionItems={ADMISSION}
       onClose={onClose}
       {...props}
-    />,
+      {...more}
+    />
   );
+  const { container, rerender } = render(screenWith({}));
   return {
     user: userEvent.setup({ advanceTimers: vi.advanceTimersByTime }),
     container,
     onClose,
+    /** The same screen, with some of what the app hands it changed. */
+    update: (more: Partial<Parameters<typeof CheckinScreen>[0]>) => rerender(screenWith(more)),
   };
 }
 
@@ -190,6 +214,14 @@ describe("a scan", () => {
 
     expect(screen.getByText(t("checkin.ok"))).toBeDefined();
     expect(screen.getByText(/Marie Dupont · ABC12/)).toBeDefined();
+  });
+
+  it("does not say offline when pretix answered it", async () => {
+    show();
+
+    await scan();
+
+    expect(screen.queryByText(t("checkin.offline"))).toBeNull();
   });
 
   it("passes on whatever pretix wanted said at the door", async () => {
@@ -493,21 +525,63 @@ describe("a refusal", () => {
   });
 });
 
-describe("when the request itself fails", () => {
-  it("says it is the network", async () => {
-    const { ApiError } = await import("../api");
+describe("when pretix cannot answer a scan", () => {
+  beforeEach(() => {
+    saveSnapshot(snapshot);
+  });
+
+  it("waits a few seconds for it, not the thirty a sale gets", async () => {
+    // With a queue outside, nobody holds a ticket up to the camera for half a
+    // minute of "Checking…": the person is waved in long before.
+    show();
+
+    await scan("alice");
+
+    expect(redeem).toHaveBeenCalledWith(pairing, expect.objectContaining({ timeoutMs: 8000 }));
+  });
+
+  it("answers from the guest list the device carries, and says so", async () => {
+    // It used to end on an error banner with the scan kept nowhere: whoever
+    // was let in meanwhile never reached pretix.
     redeem.mockRejectedValue(new ApiError(0, "network"));
     show();
 
-    await scan();
+    await scan("alice");
 
-    expect(screen.getByText(t("error.offline"))).toBeDefined();
+    expect(screen.getByText(t("checkin.ok"))).toBeDefined();
+    expect(screen.getByText(t("checkin.offline"))).toBeDefined();
+    expect(screen.queryByText(t("error.offline"))).toBeNull();
   });
 
-  it("lets the same ticket be tried again straight away", async () => {
+  it("keeps the scan under the nonce it was sent with", async () => {
+    // The request may have reached pretix before its answer was lost: the
+    // same nonce makes the replay a repeat rather than a second entry.
+    redeem.mockRejectedValue(new ApiError(504, "Gateway Timeout"));
+    show();
+
+    await scan("alice");
+
+    const [[, sent]] = redeem.mock.calls;
+    expect(loadQueue()).toEqual([
+      expect.objectContaining({ kind: "checkin", id: sent.nonce, secret: "alice", admits: true }),
+    ]);
+  });
+
+  it("still stops on pretix refusing the device itself", async () => {
+    // "No" rather than "not now": answering it from the guest list would hide
+    // a phone that has been revoked.
+    redeem.mockRejectedValueOnce(new ApiError(403, "Device revoked"));
+    show();
+
+    await scan("alice");
+
+    expect(screen.getByText("Device revoked")).toBeDefined();
+    expect(loadQueue()).toEqual([]);
+  });
+
+  it("lets the same ticket be tried again straight away after that", async () => {
     // The repeat guard must not lock out the ticket that just failed to send.
-    const { ApiError } = await import("../api");
-    redeem.mockRejectedValueOnce(new ApiError(0, "network"));
+    redeem.mockRejectedValueOnce(new ApiError(403, "Device revoked"));
     show();
     await scan("ticket-1");
 
@@ -650,14 +724,79 @@ describe("with no network", () => {
     expect(onQueued).toHaveBeenCalled();
   });
 
-  it("does not announce a queued entry when the scan was refused", async () => {
+  it("keeps a refusal too, so pretix hears of the ticket it turned away", async () => {
+    // Online, pretix writes down every scan it refuses. Offline, nothing did:
+    // a ticket bought after the last copy of the guest list was turned away
+    // and left no trace — exactly what somebody looking for lost scans needs.
     const onQueued = vi.fn();
     show({ onQueued });
     act(() => markUnreachable());
 
     await scan("nobody-we-know");
 
-    expect(onQueued).not.toHaveBeenCalled();
+    expect(onQueued).toHaveBeenCalled();
+    expect(loadQueue()).toEqual([
+      expect.objectContaining({ kind: "checkin", secret: "nobody-we-know", refused: "invalid" }),
+    ]);
+  });
+
+  it("keeps a scan it could not check at all, in words pretix will show", async () => {
+    const { user } = show();
+    await user.selectOptions(screen.getByLabelText(t("checkin.list")), "8");
+    act(() => markUnreachable());
+
+    await scan("alice");
+
+    expect(loadQueue()).toEqual([
+      expect.objectContaining({ list: 8, refused: "error", explanation: t("checkin.unchecked") }),
+    ]);
+  });
+
+  it("remembers when what it let through admits nobody", async () => {
+    saveSnapshot({
+      ...snapshot,
+      tickets: [...snapshot.tickets, { secret: "shirt", item: 99, name: "", used: false }],
+    });
+    show();
+    act(() => markUnreachable());
+
+    await scan("shirt");
+
+    expect(loadQueue()).toEqual([expect.objectContaining({ secret: "shirt", admits: false })]);
+  });
+
+  it("says on the verdict that the phone answered it", async () => {
+    show();
+    act(() => markUnreachable());
+
+    await scan("alice");
+
+    expect(screen.getByText(t("checkin.offline"))).toBeDefined();
+  });
+
+  it("says so when the phone cannot keep the scan, rather than answer it", async () => {
+    // A verdict nobody will ever hear about is worse than none: the ticket is
+    // checked another way.
+    show();
+    act(() => markUnreachable());
+    fillStorage();
+
+    await scan("alice");
+
+    expect(screen.getByText(t("checkin.queueFailed"))).toBeDefined();
+    expect(screen.queryByText(t("checkin.ok"))).toBeNull();
+  });
+
+  it("does not take a scan it could not keep for the ticket being used", async () => {
+    show();
+    act(() => markUnreachable());
+    fillStorage();
+    await scan("alice");
+
+    await scan("alice");
+
+    expect(screen.queryByText(t("reason.already_redeemed"))).toBeNull();
+    expect(screen.getByText(t("checkin.queueFailed"))).toBeDefined();
   });
 
   it("refuses a ticket the guest list has never heard of", async () => {
@@ -703,6 +842,16 @@ describe("with no network", () => {
     await scan("alice");
 
     expect(screen.getByText(t("reason.already_redeemed"))).toBeDefined();
+  });
+
+  it("does not take a refusal kept from before a reload for the ticket being used", async () => {
+    saveQueue([waitingScan({ secret: "alice", refused: "invalid", admits: undefined })]);
+    show();
+    act(() => markUnreachable());
+
+    await scan("alice");
+
+    expect(screen.getByText(t("checkin.ok"))).toBeDefined();
   });
 
   it("says it has no guest list when the door was switched during the dropout", async () => {
@@ -866,6 +1015,169 @@ describe("the head count panel", () => {
 
     expect(screen.queryByText(t("attendance.title"))).toBeNull();
     expect(screen.getByTestId("paused").textContent).toBe("false");
+  });
+});
+
+describe("the scanner's counter", () => {
+  beforeEach(() => {
+    attendance.mockResolvedValue({ ...inside, scans: counted });
+  });
+
+  it("is what the server counted for this device tonight", async () => {
+    show();
+
+    expect(
+      await screen.findByText(new RegExp(t("checkin.counter", { ok: 41, ko: 2 }))),
+    ).toBeDefined();
+  });
+
+  it("gives every door's figure for the evening underneath", async () => {
+    show();
+
+    expect(await screen.findByText(t("checkin.counterEvening", { n: 180 }))).toBeDefined();
+  });
+
+  it("does not make up the evening's figure before the server has given one", () => {
+    attendance.mockReturnValue(new Promise(() => {}));
+    show();
+
+    expect(screen.getByText(t("checkin.counterEveningUnknown"))).toBeDefined();
+  });
+
+  it("opens on the last figure when iOS reloads the page with no network", async () => {
+    // The complaint from the door on 19 September: step out of the app for a
+    // while, and the count started again from zero.
+    saveDoorScans("festival", counted);
+    attendance.mockRejectedValue(new ApiError(0, "network"));
+    show();
+
+    await waitFor(() => expect(attendance).toHaveBeenCalled());
+    expect(screen.getByText(new RegExp(t("checkin.counter", { ok: 41, ko: 2 })))).toBeDefined();
+    expect(screen.getByText(t("checkin.counterEvening", { n: 180 }))).toBeDefined();
+  });
+
+  it("adds a scan at once, and not twice once the server has counted it", async () => {
+    show();
+    await screen.findByText(new RegExp(t("checkin.counter", { ok: 41, ko: 2 })));
+
+    await scan("ticket-1");
+
+    expect(screen.getByText(new RegExp(t("checkin.counter", { ok: 42, ko: 2 })))).toBeDefined();
+    expect(screen.getByText(t("checkin.counterEvening", { n: 181 }))).toBeDefined();
+
+    attendance.mockResolvedValue({
+      ...inside,
+      scans: {
+        ...counted,
+        device: { ...counted.device, admitted: 42 },
+        event: { ...counted.event, admitted: 181 },
+      },
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1200);
+    });
+
+    expect(attendance).toHaveBeenCalledTimes(2);
+    expect(screen.getByText(new RegExp(t("checkin.counter", { ok: 42, ko: 2 })))).toBeDefined();
+    expect(screen.getByText(t("checkin.counterEvening", { n: 181 }))).toBeDefined();
+  });
+
+  it("does not take a scan off twice when two answers land for it", async () => {
+    // The minute's refresh and a scan's can be in flight together; each
+    // answer counts the scans made before it was asked, not after.
+    let answer: (value: Attendance) => void = () => {};
+    show();
+    await screen.findByText(new RegExp(t("checkin.counter", { ok: 41, ko: 2 })));
+    attendance.mockReturnValueOnce(new Promise<Attendance>((resolve) => (answer = resolve)));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+
+    await scan("ticket-1");
+    // The slow one was asked before the scan, so it cannot know of it.
+    await act(async () => answer({ ...inside, scans: counted }));
+
+    expect(screen.getByText(new RegExp(t("checkin.counter", { ok: 42, ko: 2 })))).toBeDefined();
+  });
+
+  it("counts what waits in the queue, and says it is still to be sent", async () => {
+    saveQueue([waitingScan()]);
+    show();
+
+    expect(
+      await screen.findByText(new RegExp(t("checkin.counter", { ok: 42, ko: 2 }))),
+    ).toBeDefined();
+    expect(screen.getByText(new RegExp(t("checkin.counterWaiting", { n: 1 })))).toBeDefined();
+  });
+
+  it("counts a scan answered offline straight away", async () => {
+    saveSnapshot(snapshot);
+    show();
+    await screen.findByText(new RegExp(t("checkin.counter", { ok: 41, ko: 2 })));
+    act(() => markUnreachable());
+
+    await scan("alice");
+
+    expect(screen.getByText(new RegExp(t("checkin.counter", { ok: 42, ko: 2 })))).toBeDefined();
+    expect(screen.getByText(new RegExp(t("checkin.counterWaiting", { n: 1 })))).toBeDefined();
+  });
+
+  it("does not drop while a drain's scans are on their way into the server's figure", async () => {
+    // The queue empties a moment before the server's figure counts what was
+    // in it. Read from the queue in between, the count would fall, then
+    // climb back.
+    saveQueue([waitingScan()]);
+    const { update } = show({ pending: 1 });
+    await screen.findByText(new RegExp(t("checkin.counter", { ok: 42, ko: 2 })));
+    attendance.mockReturnValue(new Promise(() => {}));
+
+    saveQueue([]);
+    update({ pending: 0 });
+
+    expect(screen.getByText(new RegExp(t("checkin.counter", { ok: 42, ko: 2 })))).toBeDefined();
+    expect(screen.queryByText(new RegExp(t("checkin.counterWaiting", { n: 1 })))).toBeNull();
+  });
+
+  it("is asked again as soon as a drain has sent scans", async () => {
+    const { update } = show({ pending: 2 });
+    await waitFor(() => expect(attendance).toHaveBeenCalledOnce());
+
+    update({ pending: 0 });
+
+    await waitFor(() => expect(attendance).toHaveBeenCalledTimes(2));
+  });
+
+  it("is not asked again for something merely added to the queue", async () => {
+    const { update } = show({ pending: 0 });
+    await waitFor(() => expect(attendance).toHaveBeenCalledOnce());
+
+    update({ pending: 1 });
+
+    expect(attendance).toHaveBeenCalledOnce();
+  });
+
+  it("is not asked again merely because the network came back", async () => {
+    // A failed request followed by one that got through looks just like that,
+    // and on a network that drops writes but not reads it happens as fast as
+    // the requests go.
+    show();
+    await waitFor(() => expect(attendance).toHaveBeenCalledOnce());
+    act(() => markUnreachable());
+
+    act(() => markReachable());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2000);
+    });
+
+    expect(attendance).toHaveBeenCalledOnce();
+  });
+
+  it("is kept for the next reload", async () => {
+    show();
+    await screen.findByText(new RegExp(t("checkin.counter", { ok: 41, ko: 2 })));
+
+    const { loadDoorScans } = await import("../storage");
+    expect(loadDoorScans("festival")).toEqual(counted);
   });
 });
 

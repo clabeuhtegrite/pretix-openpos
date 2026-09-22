@@ -113,6 +113,17 @@ describe("what is still held here", () => {
     expect(screen.getByText("Alice")).toBeDefined();
   });
 
+  it("names a refusal made offline as a refusal, not as somebody let in", () => {
+    // Kept so pretix hears of the ticket the door turned away.
+    saveQueue([{ ...checkin("c"), refused: "invalid" }]);
+
+    show();
+
+    expect(screen.getByText(new RegExp(t("offline.aRefusal")))).toBeDefined();
+    expect(screen.queryByText(new RegExp(t("offline.aCheckin")))).toBeNull();
+    expect(screen.getByText("✕")).toBeDefined();
+  });
+
   it("falls back to the start of the secret for a ticket with no name", () => {
     saveQueue([{ ...checkin("c"), name: "" }]);
 
@@ -155,6 +166,21 @@ describe("entries belonging to another event", () => {
     expect(screen.getByText(t("offline.nothingPending"))).toBeDefined();
   });
 
+  it("do not include scans, which go whichever event this till is on", () => {
+    // A scan names its list, and the list its event: a door phone moved on to
+    // the next evening sends the last one's scans rather than sit on them.
+    saveQueue([checkin("c", "gala")]);
+
+    show();
+
+    expect(screen.queryByText(t("offline.stranded", { n: 1, events: "gala" }))).toBeNull();
+    expect(screen.getByText(t("offline.pending", { sales: 0, checkins: 1 }))).toBeDefined();
+    expect(screen.getByRole("button", { name: t("offline.sync") })).toHaveProperty(
+      "disabled",
+      false,
+    );
+  });
+
   it("do not make the send button offer to send them", () => {
     saveQueue([sale("a", "gala")]);
 
@@ -174,6 +200,18 @@ describe("what the last run did", () => {
     expect(
       screen.getByText(t("offline.lastRun", { sales: 3, checkins: 1, failed: 1 })),
     ).toBeDefined();
+  });
+
+  it("says where the scans it sent can be found, and how to tell them apart", () => {
+    show({ report: { ...clean, checkins: 2 } });
+
+    expect(screen.getByText(t("offline.marked"))).toBeDefined();
+  });
+
+  it("says nothing of scans when it sent none", () => {
+    show({ report: { ...clean, sales: 2 } });
+
+    expect(screen.queryByText(t("offline.marked"))).toBeNull();
   });
 
   it("names a sale charged at a price that had since moved", () => {
