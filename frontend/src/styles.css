@@ -945,6 +945,16 @@ button {
   padding-top: 0;
 }
 
+/* "Réessayer", under a refusal or a reader busy on the other till. A plain
+   .btn is filled with --surface-2, which is this box's own fill, so the one
+   thing to press here read as a line of bold text. The page's surface and an
+   edge make it a button again, in either palette. The Back and Cancel bar is
+   outside this box and keeps its own look. */
+.pay-reader .btn {
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
 .pay-reader-prompt {
   margin: 0;
   font-size: 18px;
