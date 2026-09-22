@@ -1029,6 +1029,62 @@ réessaie avec la même clé : le serveur lui rend l'annulation telle quelle *et
 finit le remboursement, ou répond qu'il était déjà fait. Rien d'autre ne
 repasserait derrière.
 
+### Deux caisses sur un seul lecteur
+
+Un bar avec deux tablettes et une seule machine entre elles, c'est un comptoir
+réel, et c'est autorisé : donner le même lecteur à deux caisses ne déclenche
+plus de refus dans le back-office. Les deux lignes affichent alors *Partagé avec
+une autre caisse*, pour que ce soit un choix visible.
+
+Elles se relaient, et c'est le **serveur** qui arbitre, pas l'application. Tant
+qu'une caisse a un panier sur le lecteur, l'autre est refusée sur la carte avec
+son panier intact — rien d'écrit, aucune clé d'idempotence consommée — et elle
+voit « Le lecteur encaisse sur l'autre caisse. Attendez la fin, ou prenez cette
+vente en espèces. » Presser *Carte* une minute plus tard est un premier essai
+propre, pas une reprise.
+
+SumUp refuse déjà le second encaissement de son côté, mais trop tard : au moment
+de l'appel, le serveur a écrit une ligne de paiement et brûlé la clé de la caisse
+sur un panier qu'aucun porteur de carte n'a jamais vu. D'où l'arbitrage avant.
+
+Deux détails qui comptent :
+
+- Le serveur ne se fie pas à sa propre ligne « en attente ». Elle dit *en
+  attente* parce que personne n'a regardé depuis, ce qui n'est pas la même chose
+  qu'un client encore devant la machine : il demande d'abord à SumUp ce qu'est
+  devenu ce paiement. C'est exactement l'appel que fait l'autre caisse en
+  interrogeant.
+- Un paiement auquel personne n'a jamais répondu cesse de tenir le lecteur au
+  bout de **cinq minutes**, et l'écran de la machine est effacé avant d'y
+  remettre un panier. Une tablette tombée en rade avec une invite affichée aurait
+  sinon coupé la carte pour le reste de la soirée, sans que personne puisse dire
+  pourquoi. La ligne orpheline, elle, reste ouverte et remonte dans *Ventes →
+  Paiements carte sans vente* plutôt que d'être classée au jugé.
+
+### Ce que le lecteur dit de lui-même
+
+L'écran *Lecteurs de carte* interroge chaque lecteur appairé : joignable ou non,
+au repos ou en train de prendre une carte, batterie, type de connexion, version
+de firmware. C'est la question qu'on se pose vraiment avant d'ouvrir une porte —
+l'appairage ne répond ni à « est-ce qu'il est allumé » ni à « est-ce qu'il est
+chargé ».
+
+Un lecteur qui ne peut pas répondre s'affiche **Inconnu**, jamais *Hors ligne* :
+la route d'état demande un firmware 3.3.39.0 sur un Solo là où encaisser demande
+3.3.24.3, donc un lecteur entre les deux fonctionne parfaitement et n'a rien à
+dire. Envoyer quelqu'un chercher une machine qui est là, en train de marcher,
+serait la pire des deux erreurs. L'appel est borné à cinq secondes pour la même
+raison : ne pas savoir, vite, est la réponse la plus utile pendant qu'une page
+se charge.
+
+Un lecteur bloqué en attente de carte reçoit un bouton **Effacer son écran**,
+qui termine l'encaissement resté dessus. Tant qu'il n'est pas effacé, le lecteur
+refuse le paiement suivant comme occupé, ce qui se lit à la porte comme « le
+terminal est cassé ». Ce bouton ne touche pas à la ligne de paiement :
+l'interruption est au mieux tentée, SumUp ne confirme rien, et il est donc
+incapable de dire si la carte avait déjà été débitée. Seule la transaction SumUp
+le dit, et c'est ce que demande le règlement du paiement.
+
 ### Quand le lecteur disparaît
 
 Un lecteur désappairé depuis le tableau de bord SumUp laisse une caisse qui
@@ -1171,6 +1227,71 @@ avec *Dépairer* à portée de main ; elle ne s'efface jamais toute seule (§4.1
 
 ## 7. Au quotidien
 
+### 7.0 Avant la soirée
+
+Une liste courte, à faire la veille ou l'après-midi même, dans cet ordre. Chaque
+ligne est là parce que son absence coûte cher une fois la porte ouverte.
+
+**Les tablettes**
+
+1. Chaque tablette est **chargée**, et branchée si la soirée dépasse quatre
+   heures. Une caisse qui s'éteint emporte sa file d'attente hors ligne.
+2. Chaque tablette ouvre la caisse **depuis l'écran d'accueil**, pas depuis un
+   onglet. L'app refuse de vendre dans un onglet ; c'est délibéré, une barre
+   d'adresse au-dessus du panier et un geste de rafraîchissement en travers,
+   c'est une vente perdue.
+3. Le **nom du caissier** est renseigné dans les réglages de chaque tablette. Il
+   part avec chaque vente et c'est ce qui rend la recette ventilable en fin de
+   soirée.
+4. Le **rôle** de chaque appareil est le bon dans *Open POS → Appareils de
+   caisse* : caisse pour le bar, porte pour l'entrée. Un appareil sans rôle fait
+   les deux, ce qui convient à une petite soirée et pas à un bar qui bouscule.
+5. Faire **une vente en mode test** sur chaque tablette, puis l'annuler. C'est
+   le seul moyen de savoir que le token est encore valide, que l'événement est
+   joignable et que l'écran répond. Le mode test ne se mélange pas à la recette.
+
+**Le lecteur de carte**
+
+6. *Open POS → Lecteurs de carte* : le lecteur est **Appairé** et, dans la
+   colonne *En ce moment*, **Prêt**. « Inconnu » veut dire que le lecteur est
+   trop ancien pour répondre à cette question et non qu'il est éteint ; « Hors
+   ligne » veut dire qu'il l'est vraiment.
+7. La **batterie** affichée est suffisante, ou le lecteur est sur son socle.
+8. Si un lecteur affiche **Encaissement en cours** alors que personne
+   n'encaisse, presser **Effacer son écran** : il reste bloqué d'une soirée à
+   l'autre sinon, et refuse le premier paiement de la vôtre.
+9. Faire **un aller-retour à un euro** : une vente carte, puis son annulation.
+   C'est le seul test qui prouve la chaîne entière, du panier jusqu'au
+   remboursement.
+
+**Le serveur**
+
+10. *Open POS → Ventes* : la chaîne du journal ne signale rien, et la section
+    **Paiements carte sans vente** est vide. Si elle ne l'est pas, régler ces
+    lignes avant d'en ajouter de nouvelles.
+11. Les **tarifs sur place** sont ceux de ce soir. Un tarif modifié pendant une
+    vente est géré, mais c'est une seconde de flottement devant un client.
+
+### 7.0bis Si SumUp tombe en pleine soirée
+
+Ça arrive, et la réponse tient en une ligne : **les espèces continuent**. La
+caisse ne dépend de SumUp que pour la carte.
+
+- Le lecteur refuse ou ne répond plus : encaisser en espèces. La caisse propose
+  le choix à chaque vente, rien n'est à reconfigurer.
+- Si la panne dure, retirer le lecteur de la caisse dans *Open POS → Appareils
+  de caisse* (mettre son lecteur à **Aucun**). Cette caisse revient aux
+  paiements carte saisis à la main : quelqu'un prend la carte dans l'application
+  SumUp Paiements et le signale à la caisse. **Attention**, un lecteur piloté par
+  l'API Cloud est détaché de cette application — ce repli suppose un second
+  moyen d'encaisser, pas le même lecteur.
+- Un paiement resté en l'air apparaîtra dans *Ventes → Paiements carte sans
+  vente*. Ne pas réencaisser avant d'avoir vérifié dans SumUp si la carte a été
+  débitée.
+- Ce qui ne marche pas : faire payer deux fois « au cas où ». SumUp ne rembourse
+  que contre une transaction existante, et un client qui a payé deux fois
+  attendra deux remboursements.
+
 ### 7.1 Sur la caisse
 
 *Réglages* (⚙) contient :
@@ -1190,6 +1311,28 @@ avec *Dépairer* à portée de main ; elle ne s'efface jamais toute seule (§4.1
   soirée, pas les quatre-vingt-dix dernières minutes ;
 - *Recharger* et *Dépairer*.
 
+Le relevé affiche aussi l'**heure de début** de la journée de caisse, et
+signale les ventes encore en file d'attente hors ligne avec leur montant en
+espèces : la recette affichée ne les compte pas encore, et le tiroir, si.
+
+**Le panier survit à un rechargement.** iOS tue une application web mise en
+arrière-plan, une tablette redémarre, quelqu'un tire pour rafraîchir. Le panier
+est recopié sur le disque au fur et à mesure et restauré au démarrage suivant.
+L'**avoir** compte le plus : tant que la vente corrigée n'est pas enregistrée,
+il n'existe nulle part ailleurs que sur la tablette, et c'est de l'argent dû à
+quelqu'un qui est devant le comptoir.
+
+C'est aussi pour ça qu'il expire au bout d'une demi-heure. Restaurer un avoir
+périmé déduirait du total du client suivant de l'argent qui appartient à
+quelqu'un parti depuis une heure — de l'argent qui sort vraiment du tiroir —
+alors que perdre un avoir récent coûte un détour par l'historique. Les deux
+erreurs n'ont pas la même taille. Un panier restauré est par ailleurs
+retarifé sur le catalogue en vigueur avant d'être lu à voix haute.
+
+Vider un panier qui porte un avoir demande confirmation. Seulement dans ce cas :
+un panier de consommations se resaisit en dix secondes, et une confirmation à
+chaque *Vider* est une confirmation que plus personne ne lit à la troisième.
+
 C'est l'alternative légère à une vraie session de caisse : pas de fonds de
 caisse, pas de comptage aveugle, juste ce qui est passé depuis le début de la
 journée de caisse pour qu'un bénévole rapproche le tiroir en fin de soirée.
@@ -1206,7 +1349,32 @@ depuis ce fichier, c'est le but.
 La page vérifie la chaîne depuis un point de contrôle plutôt que de re-hacher
 tout le journal à chaque affichage ; l'audit intégral, depuis la première
 écriture, se lance avec `python -m pretix openpos_verify_journal` (une ligne
-par événement, code de sortie non nul si une chaîne ne colle pas).
+par événement, code de sortie non nul si une chaîne ne colle pas). Sur le
+cluster, un CronJob le lance chaque nuit — voir `deploy/` dans le dépôt
+`homelab-k8s` — parce qu'une chaîne cassée découverte le jour où quelqu'un doute
+du journal est découverte trop tard.
+
+**Paiements carte sans vente.** La même page liste les paiements posés sur un
+lecteur sans qu'aucune vente n'ait jamais été enregistrée en face. C'est la seule
+chose que le journal ne peut pas montrer par construction : la recette est
+recalculée depuis lui, donc un débit qui ne l'a jamais atteint est absent de
+chaque chiffre plutôt que faux dans l'un d'eux, et le seul autre endroit où cette
+transaction existe est le tableau de bord SumUp.
+
+Deux formes du même problème :
+
+- **Débité** : SumUp dit que le paiement est passé et pretix n'en sait rien. Une
+  carte a été débitée. Il faut soit rembourser dans SumUp, soit ressaisir la
+  vente.
+- **Toujours en attente** : la caisse a cessé d'interroger — batterie, chute,
+  navigateur fermé — longtemps après que quiconque puisse être encore au
+  comptoir. Vérifier dans SumUp si la carte est passée avant de faire l'un ou
+  l'autre.
+
+Les refus et les paiements déjà remboursés n'y figurent pas : la section est vide
+une soirée ordinaire, et veut donc dire quelque chose quand elle ne l'est pas.
+Elle est en lecture seule, délibérément — quoi faire de l'une de ces lignes est
+une décision, pas quelque chose qu'un chargement de page doit trancher.
 
 Les commandes elles-mêmes sont des commandes pretix ordinaires : elles
 apparaissent dans les listes, les exports et les rapports habituels, sur le canal
