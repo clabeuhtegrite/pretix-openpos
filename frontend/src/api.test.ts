@@ -318,6 +318,35 @@ describe("the endpoints", () => {
     });
   });
 
+  it("tells pretix which build it runs now, signed as the paired device", async () => {
+    // pretix' device list only moves when the device reports again: what it
+    // was told at pairing stays on screen through every release otherwise.
+    const { deviceDescription } = await import("./api");
+    await api.updateDevice("tok", deviceDescription());
+
+    const [url, options] = callArgs();
+    expect(url).toBe("/api/v1/device/update");
+    expect(options.method).toBe("POST");
+    expect(options.headers).toMatchObject({ Authorization: "Device tok" });
+    expect(JSON.parse(String(options.body))).toEqual({
+      hardware_brand: "Browser",
+      hardware_model: navigator.platform || "unknown",
+      os_name: "Web",
+      os_version: navigator.userAgent.slice(0, 100),
+      software_brand: "pretix-openpos",
+      software_version: __APP_VERSION__,
+    });
+  });
+
+  it("describes the device after an update exactly as it did at pairing", async () => {
+    const { deviceDescription } = await import("./api");
+    await api.initialize("init-code");
+
+    const { token, ...paired } = JSON.parse(String(callArgs()[1].body));
+    expect(token).toBe("init-code");
+    expect(paired).toEqual(deviceDescription());
+  });
+
   it("reads the configuration for the paired event", async () => {
     await api.config(pairing);
 

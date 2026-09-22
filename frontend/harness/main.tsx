@@ -104,6 +104,9 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
 
   await new Promise((r) => setTimeout(r, 40));
 
+  // Ce que l'appareil dit de lui à pretix quand sa version a changé. pretix
+  // répond par la fiche de l'appareil, que la caisse ne lit pas.
+  if (url.includes("/device/update")) return json({ unique_serial: fx.pairing.serial });
   if (url.includes("/openpos/config/")) return stuck(url) ?? json(conf);
   // ?photos=1 met des photos sur un produit sur deux.
   if (url.includes("/openpos/catalog/"))

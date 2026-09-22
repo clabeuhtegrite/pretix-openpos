@@ -18,6 +18,19 @@ export interface InitializeResponse {
   security_profile: string;
 }
 
+/**
+ * What a device tells pretix about itself: pretix' own field names, and what
+ * its device list shows beside each device's name.
+ */
+export interface DeviceDescription {
+  hardware_brand: string;
+  hardware_model: string;
+  os_name: string;
+  os_version: string;
+  software_brand: string;
+  software_version: string;
+}
+
 /** What a paired device is for. Empty means nobody has assigned it. */
 export type DeviceRole = "" | "pos" | "door";
 

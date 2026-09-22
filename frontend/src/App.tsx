@@ -31,6 +31,7 @@ import type {
   SaleResult, SyncReport,
 } from "./types";
 import { useBackClose } from "./useBackClose";
+import { markDeviceReported, useDeviceReport } from "./useDeviceReport";
 import { useOfflineSnapshot } from "./useOfflineSnapshot";
 import { useTerminal } from "./useTerminal";
 import { useWakeLock } from "./useWakeLock";
@@ -190,6 +191,9 @@ export default function App() {
   const [gated] = useState(() => !isStandalone() && !browserAllowed());
 
   useWakeLock(pairing !== null);
+  // So that pretix' device list shows the build this device runs now, not the
+  // one it was paired with.
+  useDeviceReport(pairing, online);
 
   // main.tsx has already painted this once before the first render; running it
   // again here is what makes a change in the settings panel take effect, and
@@ -412,6 +416,7 @@ export default function App() {
   }, [pairing, servingCustomer]);
 
   function onPaired(next: Pairing) {
+    markDeviceReported(next.serial);
     savePairing(next);
     setPairing(next);
   }

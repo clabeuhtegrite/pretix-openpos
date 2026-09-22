@@ -1,8 +1,9 @@
 import type {
-  CartLine, Credit, OfflineSnapshot, Pairing, QueueEntry, SyncFailure,
+  CartLine, Credit, DeviceDescription, OfflineSnapshot, Pairing, QueueEntry, SyncFailure,
 } from "./types";
 
 const PAIRING_KEY = "openpos.pairing.v1";
+const DEVICE_REPORT_KEY = "openpos.deviceReport.v1";
 const CASHIER_KEY = "openpos.cashier.v1";
 const QUEUE_KEY = "openpos.queue.v1";
 const FAILURES_KEY = "openpos.failures.v1";
@@ -127,6 +128,28 @@ export function savePairing(pairing: Pairing): void {
 
 export function clearPairing(): void {
   localStorage.removeItem(PAIRING_KEY);
+}
+
+/**
+ * What pretix was last told about this device, by the device it was told for.
+ *
+ * Kept with the device's serial so that a till unpaired and paired again as
+ * another device never takes the first one's report for its own.
+ */
+export function loadDeviceReport(serial: string): DeviceDescription | null {
+  const saved = readJson<{ serial?: string; description?: DeviceDescription } | null>(
+    DEVICE_REPORT_KEY,
+    null,
+  );
+  return saved?.serial === serial ? saved.description ?? null : null;
+}
+
+export function saveDeviceReport(serial: string, description: DeviceDescription): void {
+  try {
+    localStorage.setItem(DEVICE_REPORT_KEY, JSON.stringify({ serial, description }));
+  } catch {
+    // The report goes out once more at the next launch. Harmless.
+  }
 }
 
 export function loadCashier(): string {
