@@ -159,8 +159,10 @@ export const attendance = {
     { id: 21, name: "Entrée tarif réduit", inside: 46, entered: 48, expected: 70 },
   ],
   scans: {
-    // Six this morning: "tonight", as the server counts it.
-    since: new Date(new Date().setHours(6, 0, 0, 0)).toISOString(),
+    // The last six o'clock in the morning: "tonight", as the server counts it.
+    since: new Date(
+      new Date().setHours(6, 0, 0, 0) - (new Date().getHours() < 6 ? 86_400_000 : 0),
+    ).toISOString(),
     device: { admitted: 64, refused: 3, other: 1, offline: 12 },
     event: { admitted: 196, refused: 7, other: 4, offline: 12 },
     devices: [

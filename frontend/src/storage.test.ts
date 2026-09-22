@@ -147,9 +147,10 @@ describe("the door's last count", () => {
   }
 
   it("survives a reload, so the counter does not start again from zero", () => {
-    saveDoorScans("festival", counted(3));
+    const tonight = counted(3);
+    saveDoorScans("festival", tonight);
 
-    expect(loadDoorScans("festival")).toEqual(counted(3));
+    expect(loadDoorScans("festival")).toEqual(tonight);
   });
 
   it("is kept per event", () => {
