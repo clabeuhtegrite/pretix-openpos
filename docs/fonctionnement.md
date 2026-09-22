@@ -495,6 +495,16 @@ saisi par réflexe n'est pas quelque chose qu'on met à un geste de distance.
    cache n'est pas utilisé non plus dans ce cas : un device révoqué qui
    vendrait sur un vieux catalogue serait refusé à la première vente, devant
    le client.
+   Au même moment, si l'app n'est plus celle que pretix a enregistrée pour ce
+   device (une nouvelle version, ou une mise à jour du système), elle le lui
+   dit par `POST /api/v1/device/update`, l'endpoint natif que pretixSCAN
+   appelle après ses propres mises à jour. C'est ce qu'affiche la colonne
+   logiciel de la liste des appareils de l'organisateur, qui restait sinon
+   figée sur la version de l'appairage. Rien n'est envoyé quand rien n'a
+   changé, parce que pretix inscrit une ligne dans l'historique du device à
+   chaque fois ; ce qui a été dit est rangé sous `openpos.deviceReport.v1`.
+   Un envoi qui n'atteint pas le serveur est refait au retour du réseau ; une
+   réponse, même un refus, attend la prochaine ouverture.
 3. **Panier** — les montants sont manipulés en **centimes entiers** côté client,
    jamais en flottants. Les quantités sont plafonnées par le stock restant quand
    le quota est fini ; le nombre affiché sur une ligne est un bouton qui ouvre
@@ -1707,6 +1717,7 @@ Base : `/api/v1`. Authentification : `Authorization: Device <token>`.
 | Méthode | Chemin | Rôle |
 |---|---|---|
 | `POST` | `/device/initialize` | Appairage (endpoint pretix natif) |
+| `POST` | `/device/update` | Version et système du device, quand ils ont changé depuis le dernier envoi (endpoint pretix natif) |
 | `GET` | `/organizers/<org>/openpos/` | Événements de cette caisse : `results`, ceux où elle peut vendre ; `unavailable`, ceux qu'elle atteint sans pouvoir y vendre, avec `reason` (`plugin_disabled`) |
 | `GET` | `/organizers/<org>/events/<ev>/openpos/config/` | Événement, device, listes de contrôle, produits d'admission, coupures, boutons montant libre et consigne |
 | `GET` | `…/openpos/catalog/` | Catalogue par catégorie, prix, stock restant |
@@ -2006,6 +2017,7 @@ l'installation — donc `npm i --no-save playwright` avant de s'en servir.
 | La caméra ne démarre pas | Contexte non sécurisé (HTTP), ou autorisation refusée dans les réglages du navigateur |
 | Le relevé ne correspond pas au tiroir | Vérifier la ligne « mode test » sur l'écran *Ventes* : elle est comptée à part |
 | L'app reste sur un vieux build | Une caisse ouverte compare sa version à celle du serveur au rafraîchissement du catalogue et affiche « Nouvelle version — recharger » entre deux clients ; sinon, fermer et rouvrir l'app force la reprise |
+| La liste des appareils affiche une ancienne version | Le device n'a pas été rouvert avec du réseau depuis la mise à jour : il déclare sa version à la première ouverture connectée. C'est aussi le moyen de voir, après un déploiement, quels appareils ont repris le nouveau JavaScript |
 
 ---
 

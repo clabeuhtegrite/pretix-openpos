@@ -20,6 +20,7 @@ const { apiMock, sound } = vi.hoisted(() => ({
     searchAttendees: vi.fn(),
     redeem: vi.fn(),
     initialize: vi.fn(),
+    updateDevice: vi.fn(),
   },
 }));
 
@@ -48,13 +49,13 @@ vi.mock("./components/QrScanner", () => ({
 }));
 
 import App from "./App";
-import { ApiError } from "./api";
+import { ApiError, deviceDescription } from "./api";
 import { markReachable, markUnreachable } from "./connectivity";
 import { t } from "./i18n";
 import { formatMoney } from "./money";
 import {
-  clearBasket, loadBasket, loadCashier, loadPairing, loadQueue, savePairing, saveBasket,
-  saveFailures, saveQueue,
+  clearBasket, loadBasket, loadCashier, loadDeviceReport, loadPairing, loadQueue, savePairing,
+  saveBasket, saveDeviceReport, saveFailures, saveQueue,
 } from "./storage";
 import { fillStorage } from "./test/setup";
 import type { Catalog, JournalLine, PosConfig, SaleResult } from "./types";
@@ -191,6 +192,7 @@ beforeEach(() => {
     event: { count: 0, cancellations: 0, cash: "0.00", card: "0.00", total: "0.00" },
   });
   apiMock.posEvents.mockResolvedValue({ results: [] });
+  apiMock.updateDevice.mockResolvedValue({ unique_serial: "TILL1" });
   apiMock.attendance.mockResolvedValue({
     list: { id: 7, name: "Porte" }, computed_at: "2026-08-16T22:30:00.000Z",
     inside: 0, entered: 0, exited: 0, expected: 0, not_arrived: 0,
@@ -1129,6 +1131,64 @@ describe("a new build on the server", () => {
     // Written before the reload: whatever comes back has to know it tried.
     expect(localStorage.getItem("openpos.updateTried.v1")).toBe("99.0.0");
     vi.unstubAllGlobals();
+  });
+});
+
+describe("what pretix' device list says the till runs", () => {
+  it("is told the build the till opened on", async () => {
+    // A till paired under an older release: until it says otherwise, the back
+    // office shows the build it was paired with.
+    show();
+    await ready();
+
+    await waitFor(() =>
+      expect(apiMock.updateDevice).toHaveBeenCalledWith(
+        "tok",
+        expect.objectContaining({ software_brand: "pretix-openpos", software_version: __APP_VERSION__ }),
+      ),
+    );
+    expect(loadDeviceReport("TILL1")?.software_version).toBe(__APP_VERSION__);
+  });
+
+  it("is not told again what it already knows", async () => {
+    saveDeviceReport("TILL1", deviceDescription());
+    show();
+    await ready();
+
+    expect(apiMock.updateDevice).not.toHaveBeenCalled();
+  });
+
+  it("is not told twice at pairing, which already said it all", async () => {
+    localStorage.clear();
+    apiMock.initialize.mockResolvedValue({
+      organizer: "demo", device_id: 3, unique_serial: "TILL1", api_token: "tok",
+      name: "Caisse bar", security_profile: "openpos",
+    });
+    apiMock.posEvents.mockResolvedValue({
+      results: [{ slug: "festival", organizer: "demo", name: "Festival", currency: "EUR", testmode: false, date_from: null }],
+    });
+    const { user } = show();
+
+    await user.click(screen.getByLabelText(t("pairing.token")));
+    await user.paste("abcd1234");
+    await user.click(screen.getByRole("button", { name: t("pairing.submit") }));
+    await ready();
+
+    expect(apiMock.initialize).toHaveBeenCalledWith("abcd1234");
+    expect(apiMock.updateDevice).not.toHaveBeenCalled();
+  });
+
+  it("does not stand between the till and a sale when pretix will not listen", async () => {
+    // A security profile that leaves the endpoint out answers 403. The report
+    // is bookkeeping; the till opens and sells all the same.
+    apiMock.updateDevice.mockRejectedValue(new ApiError(403, "Permission denied."));
+    const { user } = show();
+    await ready();
+
+    await ringUp(user);
+    await confirm(user);
+
+    await waitFor(() => expect(apiMock.checkout).toHaveBeenCalledTimes(1));
   });
 });
 

@@ -101,6 +101,34 @@ def test_the_till_may_look_a_ticket_up_by_name(till, event, checkin_list):
 
 
 @pytest.mark.django_db
+def test_the_till_may_tell_pretix_which_build_it_runs_now(till):
+    till.device.software_brand = "pretix-openpos"
+    till.device.software_version = "0.10.0"
+    till.device.save()
+
+    response = as_device(
+        till.client, till.device, "post", "/api/v1/device/update",
+        content_type="application/json",
+        data={
+            "hardware_brand": "Browser",
+            "hardware_model": "iPhone",
+            "os_name": "Web",
+            "os_version": "Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X)",
+            "software_brand": "pretix-openpos",
+            "software_version": "0.16.0",
+        },
+    )
+
+    # pretix' device list shows what a device last reported, and the app
+    # reports through this endpoint after every update. Without it in the
+    # profile the report is refused in silence, and the list goes back to
+    # showing the build each till was paired with.
+    assert response.status_code == 200
+    till.device.refresh_from_db()
+    assert till.device.software_version == "0.16.0"
+
+
+@pytest.mark.django_db
 def test_a_device_on_the_default_profile_cannot_use_the_till_endpoints(
     organizer, event, ticket
 ):

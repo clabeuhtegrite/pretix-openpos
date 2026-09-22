@@ -1,8 +1,8 @@
 import { markReachable, markUnreachable } from "./connectivity";
 import type {
-  Attendance, AttendeeMatch, CancelResult, Catalog, History, InitializeResponse,
-  OfflineSnapshot, Pairing, PosConfig, PosEventList, RedeemResult, SaleResult,
-  SummaryResponse, TerminalPayment,
+  Attendance, AttendeeMatch, CancelResult, Catalog, DeviceDescription, History,
+  InitializeResponse, OfflineSnapshot, Pairing, PosConfig, PosEventList, RedeemResult,
+  SaleResult, SummaryResponse, TerminalPayment,
 } from "./types";
 
 const BASE = "/api/v1";
@@ -247,21 +247,40 @@ export interface PositionPayload {
   refund?: boolean;
 }
 
+/**
+ * This device as pretix is told about it, at pairing and after an update.
+ *
+ * One function for both calls, so that what a device reports after an update
+ * can never drift from what it said when it paired.
+ */
+export function deviceDescription(): DeviceDescription {
+  return {
+    hardware_brand: "Browser",
+    hardware_model: navigator.platform || "unknown",
+    os_name: "Web",
+    os_version: navigator.userAgent.slice(0, 100),
+    software_brand: "pretix-openpos",
+    software_version: __APP_VERSION__,
+  };
+}
+
 export const api = {
   /** Exchange a one-shot pairing code for a long-lived device token. */
   initialize(initializationToken: string): Promise<InitializeResponse> {
     return request<InitializeResponse>("/device/initialize", {
       method: "POST",
-      body: {
-        token: initializationToken,
-        hardware_brand: "Browser",
-        hardware_model: navigator.platform || "unknown",
-        os_name: "Web",
-        os_version: navigator.userAgent.slice(0, 100),
-        software_brand: "pretix-openpos",
-        software_version: __APP_VERSION__,
-      },
+      body: { token: initializationToken, ...deviceDescription() },
     });
+  },
+
+  /**
+   * Tell pretix what this device runs now.
+   *
+   * pretix' native endpoint, the one its documentation asks every client to
+   * call after an update. `useDeviceReport` decides when.
+   */
+  updateDevice(token: string, description: DeviceDescription): Promise<unknown> {
+    return request("/device/update", { method: "POST", body: description, token });
   },
 
   config(p: Pairing): Promise<PosConfig> {
