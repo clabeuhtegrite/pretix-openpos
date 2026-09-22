@@ -25,7 +25,7 @@ vi.mock("./QrScanner", () => ({
 
 import { ApiError } from "../api";
 import { t } from "../i18n";
-import type { InitializeResponse, PosEvent } from "../types";
+import type { InitializeResponse, PosEvent, UnavailableEvent } from "../types";
 import PairingScreen from "./PairingScreen";
 
 /**
@@ -50,6 +50,7 @@ const festival: PosEvent = {
   currency: "EUR", testmode: false, date_from: null,
 };
 const gala: PosEvent = { ...festival, slug: "gala", name: "Gala" };
+const bal: UnavailableEvent = { ...festival, slug: "bal", name: "Bal", reason: "plugin_disabled" };
 
 function show() {
   const onPaired = vi.fn();
@@ -183,6 +184,27 @@ describe("choosing the event", () => {
     await user.click(screen.getByRole("button", { name: t("pairing.retry") }));
 
     expect(screen.getByLabelText(t("pairing.token"))).toBeDefined();
+  });
+
+  it("names the events it reaches that do not run Open POS, and where to switch it on", async () => {
+    // The device was given the right event, and Open POS was never ticked on
+    // it. "No event" alone would send somebody to re-create the device.
+    posEvents.mockResolvedValue({ results: [], unavailable: [bal] });
+    const { typeCode } = show();
+    await typeCode("abcd1234");
+
+    expect(await screen.findByText(t("pairing.noEvents"))).toBeDefined();
+    expect(screen.getByText(t("events.pluginDisabled", { names: "Bal" }))).toBeDefined();
+    expect(screen.queryByRole("button", { name: /Bal/ })).toBeNull();
+  });
+
+  it("names them under the ones it can pick, too", async () => {
+    posEvents.mockResolvedValue({ results: [festival, gala], unavailable: [bal] });
+    const { typeCode } = show();
+    await typeCode("abcd1234");
+
+    expect(await screen.findByRole("button", { name: /Gala/ })).toBeDefined();
+    expect(screen.getByText(t("events.pluginDisabled", { names: "Bal" }))).toBeDefined();
   });
 });
 

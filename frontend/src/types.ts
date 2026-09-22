@@ -99,6 +99,24 @@ export interface PosEvent {
   date_from: string | null;
 }
 
+/**
+ * An event this device may reach but cannot sell for, and why.
+ *
+ * Never offered as a choice — its endpoints would refuse the device — but
+ * named, because it is the event somebody is looking for when the one they
+ * expected is not in the list.
+ */
+export interface UnavailableEvent extends PosEvent {
+  /** Only `plugin_disabled` so far: Open POS is not switched on for it. */
+  reason: string;
+}
+
+export interface PosEventList {
+  results: PosEvent[];
+  /** Absent from a server older than the field. */
+  unavailable?: UnavailableEvent[];
+}
+
 /** One hit of the attendee search, as pretix' check-in RPC returns it. */
 export interface AttendeeMatch {
   id: number;

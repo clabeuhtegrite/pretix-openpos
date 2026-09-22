@@ -31,6 +31,8 @@ Paramètres d'URL, cumulables :
 | `checkout=fail` | le serveur refuse d’enregistrer la vente |
 | `testmode=1` | événement en mode test |
 | `update=1` | le serveur annonce une version plus récente |
+| `events=one` / `blocked` / `mixed` | les événements que l’appareil atteint : le seul où il est ; plus un sans Open POS ; deux ouverts plus un sans Open POS (défaut : deux ouverts) |
+| `load=refused` / `series` | l’événement de l’appareil ne s’ouvre pas : Open POS désactivé dessus, ou une série sans date ce soir |
 
 `browser=1` est nécessaire : sans lui l'app affiche l'écran d'installation.
 

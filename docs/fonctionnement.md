@@ -399,9 +399,14 @@ Sous *Organisateur → Devices → Créer* :
 - choisir le profil de sécurité **Open POS** ;
 - pretix affiche un QR d'appairage et le code en texte.
 
-Un device peut vendre pour plusieurs événements : tout événement où le plugin est
-activé apparaît dans *Réglages → Événement* de l'app, et changer d'événement ne
-demande pas de réappairer.
+Un device peut vendre pour plusieurs événements : tout événement auquel il a accès
+et où le plugin est activé se choisit dans *Réglages → Événement* de l'app, que
+sa boutique soit en ligne ou non, et changer d'événement ne demande pas de
+réappairer. Le champ est toujours affiché : avec un seul événement, il le nomme
+et dit où en ouvrir d'autres (*Appareils → cet appareil*) ; un événement que
+l'appareil atteint mais où Open POS n'est pas activé y est nommé, avec l'endroit
+où l'activer, au lieu d'être passé sous silence. Changer d'événement vide le
+panier, et demande d'abord confirmation si ce panier porte un avoir.
 
 Puis, sous *Organisateur → Open POS → Appareils de caisse*, dire à quoi sert cet
 appareil : **Caisse** pour le bar, **Porte** pour l'entrée. Laisser *non
@@ -471,13 +476,22 @@ saisi par réflexe n'est pas quelque chose qu'on met à un geste de distance.
    POS est réellement activé (un device peut avoir accès à un événement sans que
    l'organisateur y ait ouvert de caisse). Un seul résultat → sélection
    automatique. Le tout est rangé dans `localStorage` sous `openpos.pairing.v1`.
+   Que la boutique de l'événement soit en ligne n'entre pas en compte : c'est
+   l'affaire du public, aucun endpoint de la caisse ne l'a jamais demandé, et un
+   événement en préparation ou qui ne vend qu'à l'entrée est justement de ceux où
+   l'on porte une caisse. Le filtre a existé jusqu'en 0.15.2, et un appareil
+   ayant accès à deux événements n'en montrait alors qu'un, sans sélecteur.
 2. **Chargement** — `config/` et `catalog/` en parallèle. Un 401/403 (device
    révoqué ou supprimé, plugin désactivé sur l'événement) affiche le motif du
    serveur avec deux issues, *Réessayer* et *Dépairer* — sans jamais effacer
    l'appairage de lui-même. Une version antérieure le faisait ; or un CDN ou un
    pare-feu devant pretix répond avec ces mêmes codes quand il conteste une
    requête, et une caisse qui se serait dépairée là-dessus en pleine soirée ne
-   se récupère qu'avec un nouveau code frappé au back-office. Le catalogue en
+   se récupère qu'avec un nouveau code frappé au back-office. Quand l'appareil
+   a d'autres événements, l'écran d'erreur les propose aussi, sous *ou changer
+   d'événement* : sans cela une caisse restée sur un événement qui ne s'ouvre
+   plus (Open POS désactivé, série sans date ce soir) n'avait que *Réessayer*
+   ou *Dépairer*, alors que l'événement du soir était à un geste. Le catalogue en
    cache n'est pas utilisé non plus dans ce cas : un device révoqué qui
    vendrait sur un vieux catalogue serait refusé à la première vente, devant
    le client.
@@ -1693,7 +1707,7 @@ Base : `/api/v1`. Authentification : `Authorization: Device <token>`.
 | Méthode | Chemin | Rôle |
 |---|---|---|
 | `POST` | `/device/initialize` | Appairage (endpoint pretix natif) |
-| `GET` | `/organizers/<org>/openpos/` | Événements vendables par cette caisse |
+| `GET` | `/organizers/<org>/openpos/` | Événements de cette caisse : `results`, ceux où elle peut vendre ; `unavailable`, ceux qu'elle atteint sans pouvoir y vendre, avec `reason` (`plugin_disabled`) |
 | `GET` | `/organizers/<org>/events/<ev>/openpos/config/` | Événement, device, listes de contrôle, produits d'admission, coupures, boutons montant libre et consigne |
 | `GET` | `…/openpos/catalog/` | Catalogue par catégorie, prix, stock restant |
 | `POST` | `…/openpos/checkout/` | Encaissement |
@@ -1986,7 +2000,7 @@ l'installation — donc `npm i --no-save playwright` avant de s'en servir.
 | Les photos de produits ne s'affichent pas | Le produit n'a pas d'image dans pretix — ou les médias sont servis depuis un autre domaine (S3, CDN) : la coquille annonce `img-src 'self' data:`, et une image d'ailleurs est bloquée. La case reste vide, la vente n'est pas gênée |
 | Un produit reste « Épuisé » alors qu'aucune limite n'est atteinte | Il n'est rattaché à aucun quota : pretix ne peut pas le vendre, et la caisse le montre comme épuisé plutôt que de le laisser au panier pour être refusé au paiement. Créer un quota (illimité au besoin) et l'y rattacher |
 | « Une erreur est survenue » avec un 401 ou 403 au lancement | Device révoqué ou supprimé, plugin désactivé sur l'événement — ou un CDN / pare-feu qui conteste la requête. *Réessayer* d'abord ; *Dépairer* seulement si le device a bien été révoqué |
-| L'événement n'apparaît pas au moment de l'appairage | Plugin non activé sur l'événement, ou événement non *live*, ou device sans accès |
+| L'événement n'apparaît pas au moment de l'appairage ou dans *Réglages → Événement* | Plugin non activé sur l'événement (l'app le nomme alors, sous le champ), ou device sans accès à l'événement (*Appareils → cet appareil*). Que la boutique soit en ligne ne compte pas |
 | « Faites entrer » ne s'affiche jamais | Aucune liste de contrôle choisie dans *Open POS → Réglages*, ou aucun produit d'admission dans la vente |
 | Un billet refuse de se scanner | Code-barres non-QR : passer par la recherche par nom ou une douchette clavier |
 | La caméra ne démarre pas | Contexte non sécurisé (HTTP), ou autorisation refusée dans les réglages du navigateur |

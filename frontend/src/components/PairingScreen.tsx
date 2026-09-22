@@ -2,7 +2,8 @@ import { useState } from "react";
 
 import { api, ApiError } from "../api";
 import { t } from "../i18n";
-import type { Pairing, PosEvent } from "../types";
+import type { Pairing, PosEventList } from "../types";
+import { EventButtons, UnavailableEvents } from "./EventChoice";
 import QrScanner from "./QrScanner";
 
 /**
@@ -32,7 +33,7 @@ export default function PairingScreen({ onPaired }: Props) {
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [events, setEvents] = useState<PosEvent[] | null>(null);
+  const [events, setEvents] = useState<PosEventList | null>(null);
   const [partial, setPartial] = useState<Omit<Pairing, "event"> | null>(null);
   const [scanning, setScanning] = useState(false);
 
@@ -61,7 +62,7 @@ export default function PairingScreen({ onPaired }: Props) {
         return;
       }
       setPartial(base);
-      setEvents(list.results);
+      setEvents(list);
     } catch (err) {
       setError(
         err instanceof ApiError
@@ -80,11 +81,13 @@ export default function PairingScreen({ onPaired }: Props) {
       <div className="centered">
         <div className="panel">
           <h2>{t("pairing.chooseEvent")}</h2>
-          {events.length === 0 ? (
+          {events.results.length === 0 ? (
             <>
               <p>{t("pairing.noEvents")}</p>
+              <UnavailableEvents events={events.unavailable ?? []} />
               <button
                 className="btn ghost"
+                style={{ marginTop: 16 }}
                 onClick={() => {
                   setEvents(null);
                   setPartial(null);
@@ -94,14 +97,13 @@ export default function PairingScreen({ onPaired }: Props) {
               </button>
             </>
           ) : (
-            <div className="event-list">
-              {events.map((event) => (
-                <button key={event.slug} onClick={() => onPaired({ ...partial, event: event.slug })}>
-                  {event.name}
-                  <span className="slug">{event.slug}</span>
-                </button>
-              ))}
-            </div>
+            <>
+              <EventButtons
+                events={events.results}
+                onPick={(slug) => onPaired({ ...partial, event: slug })}
+              />
+              <UnavailableEvents events={events.unavailable ?? []} />
+            </>
           )}
         </div>
       </div>

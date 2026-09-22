@@ -15,7 +15,8 @@ vi.mock("../api", async (importOriginal) => {
 import { locale, t } from "../i18n";
 import { formatMoney } from "../money";
 import { saveQueue } from "../storage";
-import type { Pairing, PosEvent, QueuedSale, SummaryResponse } from "../types";
+import { eventDay } from "../events";
+import type { Pairing, PosEvent, QueuedSale, SummaryResponse, UnavailableEvent } from "../types";
 import SettingsPanel from "./SettingsPanel";
 
 /**
@@ -43,6 +44,10 @@ const events: PosEvent[] = [
   { slug: "festival", organizer: "demo", name: "Festival", currency: "EUR", testmode: false, date_from: null },
   { slug: "gala", organizer: "demo", name: "Gala", currency: "EUR", testmode: true, date_from: null },
 ];
+const bal: UnavailableEvent = {
+  slug: "bal", organizer: "demo", name: "Bal", currency: "EUR", testmode: false,
+  date_from: null, reason: "plugin_disabled",
+};
 
 function show(props: Partial<Parameters<typeof SettingsPanel>[0]> = {}) {
   const handlers = {
@@ -260,12 +265,83 @@ describe("the event switcher", () => {
     await waitFor(() => expect(screen.getByLabelText(t("settings.event"))).toBeDefined());
   });
 
-  it("stays out of the way when there is only one", async () => {
+  it("names the event even when there is no other, and says where others are given", async () => {
+    // It used to vanish altogether with a single event, and a device whose
+    // other events were out of its reach then looked exactly like a panel
+    // with the switch missing — which is what somebody came here to find.
+    posEvents.mockResolvedValue({ results: [events[0]], unavailable: [] });
+    show();
+
+    expect(
+      await screen.findByText(t("settings.eventOnly", { device: "Caisse bar" })),
+    ).toBeDefined();
+    expect(screen.getByText(t("settings.event"))).toBeDefined();
+    expect(screen.getByText("Festival")).toBeDefined();
+    expect(screen.queryByRole("combobox", { name: t("settings.event") })).toBeNull();
+  });
+
+  it("takes an answer from a server that predates the list of the others", async () => {
     posEvents.mockResolvedValue({ results: [events[0]] });
     show();
 
-    await waitFor(() => expect(posEvents).toHaveBeenCalled());
-    expect(screen.queryByLabelText(t("settings.event"))).toBeNull();
+    expect(
+      await screen.findByText(t("settings.eventOnly", { device: "Caisse bar" })),
+    ).toBeDefined();
+  });
+
+  it("names the events it cannot switch to, and why", async () => {
+    // Open POS never ticked on the next evening: the device does reach it, so
+    // pointing at the device's own access would send somebody the wrong way.
+    posEvents.mockResolvedValue({ results: [events[0]], unavailable: [bal] });
+    show();
+
+    expect(
+      await screen.findByText(t("events.pluginDisabled", { names: "Bal" })),
+    ).toBeDefined();
+    expect(screen.queryByText(t("settings.eventOnly", { device: "Caisse bar" }))).toBeNull();
+  });
+
+  it("names them beside a choice as well", async () => {
+    posEvents.mockResolvedValue({ results: events, unavailable: [bal] });
+    show();
+
+    const select = await screen.findByLabelText(t("settings.event"));
+    expect(within(select).queryByRole("option", { name: /Bal/ })).toBeNull();
+    expect(screen.getByText(t("events.pluginDisabled", { names: "Bal" }))).toBeDefined();
+  });
+
+  it("gives each event its day, since the next one is usually a copy of the last", async () => {
+    posEvents.mockResolvedValue({
+      results: [events[0], { ...events[0], slug: "festival-2", date_from: "2026-10-03T12:00:00Z" }],
+    });
+    show();
+
+    const select = await screen.findByLabelText(t("settings.event"));
+    expect(within(select).getAllByRole("option")[1].textContent).toBe(
+      `Festival · ${eventDay("2026-10-03T12:00:00Z")}`,
+    );
+  });
+
+  it("says so when Open POS was switched off under the only event it has", async () => {
+    posEvents.mockResolvedValue({ results: [], unavailable: [{ ...bal, slug: "festival", name: "Festival" }] });
+    show();
+
+    expect(
+      await screen.findByText(t("events.pluginDisabled", { names: "Festival" })),
+    ).toBeDefined();
+    // Not "this device only has this event": it has none it can sell for.
+    expect(screen.queryByText(t("settings.eventOnly", { device: "Caisse bar" }))).toBeNull();
+  });
+
+  it("does not claim another event while still open on one it can no longer sell for", async () => {
+    // Open POS switched off under a running till. A select whose value is not
+    // among its options shows the first one as if it were chosen.
+    posEvents.mockResolvedValue({ results: [events[1]], unavailable: [{ ...bal, slug: "festival", name: "Festival" }] });
+    show();
+
+    const select = (await screen.findByLabelText(t("settings.event"))) as HTMLSelectElement;
+    expect(select.value).toBe("festival");
+    expect(within(select).getByRole("option", { name: "Festival" })).toHaveProperty("disabled", true);
   });
 
   it("marks an event that is in test mode", async () => {

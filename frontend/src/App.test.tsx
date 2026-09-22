@@ -379,6 +379,49 @@ describe("getting to the till", () => {
 
     expect(await screen.findByRole("button", { name: /Bière/ })).toBeDefined();
   });
+
+  it("offers the device's other events when its own is refused", async () => {
+    // Open POS switched off on the event this till was left on. Retrying
+    // cannot help and unpairing costs a new code from the back office, while
+    // tonight's event was one tap away — but there was no tap to make.
+    const refused = new ApiError(403, "Open POS is not enabled for the event festival.");
+    apiMock.config.mockImplementation((p: { event: string }) =>
+      p.event === "festival" ? Promise.reject(refused) : Promise.resolve(config()),
+    );
+    apiMock.catalog.mockImplementation((p: { event: string }) =>
+      p.event === "festival" ? Promise.reject(refused) : Promise.resolve(catalog),
+    );
+    apiMock.posEvents.mockResolvedValue({
+      results: [
+        { slug: "gala", organizer: "demo", name: "Gala", currency: "EUR", testmode: false, date_from: null },
+      ],
+    });
+    const { user } = show();
+    await screen.findByText(t("error.refused", { detail: refused.message }));
+
+    await user.click(await screen.findByRole("button", { name: /Gala/ }));
+
+    await ready();
+    expect(loadPairing()?.event).toBe("gala");
+    expect(apiMock.catalog).toHaveBeenLastCalledWith(expect.objectContaining({ event: "gala" }));
+  });
+
+  it("offers them too when a series has nothing on tonight", async () => {
+    const closed = new ApiError(400, "Nothing is on tonight.", { code: "series_closed" });
+    apiMock.config.mockRejectedValue(closed);
+    apiMock.catalog.mockRejectedValue(closed);
+    apiMock.posEvents.mockResolvedValue({
+      results: [
+        { slug: "festival", organizer: "demo", name: "Festival", currency: "EUR", testmode: false, date_from: null },
+        { slug: "gala", organizer: "demo", name: "Gala", currency: "EUR", testmode: false, date_from: null },
+      ],
+    });
+    show();
+
+    expect(await screen.findByRole("button", { name: /Gala/ })).toBeDefined();
+    // Not the one it is stuck on.
+    expect(screen.queryByRole("button", { name: /Festival/ })).toBeNull();
+  });
 });
 
 describe("hearing the till", () => {
@@ -1234,6 +1277,56 @@ describe("the settings", () => {
 
     await waitFor(() => expect(screen.getByText(t("sale.empty"))).toBeDefined());
     expect(loadPairing()?.event).toBe("gala");
+  });
+
+  describe("with a credit in the basket", () => {
+    const two = {
+      results: [
+        { slug: "festival", organizer: "demo", name: "Festival", currency: "EUR", testmode: false, date_from: null },
+        { slug: "gala", organizer: "demo", name: "Gala", currency: "EUR", testmode: false, date_from: null },
+      ],
+    };
+
+    beforeEach(() => {
+      apiMock.posEvents.mockResolvedValue(two);
+      saveBasket("festival", [{
+        key: "10:", itemId: 10, variationId: null, label: "Bière",
+        unitPrice: 300, count: 1, available: null,
+      }], { amountCents: 1000, order: "POS09" });
+    });
+
+    afterEach(() => {
+      clearBasket();
+      vi.unstubAllGlobals();
+    });
+
+    it("asks first, and stays put when told no", async () => {
+      // The same question "Clear" asks: the credit is money owed to the
+      // customer, and it exists nowhere else until the corrected sale is in.
+      const confirmSpy = vi.fn(() => false);
+      vi.stubGlobal("confirm", confirmSpy);
+      const { user } = show();
+      await ready();
+
+      await user.click(screen.getByRole("button", { name: "settings" }));
+      await user.selectOptions(await screen.findByLabelText(t("settings.event")), "gala");
+
+      expect(confirmSpy).toHaveBeenCalledWith(t("settings.eventCredit", { order: "POS09" }));
+      expect(loadPairing()?.event).toBe("festival");
+      expect(loadBasket("festival")?.credit).toEqual({ amountCents: 1000, order: "POS09" });
+    });
+
+    it("switches once that is answered", async () => {
+      vi.stubGlobal("confirm", vi.fn(() => true));
+      const { user } = show();
+      await ready();
+
+      await user.click(screen.getByRole("button", { name: "settings" }));
+      await user.selectOptions(await screen.findByLabelText(t("settings.event")), "gala");
+
+      await waitFor(() => expect(loadPairing()?.event).toBe("gala"));
+      expect(loadBasket("festival")).toBeNull();
+    });
   });
 });
 

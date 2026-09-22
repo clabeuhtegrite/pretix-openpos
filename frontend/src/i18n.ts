@@ -20,7 +20,7 @@ export const MESSAGES = {
     "pairing.submit": "Pair",
     "pairing.pairing": "Pairing…",
     "pairing.chooseEvent": "Choose the event",
-    "pairing.noEvents": "This device has access to no live event.",
+    "pairing.noEvents": "This device has access to no event with Open POS enabled.",
     "pairing.retry": "Try again",
     "sale.cart": "Basket",
     "sale.empty": "Nothing in the basket yet.",
@@ -117,6 +117,7 @@ export const MESSAGES = {
       "The server refused this till: {detail} Try again; if the till has been revoked, unpair it and pair it again with a new code.",
     "error.retry": "Retry",
     "error.title": "Something went wrong",
+    "error.otherEvent": "or switch to another event",
     "testmode": "TEST MODE",
     "scan.open": "Scan",
     "scan.starting": "Starting the camera…",
@@ -264,7 +265,14 @@ export const MESSAGES = {
     "summary.earlierDays":
       "{amount} of this was paid back tonight on {n} sale(s) from an earlier day. The drawer really is short by that much.",
     "settings.event": "Event",
-    "settings.eventHelp": "Only events with Open POS enabled are listed.",
+    "settings.eventHelp": "Switching events empties the basket.",
+    "settings.eventOnly":
+      "This device has access to this event only. To give it others: in pretix, Devices → {device}.",
+    "settings.eventCredit":
+      "This basket carries the credit from {order}, and that money is owed to the customer. Switching events empties the basket and drops the credit. Switch anyway?",
+    "events.pluginDisabled":
+      "Open POS is not enabled on: {names}. It is switched on in pretix, on each event, under Settings → Plugins.",
+    "events.unavailable": "Not offered here: {names}.",
     "settings.switching": "Switching…",
     "gate.title": "Add the till to your home screen",
     "gate.why":
@@ -288,7 +296,7 @@ export const MESSAGES = {
     "pairing.submit": "Appairer",
     "pairing.pairing": "Appairage…",
     "pairing.chooseEvent": "Choisissez l’événement",
-    "pairing.noEvents": "Cet appareil n’a accès à aucun événement en ligne.",
+    "pairing.noEvents": "Cet appareil n’a accès à aucun événement où Open POS est activé.",
     "pairing.retry": "Réessayer",
     "sale.cart": "Panier",
     "sale.empty": "Panier vide.",
@@ -386,6 +394,7 @@ export const MESSAGES = {
       "Le serveur a refusé cette caisse : {detail} Réessayez ; si la caisse a été révoquée, dépairez-la et appairez-la avec un nouveau code.",
     "error.retry": "Réessayer",
     "error.title": "Une erreur est survenue",
+    "error.otherEvent": "ou changer d’événement",
     "testmode": "MODE TEST",
     "scan.open": "Scanner",
     "scan.starting": "Démarrage de la caméra…",
@@ -533,7 +542,14 @@ export const MESSAGES = {
     "summary.earlierDays":
       "{amount} ont été rendus ce soir sur {n} vente(s) d’un autre jour. Le tiroir est bien inférieur d’autant.",
     "settings.event": "Événement",
-    "settings.eventHelp": "Seuls les événements où Open POS est activé sont listés.",
+    "settings.eventHelp": "Changer d’événement vide le panier.",
+    "settings.eventOnly":
+      "Cet appareil n’a accès qu’à cet événement. Pour lui en ouvrir d’autres\u00a0: dans pretix, Appareils → {device}.",
+    "settings.eventCredit":
+      "Ce panier porte l’avoir de {order}, et cet argent est dû au client. Changer d’événement vide le panier et supprime l’avoir. Changer quand même\u00a0?",
+    "events.pluginDisabled":
+      "Open POS n’est pas activé sur\u00a0: {names}. Il s’active dans pretix, sur chaque événement, sous Paramètres → Plugins.",
+    "events.unavailable": "Pas proposés ici\u00a0: {names}.",
     "settings.switching": "Changement…",
     "gate.title": "Ajoutez la caisse à l’écran d’accueil",
     "gate.why":

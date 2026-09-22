@@ -1,11 +1,13 @@
 import { useEffect, useState } from "react";
 
 import { api } from "../api";
+import { eventLabel } from "../events";
 import { loadQueue } from "../storage";
 import { locale, t } from "../i18n";
 import { formatMoney, toCents } from "../money";
 import { THEMES, type Theme } from "../theme";
-import type { Pairing, PosEvent, SummaryResponse, Takings } from "../types";
+import type { Pairing, PosEventList, SummaryResponse, Takings } from "../types";
+import { UnavailableEvents } from "./EventChoice";
 
 interface Props {
   pairing: Pairing;
@@ -40,6 +42,75 @@ function queuedCash(entries: { paymentType: string; chargedTotal: string }[]): n
     .reduce((sum, entry) => sum + toCents(entry.chargedTotal), 0);
 }
 
+/**
+ * Which event this device sells for, and every other one it could.
+ *
+ * Shown as soon as the list is in, not only once there is something to pick.
+ * A device with a single event and a device whose other events were all out
+ * of reach used to look exactly alike — no field at all — and the second is
+ * the one somebody opens this panel to sort out, looking for a switch that
+ * was simply not drawn.
+ */
+function EventField({
+  list, current, deviceName, onChange,
+}: {
+  list: PosEventList;
+  current: string;
+  deviceName: string;
+  onChange: (slug: string) => void;
+}) {
+  const unavailable = list.unavailable ?? [];
+  const sellable = list.results.some((event) => event.slug === current);
+  const here =
+    list.results.find((event) => event.slug === current) ??
+    unavailable.find((event) => event.slug === current);
+  const hereLabel = here ? eventLabel(here) : current;
+
+  if (!list.results.some((event) => event.slug !== current)) {
+    return (
+      <div className="field">
+        <span className="field-label">{t("settings.event")}</span>
+        <div className="field-value">{hereLabel}</div>
+        {sellable && unavailable.length === 0 && (
+          // Nothing else it could reach, so the answer is on the device
+          // itself, in the back office — which is worth naming, because from
+          // here "one event" and "no switch" look the same as a missing button.
+          <div className="help">{t("settings.eventOnly", { device: deviceName })}</div>
+        )}
+        <UnavailableEvents events={unavailable} />
+      </div>
+    );
+  }
+
+  return (
+    <div className="field">
+      <label htmlFor="event">{t("settings.event")}</label>
+      <select
+        id="event"
+        className="select"
+        value={current}
+        onChange={(e) => onChange(e.target.value)}
+      >
+        {!sellable && (
+          // Still open on an event it can no longer sell for, Open POS having
+          // been switched off under it. Named for what it is, rather than
+          // letting the select show the first of the others as if chosen.
+          <option value={current} disabled>
+            {hereLabel}
+          </option>
+        )}
+        {list.results.map((event) => (
+          <option key={event.slug} value={event.slug}>
+            {eventLabel(event)}
+          </option>
+        ))}
+      </select>
+      <div className="help">{t("settings.eventHelp")}</div>
+      <UnavailableEvents events={unavailable} />
+    </div>
+  );
+}
+
 function TakingsRow({ label, takings, currency }: { label: string; takings: Takings; currency: string }) {
   return (
     <tr>
@@ -71,14 +142,14 @@ export default function SettingsPanel({
    * top bar, two screens away.
    */
   const [queued] = useState(() => loadQueue().filter((entry) => entry.kind === "sale"));
-  const [events, setEvents] = useState<PosEvent[] | null>(null);
+  const [events, setEvents] = useState<PosEventList | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     api
       .posEvents(pairing.organizer, pairing.token)
       .then((data) => {
-        if (!cancelled) setEvents(data.results);
+        if (!cancelled) setEvents(data);
       })
       .catch(() => {
         // The switcher is a convenience; failing to list events must not stop
@@ -115,24 +186,13 @@ export default function SettingsPanel({
       <div className="panel" onClick={(e) => e.stopPropagation()}>
         <h2>{t("settings.title")}</h2>
 
-        {events && events.length > 1 && (
-          <div className="field">
-            <label htmlFor="event">{t("settings.event")}</label>
-            <select
-              id="event"
-              className="select"
-              value={pairing.event}
-              onChange={(e) => onEventChange(e.target.value)}
-            >
-              {events.map((event) => (
-                <option key={event.slug} value={event.slug}>
-                  {event.name}
-                  {event.testmode ? " · " + t("testmode") : ""}
-                </option>
-              ))}
-            </select>
-            <div className="help">{t("settings.eventHelp")}</div>
-          </div>
+        {events && (
+          <EventField
+            list={events}
+            current={pairing.event}
+            deviceName={pairing.deviceName}
+            onChange={onEventChange}
+          />
         )}
 
         <div className="field">

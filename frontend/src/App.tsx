@@ -5,6 +5,7 @@ import { basketFromJournal, customKey, refundKey, repriceCart } from "./basket";
 import CheckinScreen from "./components/CheckinScreen";
 import CustomSalePanel from "./components/CustomSalePanel";
 import DoneScreen from "./components/DoneScreen";
+import { OtherEvents } from "./components/EventChoice";
 import HistoryPanel from "./components/HistoryPanel";
 import InstallGate, { browserAllowed, isStandalone } from "./components/InstallGate";
 import PairingScreen from "./components/PairingScreen";
@@ -415,6 +416,31 @@ export default function App() {
     setPairing(next);
   }
 
+  /**
+   * Sell for another event from now on, without pairing again.
+   *
+   * The basket belongs to the event it was built for, and so does the door:
+   * its lists are that event's. What was on screen goes too, so nothing of
+   * the previous event can be rung up under the next one's name while its
+   * catalogue is on its way.
+   */
+  function switchEvent(slug: string) {
+    if (!pairing || slug === pairing.event) return;
+    // A credit is money owed to a customer for a cancelled sale, and it lives
+    // nowhere else until the corrected sale is rung up — the same question
+    // "Clear" asks before dropping it.
+    if (credit && !window.confirm(t("settings.eventCredit", { order: credit.order }))) return;
+    const next = { ...pairing, event: slug };
+    savePairing(next);
+    setCart([]);
+    setCredit(null);
+    setDoorListId(null);
+    setConfig(null);
+    setCatalog(null);
+    setPairing(next);
+    setSettingsOpen(false);
+  }
+
   function unpair() {
     clearPairing();
     clearBasket();
@@ -752,6 +778,9 @@ export default function App() {
           <button className="btn primary" onClick={() => void load(pairing)}>
             {t("error.retry")}
           </button>
+          {/* An event that will not open is not the device's only one, and
+              the others are one tap away rather than a new pairing. */}
+          <OtherEvents pairing={pairing} onPick={switchEvent} />
           {/* Only when the server has turned this device away. A till that
               has merely lost the network is one retry from working, and
               unpairing it costs a new code typed at the back office by
@@ -1002,17 +1031,7 @@ export default function App() {
           }}
           onUnpair={unpair}
           onClose={() => setSettingsOpen(false)}
-          onEventChange={(slug) => {
-            // The basket belongs to the event it was built for.
-            const next = { ...pairing, event: slug };
-            savePairing(next);
-            setCart([]);
-            setCredit(null);
-            // So does the door: its lists belong to the event too.
-            setDoorListId(null);
-            setPairing(next);
-            setSettingsOpen(false);
-          }}
+          onEventChange={switchEvent}
         />
       )}
     </div>

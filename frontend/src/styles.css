@@ -1134,6 +1134,13 @@ button {
   line-height: 1.4;
 }
 
+/* An answer with nothing to change it with — the one event a device has —
+   set at the size of the inputs around it, so it reads as a value rather
+   than as a caption. */
+.field .field-value {
+  font-size: 17px;
+}
+
 .field input {
   width: 100%;
   min-height: 56px;

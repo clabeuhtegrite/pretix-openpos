@@ -1,7 +1,7 @@
 import { markReachable, markUnreachable } from "./connectivity";
 import type {
   Attendance, AttendeeMatch, CancelResult, Catalog, History, InitializeResponse,
-  OfflineSnapshot, Pairing, PosConfig, PosEvent, RedeemResult, SaleResult,
+  OfflineSnapshot, Pairing, PosConfig, PosEventList, RedeemResult, SaleResult,
   SummaryResponse, TerminalPayment,
 } from "./types";
 
@@ -407,8 +407,11 @@ export const api = {
     });
   },
 
-  /** Events this till may sell for: it has access AND Open POS is enabled. */
-  posEvents(organizer: string, token: string): Promise<{ results: PosEvent[] }> {
+  /**
+   * Every event this device may reach: the ones it can sell for, and the ones
+   * it cannot, with the reason.
+   */
+  posEvents(organizer: string, token: string): Promise<PosEventList> {
     return request(`/organizers/${organizer}/openpos/`, { token });
   },
 
