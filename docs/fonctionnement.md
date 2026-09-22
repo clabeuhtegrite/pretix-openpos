@@ -318,10 +318,13 @@ l'offrir.
 ### 3.1 Installer le plugin
 
 ```bash
-pip install pretix-openpos
+pip install "pretix-openpos @ git+https://github.com/clabeuhtegrite/pretix-openpos"
 python -m pretix migrate
 python -m pretix rebuild
 ```
+
+Le paquet n'est pas sur PyPI, donc l'installation se fait depuis le dépôt.
+Épingler un commit (`…pretix-openpos@<sha>`) si on préfère ne pas suivre `main`.
 
 En Docker/Kubernetes, [`deploy/Dockerfile`](../deploy/Dockerfile) intègre le plugin
 à l'image officielle :
