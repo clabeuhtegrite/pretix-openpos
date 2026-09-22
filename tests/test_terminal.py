@@ -94,15 +94,53 @@ def test_the_payment_is_written_down_before_the_reader_is_asked(till, ticket, re
     """
     The order matters: a process that dies between the two leaves a row to be
     settled from SumUp rather than a charge nobody in pretix has heard of.
+
+    And a lost answer leaves that row *open*. The request may have reached
+    SumUp and put the amount on the reader; writing a refusal here would send
+    the cashier to a fresh basket with a new key while a cardholder is looking
+    at a live prompt.
     """
     sumup.next_exception = requests.ConnectTimeout("no route")
 
     response = start(till, [{"item": ticket.pk, "count": 1}])
 
     assert response.status_code == 400
-    assert response.json()["code"] == "terminal_unreachable"
+    assert response.json()["code"] == "terminal_unsure"
     payment = PosTerminalPayment.objects.get()
-    assert payment.status == PosTerminalPayment.STATUS_FAILED
+    assert payment.status == PosTerminalPayment.STATUS_PENDING
+    assert payment.client_transaction_id == ""
+
+
+@pytest.mark.django_db
+def test_an_unsure_start_is_not_settled_by_guesswork(till, ticket, reader_till, sumup):
+    """
+    A row with no handle cannot be asked about, and "we never got an answer"
+    must not quietly become "not paid" on the next poll.
+    """
+    sumup.next_exception = requests.ConnectTimeout("no route")
+    start(till, [{"item": ticket.pk, "count": 1}])
+    key = PosTerminalPayment.objects.get().idempotency_key
+
+    response = status(till, key)
+
+    assert response.status_code == 200
+    assert response.json()["status"] == PosTerminalPayment.STATUS_PENDING
+    assert PosTerminalPayment.objects.get().status == PosTerminalPayment.STATUS_PENDING
+
+
+@pytest.mark.django_db
+def test_a_refusal_from_sumup_is_still_written_down(till, ticket, reader_till, sumup):
+    """
+    The other half of the rule: an answer that says no is an answer, and the
+    row closes on it rather than staying open for ever.
+    """
+    sumup.next_response = FakeResponse(400, {"message": "reader says no"})
+
+    response = start(till, [{"item": ticket.pk, "count": 1}])
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "terminal_unreachable"
+    assert PosTerminalPayment.objects.get().status == PosTerminalPayment.STATUS_FAILED
 
 
 @pytest.mark.django_db

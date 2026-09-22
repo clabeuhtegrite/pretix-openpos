@@ -288,3 +288,74 @@ def test_the_takings_net_the_returns_off_and_count_them_apart(till, event, beer,
     assert body["event"]["deposit_refunds"] == 1
     assert body["event"]["cash"] == "9.00"
     assert body["event"]["total"] == "9.00"
+
+
+# -- cancelling a basket that had a deposit in it --------------------------
+
+
+def cancel(till, seq, key="cancel-key-1", **kwargs):
+    return till.post("cancel", {"seq": seq, "idempotency_key": key, **kwargs})
+
+
+@pytest.mark.django_db
+def test_cancelling_a_mixed_basket_puts_the_deposit_back_too(till, event, beer, deposit):
+    """
+    Two beers bought and three cups handed back is one transaction and two
+    journal rows: the customer put the net on the counter. Reversing only the
+    sale would leave the drawer short by the deposit for the rest of the
+    evening, and the volunteer counting at 1:30 would find the difference with
+    nothing to explain it.
+    """
+    sale = sell(
+        till,
+        [{"item": beer.pk, "count": 2}, give_back(deposit, 3)],
+        cash_given="3.00",
+    ).json()
+    net = drawer(event)
+
+    cancel(till, sale["journal_seq"], reason="Erreur de saisie")
+
+    # Two beers at 3,00 less three cups at 1,00: the customer put 3,00 down.
+    assert net == Decimal("3.00")
+    assert drawer(event) == Decimal("0.00")
+
+
+@pytest.mark.django_db
+def test_the_reversal_of_the_deposit_names_the_row_it_reverses(till, event, beer, deposit):
+    sale = sell(
+        till, [{"item": beer.pk, "count": 2}, give_back(deposit, 3)], cash_given="3.00"
+    ).json()
+    payout = PosSale.objects.get(event=event, kind=PosSale.KIND_DEPOSIT_REFUND)
+
+    cancel(till, sale["journal_seq"])
+
+    reversal = PosSale.objects.get(event=event, cancels_seq=payout.seq)
+    assert reversal.kind == PosSale.KIND_CANCELLATION
+    assert reversal.total == Decimal("3.00")
+
+
+@pytest.mark.django_db
+def test_a_cancellation_retried_does_not_put_the_deposit_back_twice(till, event, beer, deposit):
+    """
+    The same key, the same answer: the payout half derives its key from the
+    cancellation's exactly as it derived from the sale's.
+    """
+    sale = sell(
+        till, [{"item": beer.pk, "count": 2}, give_back(deposit, 3)], cash_given="3.00"
+    ).json()
+
+    cancel(till, sale["journal_seq"])
+    cancel(till, sale["journal_seq"])
+
+    assert drawer(event) == Decimal("0.00")
+    assert PosSale.objects.filter(event=event, kind=PosSale.KIND_CANCELLATION).count() == 2
+
+
+@pytest.mark.django_db
+def test_a_sale_with_no_deposit_still_reverses_to_one_row(till, event, beer):
+    sale = sell(till, [{"item": beer.pk, "count": 2}], cash_given="6.00").json()
+
+    cancel(till, sale["journal_seq"])
+
+    assert drawer(event) == Decimal("0.00")
+    assert PosSale.objects.filter(event=event, kind=PosSale.KIND_CANCELLATION).count() == 1

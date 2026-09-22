@@ -11,7 +11,16 @@ from decimal import Decimal
 import pytest
 import requests
 
-from pretix_openpos.sumup import SumUpAccount, SumUpError, minor_units, still_running, succeeded
+from pretix_openpos.sumup import (
+    ERR_BUSY,
+    ERR_NOT_FOUND,
+    ERR_UNAVAILABLE,
+    SumUpAccount,
+    SumUpError,
+    minor_units,
+    still_running,
+    succeeded,
+)
 
 from .sumup_stub import FakeResponse
 
@@ -212,6 +221,51 @@ def test_a_transaction_that_does_not_exist_is_not_an_error(account, sumup):
     the till is polling to find out, so a 404 here is "not yet", not a fault.
     """
     assert account.transaction("ctx_nope") is None
+
+
+@pytest.mark.django_db
+def test_not_yet_is_recognised_by_code_and_never_by_wording(account, sumup, monkeypatch):
+    """
+    The trap this replaces: "not yet" used to be recognised by looking for an
+    English phrase inside the operator-facing message. Those messages are
+    translated, so the first French catalogue would have turned the *normal*
+    state of every reader payment — waiting for the cardholder — into a
+    refusal, two seconds after it started, with the tests still green because
+    they run in English.
+
+    So the message is deliberately not English here, and the answer must not
+    change.
+    """
+    def french_404(*_args, **_kwargs):
+        raise SumUpError(
+            "SumUp ne connaît pas ce lecteur ou cette transaction.",
+            code=ERR_NOT_FOUND,
+        )
+
+    monkeypatch.setattr(SumUpAccount, "_call", french_404)
+
+    assert account.transaction("ctx_nope") is None
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "status,code,retryable",
+    [
+        (404, ERR_NOT_FOUND, False),
+        (409, ERR_BUSY, True),
+        (503, ERR_UNAVAILABLE, True),
+    ],
+)
+def test_every_failure_carries_a_code_a_caller_can_branch_on(
+    account, sumup, status, code, retryable
+):
+    sumup.next_response = FakeResponse(status, {"message": "nope"})
+
+    with pytest.raises(SumUpError) as caught:
+        account.readers()
+
+    assert caught.value.code == code
+    assert caught.value.retryable is retryable
 
 
 @pytest.mark.django_db

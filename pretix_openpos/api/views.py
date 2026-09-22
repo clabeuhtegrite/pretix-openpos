@@ -313,6 +313,12 @@ def settle_terminal_payment(payment, account):
     """
     if payment.settled:
         return payment
+    if not payment.client_transaction_id:
+        # The checkout call never came back with a handle, so there is nothing
+        # to ask about yet. Saying "not paid" here would be the same mistake as
+        # writing a refusal on a timeout: this row is still open, and the way
+        # it closes is the reader being cleared, not a guess made here.
+        return payment
     try:
         transaction_data = account.transaction(payment.client_transaction_id)
     except SumUpError as exc:
@@ -1093,8 +1099,24 @@ class OpenPosViewSet(viewsets.ViewSet):
                 return_url=webhook_url(event.organizer),
             )
         except SumUpError as exc:
+            if exc.retryable:
+                # "We could not ask" is not "it failed" — the rule the rest of
+                # this module is built on, and the one place it was not kept.
+                # The request may well have reached SumUp and put the amount on
+                # the reader, with only the answer lost. Writing a refusal here
+                # sends the cashier back to a fresh basket with a *new* key
+                # while a cardholder is looking at a live prompt, which is how
+                # one basket becomes two charges. So the row stays pending, and
+                # the till is told what is actually known: go and look at the
+                # reader.
+                raise ValidationError(
+                    {"detail": [exc.message], "code": "terminal_unsure"}
+                )
             payment.status = PosTerminalPayment.STATUS_FAILED
-            payment.failure = str(exc.message)
+            # Truncated like every other write to this column: the message is
+            # translated, and a language with longer words must not turn a
+            # refusal into a database error.
+            payment.failure = str(exc.message)[:190]
             payment.save(update_fields=["status", "failure", "updated"])
             raise ValidationError(
                 {"detail": [exc.message], "code": "terminal_unreachable"}
@@ -1106,11 +1128,13 @@ class OpenPosViewSet(viewsets.ViewSet):
     @action(detail=False, methods=["get"], url_path="terminal/status", url_name="terminal-status")
     def terminal_status(self, request, **kwargs):
         """Where a payment has got to. Polled by the till while it waits."""
-        _device, _pos_device, account = self._terminal_context(request)
+        device, _pos_device, account = self._terminal_context(request)
         payment = PosTerminalPayment.objects.filter(
             event=request.event, idempotency_key=request.query_params.get("idempotency_key", "")
         ).first()
-        if payment is None:
+        # Checked here as well as at checkout: a key is not a secret, and one
+        # till has no business watching — or ending — another till's payment.
+        if payment is None or not payment.belongs_to(device):
             raise ValidationError(
                 {"detail": [_("No card payment was started for this basket.")],
                  "code": "no_payment"}
@@ -1128,19 +1152,23 @@ class OpenPosViewSet(viewsets.ViewSet):
         asked for — a card tapped in the same second is a payment, and the till
         has to be told that rather than a cancellation that did not happen.
         """
-        _device, pos_device, account = self._terminal_context(request)
+        device, _pos_device, account = self._terminal_context(request)
         payment = PosTerminalPayment.objects.filter(
             event=request.event,
             idempotency_key=request.data.get("idempotency_key", ""),
         ).first()
-        if payment is None:
+        if payment is None or not payment.belongs_to(device):
             raise ValidationError(
                 {"detail": [_("No card payment was started for this basket.")],
                  "code": "no_payment"}
             )
         if not payment.settled:
             try:
-                account.terminate_checkout(pos_device.sumup_reader_id)
+                # The reader this payment was put on, not whichever one the
+                # till has been given since. An organizer tidying up the device
+                # screen mid-evening would otherwise have this stop a stranger's
+                # payment while the one being cancelled goes on waiting.
+                account.terminate_checkout(payment.reader_id)
             except SumUpError:
                 # Already finished, already gone, or unreachable. Asking SumUp
                 # what actually happened answers all three.
@@ -1353,6 +1381,42 @@ class OpenPosViewSet(viewsets.ViewSet):
                 cancels_seq=sale.seq,
                 reason=data["reason"],
             )
+
+            # The deposit handed back with this sale is a journal row of its
+            # own, and reversing only the sale leaves the takings short by its
+            # amount for the rest of the evening. The customer put the *net* on
+            # the counter — the cups came off the bill — so the net is what
+            # goes back, and both halves have to be reversed for the column to
+            # return to where it started. Found by the key the sale's own key
+            # derives, which is how the two were written together in the first
+            # place.
+            deposit_refund = PosSale.objects.filter(
+                event=event,
+                idempotency_key=refund_key(sale.idempotency_key),
+                kind=PosSale.KIND_DEPOSIT_REFUND,
+            ).first()
+            if deposit_refund is not None and not PosSale.cancelled_seqs(
+                event, [deposit_refund.seq]
+            ):
+                PosSale.record(
+                    event=event,
+                    order=None,
+                    device=device,
+                    cashier=data["cashier"],
+                    payment_type=deposit_refund.payment_type,
+                    # Its total is negative — money that left the drawer — so
+                    # negating it puts the same amount back.
+                    total=-deposit_refund.total,
+                    positions=self._reversed_positions(deposit_refund.positions),
+                    # Derived from the cancellation's key exactly as the payout
+                    # row derived from the sale's, so a retried cancellation
+                    # recognises this half too instead of writing it twice.
+                    idempotency_key=refund_key(data["idempotency_key"]),
+                    testmode=deposit_refund.testmode,
+                    kind=PosSale.KIND_CANCELLATION,
+                    cancels_seq=deposit_refund.seq,
+                    reason=data["reason"],
+                )
 
         body = self._cancellation_payload(cancellation, sale, replayed=False)
         body["credit_note"] = self._credit_note_number(order)

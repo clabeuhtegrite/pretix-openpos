@@ -59,17 +59,40 @@ SUCCEEDED = frozenset({"SUCCESSFUL", "PAID_OUT"})
 PENDING = frozenset({"PENDING"})
 
 
+#: What went wrong, as something code may branch on.
+#:
+#: The messages beside these are for an operator to read, which means they are
+#: translated, which means they are the one thing a caller must never test.
+#: ``transaction()`` did exactly that once: it recognised "the transaction does
+#: not exist yet" — the *normal* state while a cardholder has not tapped — by
+#: looking for an English phrase inside the message. A French catalogue would
+#: have turned every reader payment into a refusal two seconds after it
+#: started. Codes are here so that can never come back.
+ERR_NOT_CONFIGURED = "not_configured"
+ERR_UNAUTHORIZED = "unauthorized"
+ERR_NOT_FOUND = "not_found"
+ERR_BUSY = "busy"
+ERR_UNAVAILABLE = "unavailable"
+ERR_UNREADABLE = "unreadable"
+ERR_REFUSED = "refused"
+
+
 class SumUpError(Exception):
     """
     A call to SumUp did not do what was asked.
 
     ``message`` is safe to show an operator: it never carries the key, and it
-    says what to do rather than what HTTP status came back.
+    says what to do rather than what HTTP status came back. ``code`` is the
+    same fact for a caller, and it is the half that stays stable under
+    translation.
     """
 
-    def __init__(self, message, *, retryable=False, detail=""):
+    def __init__(self, message, *, code=ERR_REFUSED, retryable=False, detail=""):
         super().__init__(detail or message)
         self.message = message
+        #: One of the ``ERR_*`` constants above. Branch on this, never on
+        #: ``message``, which is translated.
+        self.code = code
         #: Whether trying the same thing again could plausibly work.
         self.retryable = retryable
         #: For the log. May carry SumUp's own wording; never the credentials.
@@ -106,6 +129,7 @@ class SumUpAccount:
         if not self.configured:
             raise SumUpError(
                 _("SumUp is not set up for this organizer yet."),
+                code=ERR_NOT_CONFIGURED,
                 detail="missing merchant code or API key",
             )
         url = f"{API_BASE}{path}"
@@ -128,6 +152,7 @@ class SumUpAccount:
             logger.warning("SumUp %s %s could not be reached: %s", method, path, exc)
             raise SumUpError(
                 _("SumUp could not be reached. Check the connection and try again."),
+                code=ERR_UNAVAILABLE,
                 retryable=True,
                 detail=str(exc),
             ) from exc
@@ -140,6 +165,7 @@ class SumUpAccount:
             except ValueError as exc:
                 raise SumUpError(
                     _("SumUp sent an answer this till could not read."),
+                    code=ERR_UNREADABLE,
                     detail=response.text[:500],
                 ) from exc
 
@@ -153,21 +179,26 @@ class SumUpAccount:
         if response.status_code in (401, 403):
             return SumUpError(
                 _("SumUp refused the API key. Check it in the Open POS settings."),
+                code=ERR_UNAUTHORIZED,
                 detail=detail,
             )
         if response.status_code == 404:
             return SumUpError(
-                _("SumUp does not know this reader or transaction."), detail=detail
+                _("SumUp does not know this reader or transaction."),
+                code=ERR_NOT_FOUND,
+                detail=detail,
             )
         if response.status_code == 409:
             return SumUpError(
                 _("The reader is busy with another payment."),
+                code=ERR_BUSY,
                 retryable=True,
                 detail=detail,
             )
         if response.status_code >= 500:
             return SumUpError(
                 _("SumUp is having trouble. Try again in a moment."),
+                code=ERR_UNAVAILABLE,
                 retryable=True,
                 detail=detail,
             )
@@ -277,7 +308,10 @@ class SumUpAccount:
                 params={"client_transaction_id": client_transaction_id},
             )
         except SumUpError as exc:
-            if "not know this reader or transaction" in str(exc.message):
+            # Not yet answered by the cardholder: SumUp has no transaction to
+            # show until the card is presented, and says so with a 404. Matched
+            # on the code, never on the message — see ERR_NOT_FOUND above.
+            if exc.code == ERR_NOT_FOUND:
                 return None
             raise
 
