@@ -5,7 +5,7 @@ from django.core.cache import cache
 from django.db import IntegrityError, models, transaction
 from django.utils.timezone import now
 from django.utils.translation import gettext_lazy as _
-from pretix.base.models import Device, Event, Item, ItemVariation, Order
+from pretix.base.models import Device, Event, Item, ItemCategory, ItemVariation, Order
 
 #: previous_hash of the very first sale of an event.
 GENESIS_HASH = "0" * 64
@@ -631,3 +631,92 @@ class PosTerminalPayment(models.Model):
         # device booking a sale against another's card payment, and a rule
         # where two blanks match would be the wrong way for it to fail.
         return bool(serial) and self.device_serial == serial
+
+
+class PosCategory(models.Model):
+    """
+    Which till role a category of products is sold by, if it is reserved at all.
+
+    The door and the bar run the same app on purpose — see :class:`PosDevice` —
+    and until now that meant the same catalogue too. A volunteer who comes out
+    of the scanner to sell somebody a ticket lands on the whole grid, beer
+    included, and the beer is one row below the ticket.
+
+    So a category may be reserved for one role. Stored against the category
+    rather than against the device, and that is the substance of the choice:
+    a device is paired once and sells for whichever event is running tonight,
+    while a category belongs to one event. A list of categories held on the
+    device would name rows that the next event does not have, and the honest
+    reading of "none of these categories exist here" is "nothing is reserved" —
+    which is to say the restriction would quietly lapse at the next event,
+    without a screen anywhere saying so. Hung off the category, it lapses only
+    where an organiser has actually said nothing.
+
+    It also means one answer per category instead of one per device: a tablet
+    borrowed for the door at nine o'clock is given a role, and the catalogue
+    follows.
+
+    A category with no row here, which is every category until somebody says
+    otherwise, is sold by every till. That is :attr:`ROLE_ALL`, and it is the
+    same shape of default as :attr:`PosDevice.ROLE_UNSET`: turning this on
+    changes nothing until an organiser reserves something.
+    """
+
+    #: Nobody has reserved this category: every till sells it, as before.
+    ROLE_ALL = ""
+    ROLE_CHOICES = (
+        (ROLE_ALL, _("Every till")),
+        (PosDevice.ROLE_TILL, _("The bar till only")),
+        (PosDevice.ROLE_DOOR, _("The door only")),
+    )
+
+    category = models.OneToOneField(
+        ItemCategory, on_delete=models.CASCADE, related_name="openpos_category"
+    )
+    role = models.CharField(
+        max_length=8, choices=ROLE_CHOICES, blank=True, default=ROLE_ALL,
+        verbose_name=_("Sold by"),
+    )
+
+    class Meta:
+        verbose_name = _("Category at the till")
+        verbose_name_plural = _("Categories at the till")
+
+    def __str__(self):
+        return f"{self.category}: {self.role or 'all'}"
+
+    @classmethod
+    def reserved(cls, event) -> dict:
+        """
+        ``{category_id: role}`` for the categories of an event that are reserved.
+
+        One query, and the categories nobody has reserved are simply absent:
+        every caller asks the same question of them as of a category with no
+        row at all, and that question is answered by their absence here.
+        """
+        return dict(
+            cls.objects.filter(category__event=event)
+            .exclude(role=cls.ROLE_ALL)
+            .values_list("category_id", "role")
+        )
+
+    @classmethod
+    def off_limits(cls, event, pos_device) -> set:
+        """
+        The categories this device may not sell.
+
+        Empty for a device nobody has assigned, whatever is reserved: the
+        unassigned device is the one that still does both jobs, and narrowing
+        its catalogue on the strength of a role it has not been given would
+        take the grid away from every till paired before this existed.
+
+        Empty, too, when nothing is reserved — which is the state every event
+        starts in and the reason this feature is invisible until it is set up.
+        """
+        if not pos_device.role:
+            return set()
+        return {
+            category_id
+            for category_id, role in cls.reserved(event).items()
+            if role != pos_device.role
+        }

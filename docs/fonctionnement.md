@@ -1,6 +1,6 @@
 # Fonctionnement de pretix-openpos
 
-Documentation de fonctionnement du plugin, version 0.13.0. Elle couvre trois
+Documentation de fonctionnement du plugin, version 0.14.0. Elle couvre trois
 choses, dans cet ordre : ce que le plugin ajoute à pretix, comment le mettre en
 service, et ce qui se passe exactement quand un bénévole encaisse.
 
@@ -148,7 +148,11 @@ jamais supprimée : `save()` sur une ligne existante et `delete()` lèvent une
 | `reason` | Le motif saisi par l'opérateur, pour qui lira le journal plus tard |
 | `previous_hash`, `hash`, `hash_version` | La chaîne d'intégrité |
 
-### 2.5 Six écrans de back-office
+Deux modèles de réglage s'y ajoutent, chacun décrit là où il sert :
+**`PosDevice`** dit à quoi sert un appareil (§2.7) et **`PosCategory`** dit
+quel poste vend une catégorie (§2.7bis).
+
+### 2.5 Sept écrans de back-office
 
 [views.py](../pretix_openpos/views.py), [arrivals.py](../pretix_openpos/arrivals.py),
 [devices.py](../pretix_openpos/devices.py) et
@@ -159,6 +163,7 @@ jamais supprimée : `save()` sur une ligne existante et `delete()` lèvent une
 |---|---|---|
 | `/control/event/<org>/<ev>/openpos/` | Réglages (liste de contrôle d'accès) | `event.settings.general:write` |
 | `…/openpos/prices/` | Prix sur place | `event.items:write` |
+| `…/openpos/categories/` | Qui vend quoi : la catégorie réservée au bar ou à la porte | `event.items:write` |
 | `…/openpos/sales/` | Journal des ventes + relevé | `event.orders:read` |
 | `/control/organizer/<org>/openpos/arrivals/` | Affluence à l'entrée, tous événements passés | `event.orders:read` sur ≥ 1 événement |
 | `/control/organizer/<org>/openpos/devices/` | Appareils de caisse : rôle et lecteur de chacun | `organizer.devices:write` |
@@ -245,6 +250,73 @@ un lecteur non plus — les deux règles sont vérifiées à l'enregistrement, p
 suggérées. La liste déroulante est remplie depuis le compte SumUp de
 l'organisateur ; le §5quinquies décrit ce qui se passe ensuite.
 
+### 2.7bis Ce qu'un appareil a le droit de vendre
+
+Le rôle dit sur quel écran un appareil s'ouvre. Il ne disait rien, jusqu'ici, de
+ce qu'il pouvait vendre : un bénévole à la porte qui sort d'un scan et passe sur
+*Vendre* tombait sur toute la grille, la bière une ligne sous l'entrée.
+
+Une **catégorie de produits** peut donc être réservée à un poste, dans
+*Open POS → Qui vend quoi*, par événement.
+
+| Réservée à | Ce que ça fait |
+|---|---|
+| *Toutes les caisses* | rien : c'est l'état de départ de toute catégorie |
+| **La caisse du bar seulement** | un appareil de rôle *porte* ne la voit plus et ne peut plus la vendre |
+| **La porte seulement** | l'inverse |
+
+Le réglage est porté par la **catégorie**, pas par l'appareil, et c'est le fond
+du choix. Un appareil est appairé une fois pour toutes, une catégorie appartient
+à un événement : une liste de catégories rangée sur l'appareil nommerait des
+lignes que l'événement suivant n'a pas, et la lecture honnête de « aucune de ces
+catégories n'existe ici » est « rien n'est réservé ». La restriction s'éteindrait
+donc toute seule à l'événement suivant, sans qu'aucun écran ne le dise. Accrochée
+à la catégorie, elle ne s'éteint que là où quelqu'un n'a effectivement rien dit.
+En prime, c'est une réponse par catégorie au lieu d'une par appareil : une
+tablette prêtée à la porte à neuf heures reçoit un rôle, et le catalogue suit.
+
+Deux défauts, tous les deux dans le même sens — ne rien casser tant que personne
+n'a rien demandé :
+
+- **Un appareil sans rôle vend tout**, quoi qu'on réserve. C'est le cas de tout
+  appareil appairé avant que les rôles existent, et lui retirer des produits sur
+  la foi d'un rôle que personne ne lui a donné serait une régression le jour du
+  déploiement, sans qu'aucun écran ait changé.
+- **Un produit sans catégorie reste sur toutes les caisses.** Il n'y a pas de
+  ligne pour le réserver. L'écran le dit à l'endroit où on s'en apercevrait
+  autrement : « j'ai tout réservé et la porte montre encore les T-shirts ».
+
+Comme pour le lecteur de carte, c'est le **serveur** qui refuse, pas la grille.
+La grille plus courte est la moitié polie de la règle et c'est elle qui évite
+l'erreur ; `/checkout/` refuse la même ligne avec le code `category_not_sold` et
+un message qui nomme la catégorie. Une app périmée ou modifiée ne gagne donc
+rien à envoyer le panier quand même.
+
+**Sauf une vente déjà payée.** Une vente rejouée depuis la file hors ligne est
+enregistrée, pas refusée, et c'est le contraire de ce que fait le lecteur de
+carte au même endroit. La différence est ce que coûtent les deux refus. Un
+paiement lecteur ne peut pas avoir eu lieu hors réseau, donc l'accepter
+reviendrait à écrire un paiement carte que personne ne peut retrouver. Ici
+l'argent est dans le tiroir de toute façon : refuser le laisserait là sans
+aucune trace, ce qui est exactement l'état que ce journal existe pour éviter. Et
+la lecture ordinaire du cas est ennuyeuse — une tablette qui a vendu des bières
+avant qu'on lui donne le rôle *porte*, et qui rejoue après.
+
+La vente est donc écrite, **marquée et dite** :
+
+- la ligne de journal porte `outside_role: true`, qui survit à la catégorie
+  rendue libre la semaine suivante ;
+- la réponse de `/checkout/` porte `off_role` ;
+- l'historique de la commande reçoit une entrée
+  `pretix_openpos.order.off_role` qui nomme la caisse, le produit et la
+  catégorie — c'est la seule que quelqu'un lira.
+
+Les deux boutons qui ne sont pas des produits suivent la catégorie de leur
+produit comme les autres : une porte qui ne vend que des billets ne se voit plus
+proposer *Consigne rendue*. Offrir le bouton puis refuser la vente mettrait un
+bénévole devant un refus avec un client en face, ce qui est pire que de ne pas
+l'offrir.
+
 ---
 
 ## 3. Mise en service (pas à pas)
@@ -262,7 +334,7 @@ En Docker/Kubernetes, [`deploy/Dockerfile`](../deploy/Dockerfile) intègre le pl
 
 ```bash
 cd frontend && npm run build && cd ..
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.13.0 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.14.0 .
 ```
 
 Deux pièges :
@@ -294,6 +366,11 @@ Deux pièges :
    - **Produit de consigne** : active le bouton *Retour consigne*. La consigne
      elle-même se vend comme n'importe quel produit ; ce réglage n'ajoute que le
      retour. Voir §5quater.
+6. **Réserver les catégories, si besoin** — *Open POS → Qui vend quoi*. Facultatif
+   et sans effet tant qu'on n'y touche pas : chaque catégorie part sur *toutes les
+   caisses*. Réserver *Bar* à la caisse et *Entrées* à la porte est la mise en
+   place courante ; elle ne prend effet que sur les appareils à qui un rôle a été
+   donné (§3.3 et §2.7bis).
 
 ### 3.3 Créer une caisse
 
@@ -1676,6 +1753,7 @@ tarif serveur diffère de ce qui a été encaissé. Voir §5ter.
   "checked_in": 2,
   "checkin_errors": [],
   "off_tariff": [],
+  "off_role": [],
   "deposit_refund": null,
   "deposit_refund_seq": null,
   "net_total": "17.00"
@@ -1688,6 +1766,10 @@ le constate ; `net_total` est ce qui a changé de mains, négatif quand c'est le
 tiroir qui paie. Quand rien n'a été vendu, `order.code` est vide et
 `order.total` vaut `"0.00"` : il n'y a pas de commande, et en annoncer une à
 moins trois euros serait pire que de n'en annoncer aucune.
+
+`off_role` est vide sur tout ce que l'app pouvait taper dans la grille qu'on
+lui a servie. Quand il ne l'est pas, une caisse a rejoué une vente prise hors de
+ce que son rôle couvre : voir §2.7bis.
 
 `replayed` vaut `true` — avec un `200` au lieu d'un `201` — quand la clé
 d'idempotence désigne une vente déjà enregistrée. La réponse est alors celle de

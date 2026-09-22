@@ -26,7 +26,7 @@ from pretix.base.logentrytypes import (
 )
 from pretix.base.templatetags.money import money_filter
 
-from .models import PosDevice
+from .models import PosCategory, PosDevice
 
 
 def _money(value, currency):
@@ -105,6 +105,42 @@ class PricesChanged(NoOpShredderMixin, EventLogEntryType):
             item=name,
             before=_money(before, currency),
             after=_money(after, currency),
+        )
+
+
+@log_entry_types.new()
+class CategoriesChanged(NoOpShredderMixin, EventLogEntryType):
+    """Which categories were reserved for the bar, and which for the door."""
+
+    action_type = "pretix_openpos.categories.changed"
+
+    ROLES = {
+        PosCategory.ROLE_ALL: _("every till"),
+        PosDevice.ROLE_TILL: _("the bar till only"),
+        PosDevice.ROLE_DOOR: _("the door only"),
+    }
+
+    def display(self, logentry, data):
+        # No "written before this carried a list" branch, unlike the two
+        # entries above: this action type is new, so every entry that exists
+        # was written by the view below it.
+        changed = data.get("changed") or []
+        if not changed:
+            return _("Who sells what was saved with nothing changed.")
+        return format_html(
+            "{}<ul>{}</ul>",
+            _("Who sells what was changed:"),
+            format_html_join(
+                "", "<li>{}</li>", ((self._line(row),) for row in changed)
+            ),
+        )
+
+    def _line(self, row):
+        return format_html(
+            _("{category}: {before} → {after}"),
+            category=escape(row.get("category_name") or _("(deleted category)")),
+            before=self.ROLES.get(row.get("role_before"), "?"),
+            after=self.ROLES.get(row.get("role"), "?"),
         )
 
 
@@ -236,6 +272,58 @@ class SoldOffTariff(NoOpShredderMixin, OrderLogEntryType):
                             item=escape(_named(line)),
                             charged=_money(line.get("charged"), currency),
                             tariff=_money(line.get("tariff"), currency),
+                        ),
+                    )
+                    for line in lines
+                ),
+            ),
+        )
+
+
+@log_entry_types.new()
+class SoldOutsideRole(NoOpShredderMixin, OrderLogEntryType):
+    """
+    A till that replayed a sale from outside the categories its role covers.
+
+    Never written for a sale rung up live — that one is refused at the
+    checkout, before anything is taken. This is the other case: a till that was
+    cut off sold something, the customer paid, and by the time the sale reaches
+    the server its category has been reserved for the other role. The sale is
+    recorded, because refusing would leave the money in the drawer with nothing
+    to point at, and this line is the only place it is ever said.
+
+    The ordinary reading is dull: a tablet that sold beer before anybody gave
+    it the door's role. It is worth writing down anyway, because the dull
+    reading and the interesting one look identical from here, and only the
+    organiser can tell them apart.
+    """
+
+    action_type = "pretix_openpos.order.off_role"
+
+    def display(self, logentry, data):
+        lines = data.get("lines") or []
+        device = data.get("device")
+        heading = (
+            _("Replayed by {device}, from outside what that till sells:").format(
+                device=device
+            )
+            if device
+            else _("Replayed from outside what that till sells:")
+        )
+        return format_html(
+            "{}<ul>{}</ul>",
+            heading,
+            format_html_join(
+                "", "<li>{}</li>",
+                (
+                    (
+                        format_html(
+                            _("{count}× {item}, in {category}"),
+                            count=line.get("count", "?"),
+                            item=escape(_named(line)),
+                            category=escape(
+                                line.get("category_name") or _("no category")
+                            ),
                         ),
                     )
                     for line in lines

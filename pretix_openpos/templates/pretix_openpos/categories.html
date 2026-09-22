@@ -1,0 +1,96 @@
+{% extends "pretixcontrol/event/base.html" %}
+{% load i18n %}
+{% block title %}{% trans "Who sells what" %}{% endblock %}
+{% block content %}
+    <h1>{% trans "Who sells what" %}</h1>
+
+    <p>
+        {% blocktrans trimmed %}
+            Reserve a category for the bar or for the door, so that a device only offers what
+            it is there to sell. Leave a row on <strong>every till</strong> — which is where
+            every category starts — and nothing changes for it.
+        {% endblocktrans %}
+    </p>
+    <p>
+        {% blocktrans trimmed %}
+            This works together with the role each tablet is given under
+        {% endblocktrans %}
+        <a href="{{ devices_url }}">{% trans "Till devices" %}</a>{% blocktrans trimmed %}.
+            A device nobody has given a role to goes on selling everything, whatever is
+            reserved here.
+        {% endblocktrans %}
+    </p>
+
+    <form action="" method="post">
+        {% csrf_token %}
+        <div class="table-responsive">
+            <table class="table table-condensed table-hover">
+                <thead>
+                <tr>
+                    <th>{% trans "Category" %}</th>
+                    <th class="text-right">{% trans "Products" %}</th>
+                    <th>{% trans "Sold by" %}</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for row in rows %}
+                    <tr>
+                        <td>{{ row.category.name }}</td>
+                        <td class="text-right text-muted">{{ row.items }}</td>
+                        <td>
+                            <select name="role_{{ row.category.pk }}" class="form-control">
+                                {% for value, label in roles %}
+                                    <option value="{{ value }}"
+                                            {% if value == row.role %}selected{% endif %}>
+                                        {{ label }}
+                                    </option>
+                                {% endfor %}
+                            </select>
+                        </td>
+                    </tr>
+                {% empty %}
+                    <tr>
+                        <td colspan="3">
+                            {% trans "This event has no product categories yet, so there is nothing to reserve." %}
+                        </td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        {% if rows %}
+            <div class="alert {% if uncategorised %}alert-warning{% else %}alert-info{% endif %}">
+                <ul class="list-unstyled" style="margin-bottom: 0">
+                    {% for line in sells %}
+                        <li>
+                            <strong>{{ line.role }}:</strong>
+                            {% if line.categories %}
+                                {{ line.categories|join:", " }}
+                            {% else %}
+                                <em>{% trans "nothing — every category is reserved for the other one" %}</em>
+                            {% endif %}
+                        </li>
+                    {% endfor %}
+                </ul>
+                {% if uncategorised %}
+                    <p style="margin-top: 1em; margin-bottom: 0">
+                        {% blocktrans trimmed count n=uncategorised %}
+                            One product of this event is in no category, so it stays on every till
+                            whatever you reserve here. Put it in a category to have it follow one
+                            of the rows above.
+                        {% plural %}
+                            {{ n }} products of this event are in no category, so they stay on every
+                            till whatever you reserve here. Put them in a category to have them
+                            follow the rows above.
+                        {% endblocktrans %}
+                    </p>
+                {% endif %}
+            </div>
+        {% endif %}
+
+        <div class="form-group submit-group">
+            <button type="submit" class="btn btn-primary btn-save">{% trans "Save" %}</button>
+        </div>
+    </form>
+{% endblock %}
