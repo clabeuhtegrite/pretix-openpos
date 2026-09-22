@@ -23,7 +23,7 @@ from rest_framework.response import Response
 from .. import __version__
 from ..channels import POS_CHANNEL, PosSalesChannelType
 from ..invoicing import pos_invoices_enabled
-from ..models import PosDevice, PosPrice, PosSale, PosTerminalPayment
+from ..models import PosCategory, PosDevice, PosPrice, PosSale, PosTerminalPayment
 from ..payment import CARD, CASH
 from ..sumup import SumUpAccount, SumUpError, still_running, succeeded
 from ..webhook import webhook_url
@@ -342,9 +342,15 @@ def refund_key(idempotency_key: str) -> str:
 class ResolvedLine:
     """One basket line, priced, with everything the caller needs downstream."""
 
-    __slots__ = ("item", "variation", "price", "tariff", "count", "description", "refund")
+    __slots__ = (
+        "item", "variation", "price", "tariff", "count", "description", "refund",
+        "outside_role",
+    )
 
-    def __init__(self, *, item, variation, price, tariff, count, description, refund):
+    def __init__(
+        self, *, item, variation, price, tariff, count, description, refund,
+        outside_role=False,
+    ):
         self.item = item
         self.variation = variation
         #: What the customer is charged for one of these.
@@ -354,9 +360,15 @@ class ResolvedLine:
         self.count = count
         self.description = description
         self.refund = refund
+        #: Sold by a device whose role does not cover this category. Only ever
+        #: true on a sale already paid for: a live one is refused outright.
+        self.outside_role = outside_role
 
 
-def resolve_line(line, *, sellable, overrides, custom_item, deposit, settled, subevent=None):
+def resolve_line(
+    line, *, sellable, overrides, custom_item, deposit, settled, subevent=None,
+    off_limits=frozenset(),
+):
     """
     Price one line of a basket, and refuse the ones that may not be sold.
 
@@ -371,11 +383,33 @@ def resolve_line(line, *, sellable, overrides, custom_item, deposit, settled, su
     because what was charged is a fact and not a proposal; and a catalogue that
     has moved since stops being a reason to refuse, because refusing does not
     give the money back, it only strands the sale outside pretix.
+
+    ``off_limits`` is the categories this device is not the one to sell. A line
+    from one of them is refused outright while nothing has been taken, and only
+    reported once something has — see :func:`_outside_role`.
     """
     item = sellable.get(line["item"])
     if item is None:
         raise ValidationError(
             {"positions": [_("Product {id} is not on sale at the till.").format(id=line["item"])]}
+        )
+
+    # What this till is for, before what it costs. Checked here rather than
+    # left to the grid the app drew, which is the whole reason the answer is
+    # stored on the server: a volunteer coming out of the scanner is one tap
+    # from the beer, and a catalogue is only a suggestion once the request has
+    # left the tablet.
+    outside_role = item.category_id in off_limits
+    if outside_role and not settled:
+        raise ValidationError(
+            {
+                "positions": [
+                    _("This till does not sell {category}.").format(
+                        category=str(item.category.name) if item.category else ""
+                    )
+                ],
+                "code": "category_not_sold",
+            }
         )
 
     variations = list(item.variations.all())
@@ -438,6 +472,7 @@ def resolve_line(line, *, sellable, overrides, custom_item, deposit, settled, su
         count=line["count"],
         description=description,
         refund=is_refund,
+        outside_role=outside_role,
     )
 
 
@@ -453,7 +488,13 @@ def sellable_items(event, channel, *, settled):
     items = event.items.all()
     if not settled:
         items = items.filter_available(channel=channel)
-    return {item.pk: item for item in items.prefetch_related("variations")}
+    # The category rides along because every line is now asked which one it is
+    # in, and naming it in a refusal is the difference between "this till does
+    # not sell Bar" and a product id.
+    return {
+        item.pk: item
+        for item in items.select_related("category").prefetch_related("variations")
+    }
 
 
 def settle_terminal_payment(payment, account):
@@ -585,8 +626,17 @@ class OpenPosViewSet(viewsets.ViewSet):
         device = request.auth if isinstance(request.auth, Device) else None
         pos_device = PosDevice.for_device(device)
         clist = checkin_list_for(event)
+        # The two extra buttons follow their product's category like any other
+        # tile. A door told to sell tickets only has no business handing a cup
+        # deposit back over the counter, and offering the button anyway would
+        # put a volunteer in front of a refusal with a customer waiting.
+        off_limits = PosCategory.off_limits(event, pos_device)
         custom = custom_sale_item(event)
+        if custom is not None and custom.category_id in off_limits:
+            custom = None
         deposit = deposit_item(event)
+        if deposit is not None and deposit.category_id in off_limits:
+            deposit = None
         # Only when there is something to price: the tariff is one query, and
         # most events run neither button.
         deposit_price = (
@@ -675,6 +725,12 @@ class OpenPosViewSet(viewsets.ViewSet):
     @action(detail=False, methods=["get"], url_path="catalog", url_name="catalog")
     def catalog(self, request, **kwargs):
         event = request.event
+        device = request.auth if isinstance(request.auth, Device) else None
+        # What this device is for, narrowing what it is offered. The grid is
+        # only the polite half of the rule — the checkout refuses the same
+        # lines — but it is the half that stops a volunteer coming out of the
+        # scanner from tapping a beer by mistake, which is what it is for.
+        off_limits = PosCategory.off_limits(event, PosDevice.for_device(device))
         channel = get_pos_channel(event.organizer)
         # Raises for a series with nothing on, which is a 400 here rather than
         # a refusal at the payment: the volunteer meets it while setting up.
@@ -700,6 +756,8 @@ class OpenPosViewSet(viewsets.ViewSet):
             # same, because that is what the checkout resolves it against, so
             # hiding it is this line rather than the organiser's problem.
             if custom is not None and item.pk == custom.pk:
+                continue
+            if item.category_id in off_limits:
                 continue
             variations = list(item.variations.all())
             entry = {
@@ -855,6 +913,11 @@ class OpenPosViewSet(viewsets.ViewSet):
         )
 
         sellable = sellable_items(event, channel, settled=settled)
+        # The same answer the catalogue was drawn from, asked again here
+        # because that is the only place it binds. A live line from one of
+        # these categories is refused; a line whose money has already changed
+        # hands is written down and reported — see off_role below.
+        off_limits = PosCategory.off_limits(event, pos_device)
 
         api_positions = []
         journal_positions = []
@@ -864,6 +927,17 @@ class OpenPosViewSet(viewsets.ViewSet):
         #: Negative, and outside any order — see PosSale.KIND_DEPOSIT_REFUND.
         refund_total = Decimal("0.00")
         off_tariff = []
+        #: Lines a till sold outside the categories its role covers.
+        #:
+        #: Only ever filled by a sale that was already paid for, because a live
+        #: one never gets this far. Refusing a replay would be the tidier rule
+        #: and the wrong one: the money is in the drawer either way, and a
+        #: refusal would leave it there with no record at all — which is the
+        #: state this whole journal exists to prevent. It is also the ordinary
+        #: case rather than a suspicious one the first evening this is set up,
+        #: since a tablet that sold beer before it was given the door's role
+        #: replays afterwards. So it is written down, marked, and said out loud.
+        off_role = []
         #: Free-amount reasons, for the order's comment in the back office.
         notes = []
 
@@ -876,6 +950,7 @@ class OpenPosViewSet(viewsets.ViewSet):
                 deposit=deposit,
                 settled=settled,
                 subevent=subevent,
+                off_limits=off_limits,
             )
             item = resolved.item
             variation = resolved.variation
@@ -908,6 +983,17 @@ class OpenPosViewSet(viewsets.ViewSet):
                     }
                 )
 
+            if resolved.outside_role:
+                off_role.append(
+                    {
+                        "item": item.pk,
+                        "item_name": str(item.name),
+                        "category": item.category_id,
+                        "category_name": str(item.category.name) if item.category else "",
+                        "count": count,
+                    }
+                )
+
             journal_line = {
                 "item": item.pk,
                 "item_name": str(item.name),
@@ -934,6 +1020,11 @@ class OpenPosViewSet(viewsets.ViewSet):
                 # Kept on the line itself, so the divergence survives in the
                 # journal even after the tariff has been edited again.
                 journal_line["tariff_price"] = str(tariff)
+            if resolved.outside_role:
+                # On the line for the same reason: the journal outlives the
+                # order, and the category may well be un-reserved next week,
+                # at which point nothing else would say this row was odd.
+                journal_line["outside_role"] = True
 
             if is_refund:
                 refund_total += price * count
@@ -1100,6 +1191,19 @@ class OpenPosViewSet(viewsets.ViewSet):
                         auth=request.auth,
                     )
 
+                if off_role:
+                    # The one trace an organiser will ever look at. It is not a
+                    # refusal and it is not an accusation: the ordinary reading
+                    # is a till that sold before its role was given to it, and
+                    # the useful thing is that the order says which till and
+                    # which category rather than nothing at all.
+                    order.log_action(
+                        "pretix_openpos.order.off_role",
+                        data={"lines": off_role, "device": device.name if device else ""},
+                        user=request.user if request.user.is_authenticated else None,
+                        auth=request.auth,
+                    )
+
                 sale = PosSale.record(
                     event=event,
                     order=order,
@@ -1162,6 +1266,11 @@ class OpenPosViewSet(viewsets.ViewSet):
         # Empty on every online sale. When it is not, an operator has to be told:
         # a price moved while the till could not hear about it.
         body["off_tariff"] = off_tariff
+        # Empty on everything the app could have rung up from the grid it was
+        # served. When it is not, a till has replayed a sale from outside what
+        # its role covers, and the resync panel is where the operator holding
+        # the tablet finds out.
+        body["off_role"] = off_role
         return Response(body, status=status.HTTP_201_CREATED)
 
     # -- offline snapshot ---------------------------------------------------
@@ -1287,6 +1396,12 @@ class OpenPosViewSet(viewsets.ViewSet):
         deposit = deposit_item(event)
         subevent = selling_subevent(event)
         sellable = sellable_items(event, channel, settled=False)
+        # Refused here too, and this is the one that matters: the checkout
+        # records a basket the reader has already charged rather than refusing
+        # it, so a forbidden line that got as far as a cardholder would be
+        # written down instead of turned away. Nothing has moved yet at this
+        # point, and refusing costs a tap.
+        off_limits = PosCategory.off_limits(event, _pos_device)
 
         priced = []
         total = Decimal("0.00")
@@ -1300,6 +1415,7 @@ class OpenPosViewSet(viewsets.ViewSet):
                 deposit=deposit,
                 settled=False,
                 subevent=subevent,
+                off_limits=off_limits,
             )
             total += resolved.price * resolved.count
             if not resolved.refund:

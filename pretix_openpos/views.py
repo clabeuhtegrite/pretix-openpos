@@ -19,7 +19,7 @@ from pretix.control.views.event import EventSettingsFormView, EventSettingsViewM
 
 from .api.views import BUSINESS_DAY_STARTS_AT
 from .forms import OpenPosSettingsForm
-from .models import PosPrice, PosSale
+from .models import PosCategory, PosDevice, PosPrice, PosSale
 
 
 class SettingsView(EventSettingsViewMixin, EventSettingsFormView):
@@ -202,6 +202,171 @@ class PricesView(EventPermissionRequiredMixin, TemplateView):
         return redirect(
             reverse(
                 "plugins:pretix_openpos:prices",
+                kwargs={
+                    "organizer": request.event.organizer.slug,
+                    "event": request.event.slug,
+                },
+            )
+        )
+
+
+class CategoriesView(EventPermissionRequiredMixin, TemplateView):
+    """
+    Say which categories the bar sells and which the door sells.
+
+    The complaint this answers is small and happens every evening: a volunteer
+    at the door finishes a scan, taps through to sell somebody a ticket, and
+    lands on the whole grid with the beer one row under the entry. Nothing
+    stops them, and nothing tells them.
+
+    One question per category, rendered as a table for the same reason the
+    tariff is: the answers are short, there are a handful of them, and what an
+    organiser wants while setting up a night is to see every category and who
+    sells it at once. Leaving every row alone is the default and means what it
+    has always meant — every till sells everything.
+
+    Event-level, because that is where categories live. The other half of the
+    rule, which tablet is the bar and which is the door, is set once per device
+    on the organizer's till-devices screen: a device is paired for good, a
+    category belongs to one event, and the two settings meet in the role.
+    """
+
+    template_name = "pretix_openpos/categories.html"
+    # The same permission as the products the categories hold: whoever may say
+    # what is sold may say who sells it.
+    permission = "event.items:write"
+
+    def _categories(self):
+        return self.request.event.categories.order_by("position", "pk")
+
+    def _rows(self, submitted=None):
+        """Every category of the event, with who sells it and what is in it."""
+        stored = {
+            pc.category_id: pc.role
+            for pc in PosCategory.objects.filter(category__event=self.request.event)
+        }
+        # How many products are in each category, so a row that turns out to
+        # matter can be told from one that holds nothing. Counted over the
+        # whole event rather than over the till's channel: a product not on
+        # the Open POS channel is invisible at every till anyway, and a count
+        # that silently ignored it would read as an empty category to somebody
+        # who is looking straight at its products.
+        counts = dict(
+            self.request.event.items.values_list("category_id")
+            .annotate(n=Count("pk"))
+            .values_list("category_id", "n")
+        )
+        rows = []
+        for category in self._categories():
+            role = stored.get(category.pk, PosCategory.ROLE_ALL)
+            if submitted is not None:
+                role = submitted.get(f"role_{category.pk}", PosCategory.ROLE_ALL)
+            rows.append(
+                {
+                    "category": category,
+                    "role": role,
+                    "items": counts.get(category.pk, 0),
+                }
+            )
+        return rows
+
+    def get_context_data(self, submitted=None, **kwargs):
+        ctx = super().get_context_data(**kwargs)
+        rows = self._rows(submitted)
+        ctx["rows"] = rows
+        ctx["roles"] = PosCategory.ROLE_CHOICES
+        # What each role ends up selling, spelled out under the table. The
+        # dropdowns say who may sell a category; this says what a tablet will
+        # actually show, which is the thing being decided and is not the same
+        # sentence read backwards.
+        ctx["sells"] = [
+            {
+                "role": label,
+                "categories": [
+                    str(row["category"].name)
+                    for row in rows
+                    if row["role"] in (PosCategory.ROLE_ALL, role)
+                ],
+            }
+            for role, label in (
+                (PosDevice.ROLE_TILL, _("A till device sells")),
+                (PosDevice.ROLE_DOOR, _("A door device sells")),
+            )
+        ]
+        # Products in no category at all. They stay on every till whatever is
+        # reserved here, because there is no row to reserve them on — said out
+        # loud rather than left to be discovered, since "I reserved everything
+        # and the door still shows the beer" is exactly how it would be found.
+        ctx["uncategorised"] = self.request.event.items.filter(
+            category__isnull=True
+        ).count()
+        ctx["devices_url"] = reverse(
+            "plugins:pretix_openpos:devices",
+            kwargs={"organizer": self.request.event.organizer.slug},
+        )
+        return ctx
+
+    def post(self, request, *args, **kwargs):
+        categories = list(self._categories())
+        submitted = {
+            category.pk: (request.POST.get(f"role_{category.pk}") or "")
+            for category in categories
+        }
+
+        valid = {choice for choice, _label in PosCategory.ROLE_CHOICES}
+        unknown = sorted(set(submitted.values()) - valid)
+        if unknown:
+            # A hand-made POST, or a form from a build that knew a role this
+            # one does not. Nothing is written either way.
+            messages.error(
+                request,
+                _("“{role}” is not one of the answers on this page.").format(
+                    role=unknown[0]
+                ),
+            )
+            return self.render_to_response(self.get_context_data())
+
+        stored = {
+            pc.category_id: pc
+            for pc in PosCategory.objects.filter(category__event=request.event)
+        }
+        # Both sides of every row that moved, with the name copied in: a
+        # category renamed next season would otherwise leave the history
+        # pointing at nothing, and the question asked of this entry is always
+        # "who took the beer off the door, and when".
+        changed = []
+        with transaction.atomic():
+            for category in categories:
+                role = submitted[category.pk]
+                current = stored.get(category.pk)
+                before = current.role if current else PosCategory.ROLE_ALL
+                if before == role:
+                    continue
+                if role == PosCategory.ROLE_ALL:
+                    # Unreserved is the absence of a row, not a row saying
+                    # nothing: it is the state a category starts in, and the
+                    # two want to look the same in the database.
+                    PosCategory.objects.filter(category=category).delete()
+                else:
+                    PosCategory.objects.update_or_create(
+                        category=category, defaults={"role": role}
+                    )
+                changed.append(
+                    {
+                        "category": category.pk,
+                        "category_name": str(category.name),
+                        "role": role,
+                        "role_before": before,
+                    }
+                )
+
+        request.event.log_action(
+            "pretix_openpos.categories.changed", user=request.user, data={"changed": changed}
+        )
+        messages.success(request, _("Who sells what has been saved."))
+        return redirect(
+            reverse(
+                "plugins:pretix_openpos:categories",
                 kwargs={
                     "organizer": request.event.organizer.slug,
                     "event": request.event.slug,

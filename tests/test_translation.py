@@ -173,3 +173,70 @@ def test_the_back_office_renders_in_french(backoffice, event, till, ticket):
     # English silently, so nothing but rendering the page catches it.
     assert "Soirées du" in page
     assert ">au</label>" in page
+
+
+@pytest.mark.django_db
+def test_the_new_screen_renders_in_french(backoffice, event, beer):
+    """
+    The screen that says which counter sells which category.
+
+    Its longest strings live in the template rather than in Python, and a
+    ``blocktrans`` whose wording drifts from the catalogue by one character
+    falls back to English without failing anything else.
+    """
+    from pretix.base.models import ItemCategory, User
+
+    User.objects.filter(email="boss@example.org").update(locale="fr")
+    ItemCategory.objects.create(event=event, name="Bar")
+
+    page = backoffice.get(
+        f"/control/event/{event.organizer.slug}/{event.slug}/openpos/categories/"
+    ).content.decode()
+
+    assert "Qui vend quoi" in page
+    assert "Who sells what" not in page
+    assert "Toutes les caisses" in page
+    assert "Un appareil de porte vend" in page
+    # The paragraph that explains the default, which is the one nobody reads
+    # until they are wondering why nothing changed.
+    assert "n’affiche que ce qu’il est là pour vendre" in page
+
+
+@pytest.mark.django_db
+def test_a_till_told_it_may_not_sell_something_is_told_in_french(
+    till, device, event, beer
+):
+    """
+    The refusal a volunteer actually meets, with a customer in front of them.
+
+    Sent the way the tablet sends it, ``Accept-Language`` and all, for the
+    reason given above: an HTTP request picks its own language, and
+    ``translation.override`` would prove something else.
+
+    It names the category, so it has to be the category's own name and a French
+    sentence around it — not a product id, and not English.
+    """
+    from pretix.base.models import ItemCategory
+
+    from pretix_openpos.models import PosCategory, PosDevice
+
+    category = ItemCategory.objects.create(event=event, name="Bar")
+    beer.category = category
+    beer.save()
+    PosCategory.objects.create(category=category, role=PosDevice.ROLE_TILL)
+    PosDevice.objects.create(device=device, role=PosDevice.ROLE_DOOR)
+
+    response = till.client.post(
+        till.url("checkout"),
+        data={
+            "idempotency_key": "role-0001",
+            "positions": [{"item": beer.pk, "count": 1}],
+            "payment_type": "cash",
+        },
+        content_type="application/json",
+        HTTP_AUTHORIZATION=f"Device {till.device.api_token}",
+        HTTP_ACCEPT_LANGUAGE="fr",
+    )
+
+    assert response.status_code == 400
+    assert response.json()["positions"][0] == "Cette caisse ne vend pas Bar."

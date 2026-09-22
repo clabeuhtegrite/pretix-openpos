@@ -40,6 +40,15 @@ the scope section before deciding it fits.
   one rule attached to it enforceable: a till with a card reader assigned cannot
   record a card payment that reader did not validate — not from a stale app, not
   from an edited one, and not from the offline queue.
+- **Each counter sells its own categories.** Reserve a product category for the
+  bar or for the door, and a device offers only what it is there to sell — no
+  more coming out of a scan onto the whole grid with the beer one row under the
+  entry. Set per category rather than per device, because a device is paired
+  once and a category belongs to one event. The catalogue is only the polite
+  half: the server refuses the same line whatever the app sends. A sale already
+  paid for and replayed from the offline queue is the exception — it is
+  recorded, marked and reported, because refusing would leave the money in the
+  drawer with no trace of it at all.
 - **A SumUp card reader, driven by the server.** Pair a SumUp Solo to your
   account from the back office, give it to a till, and choosing "card" there
   puts the basket on the reader and waits for the customer. The server prices
