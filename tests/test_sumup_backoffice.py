@@ -458,9 +458,17 @@ def test_a_reader_may_only_be_given_to_a_till(backoffice, organizer, device, sum
 
 
 @pytest.mark.django_db
-def test_two_tills_cannot_share_one_reader(
+def test_two_tills_may_share_one_reader(
     backoffice, organizer, device, another_till, sumup
 ):
+    """
+    A bar with two tablets and one machine between them.
+
+    Safe because the server takes turns for them rather than because the
+    assignment is forbidden: while one till has a basket on the reader the
+    other is refused the card and sells for cash. Refusing here instead would
+    only mean a second tablet that cannot take a card at all.
+    """
     reader_id = sumup.add_reader("rdr_A")
 
     backoffice.post(
@@ -473,7 +481,38 @@ def test_two_tills_cannot_share_one_reader(
         },
     )
 
-    assert not PosDevice.objects.exists()
+    assert PosDevice.objects.filter(sumup_reader_id=reader_id).count() == 2
+
+
+@pytest.mark.django_db
+def test_a_shared_reader_says_so_on_the_screen(
+    backoffice, organizer, device, another_till, sumup
+):
+    # Allowed, but never by accident: an organizer who gave the same machine to
+    # two tablets has to be able to see that from the screen.
+    reader_id = sumup.add_reader("rdr_A")
+    for each in (device, another_till.device):
+        PosDevice.objects.create(
+            device=each, role=PosDevice.ROLE_TILL, sumup_reader_id=reader_id
+        )
+
+    page = backoffice.get(devices_url(organizer)).content.decode()
+
+    assert "Shared with another till" in page
+
+
+@pytest.mark.django_db
+def test_a_reader_on_one_till_alone_says_nothing_about_sharing(
+    backoffice, organizer, device, sumup
+):
+    reader_id = sumup.add_reader("rdr_A")
+    PosDevice.objects.create(
+        device=device, role=PosDevice.ROLE_TILL, sumup_reader_id=reader_id
+    )
+
+    page = backoffice.get(devices_url(organizer)).content.decode()
+
+    assert "Shared with another till" not in page
 
 
 @pytest.mark.django_db

@@ -22,6 +22,7 @@ from unittest.mock import patch
 import pytest
 import requests
 from django.db import IntegrityError
+from django.utils.timezone import now
 
 from pretix_openpos.models import PosDevice, PosSale, PosTerminalPayment
 
@@ -741,3 +742,184 @@ def test_a_write_that_fails_for_another_reason_is_still_a_failure(
             start(till, [{"item": ticket.pk, "count": 1}])
 
     assert not PosTerminalPayment.objects.exists()
+
+
+# -- two tills, one reader --------------------------------------------------
+#
+# A bar with two tablets and one machine between them. Allowed, and safe only
+# because the server takes turns for them: SumUp's reader checkout refuses the
+# *second* call, by which time a payment row has been written and a till's
+# idempotency key has been spent on a basket that never reached the reader.
+
+
+@pytest.fixture
+def shared_reader(device, another_till, sumup):
+    """One reader, given to both tills."""
+    reader_id = sumup.add_reader()
+    PosDevice.objects.create(
+        device=device, role=PosDevice.ROLE_TILL, sumup_reader_id=reader_id
+    )
+    PosDevice.objects.create(
+        device=another_till.device, role=PosDevice.ROLE_TILL, sumup_reader_id=reader_id
+    )
+    return reader_id
+
+
+@pytest.mark.django_db
+def test_a_second_till_cannot_put_a_basket_on_a_busy_reader(
+    till, another_till, ticket, shared_reader, sumup
+):
+    start(till, [{"item": ticket.pk, "count": 1}], key="premiere-01")
+
+    response = start(another_till, [{"item": ticket.pk, "count": 1}], key="seconde-01")
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "terminal_busy"
+
+
+@pytest.mark.django_db
+def test_the_refused_till_is_left_with_nothing_written_down(
+    till, another_till, event, ticket, shared_reader, sumup
+):
+    """
+    The point of refusing here rather than letting SumUp refuse. Nothing was
+    put on the reader, so nothing may be recorded as having been: a payment row
+    would spend this till's key on a basket no cardholder ever saw, and the
+    cashier would be holding a key they cannot use again.
+    """
+    start(till, [{"item": ticket.pk, "count": 1}], key="premiere-01")
+
+    start(another_till, [{"item": ticket.pk, "count": 1}], key="seconde-01")
+
+    assert not PosTerminalPayment.objects.filter(idempotency_key="seconde-01").exists()
+    # And SumUp was never asked to put a second amount on the machine.
+    assert len([p for p in sumup.call_paths("POST") if p.endswith("/checkout")]) == 1
+
+
+@pytest.mark.django_db
+def test_the_other_till_can_still_sell_for_cash(
+    till, another_till, event, ticket, shared_reader, sumup
+):
+    # The whole point of blocking rather than breaking: one machine is busy,
+    # the bar is not.
+    start(till, [{"item": ticket.pk, "count": 1}], key="premiere-01")
+
+    response = sell(
+        another_till, [{"item": ticket.pk, "count": 1}], idempotency_key="liquide-01"
+    )
+
+    assert response.status_code == 201
+    assert PosSale.objects.filter(idempotency_key="liquide-01").exists()
+
+
+@pytest.mark.django_db
+def test_the_reader_frees_up_the_moment_the_first_payment_lands(
+    till, another_till, ticket, shared_reader, sumup
+):
+    start(till, [{"item": ticket.pk, "count": 1}], key="premiere-01")
+    payment = PosTerminalPayment.objects.get(idempotency_key="premiere-01")
+    sumup.pay(payment.client_transaction_id, transaction_id="tx_1")
+
+    # Asked, not assumed: the row still reads pending because nobody on the
+    # first till has polled since. That must not hold the machine.
+    response = start(another_till, [{"item": ticket.pk, "count": 1}], key="seconde-01")
+
+    assert response.status_code == 201
+
+
+@pytest.mark.django_db
+def test_a_refused_card_does_not_hold_the_reader_either(
+    till, another_till, ticket, shared_reader, sumup
+):
+    start(till, [{"item": ticket.pk, "count": 1}], key="premiere-01")
+    payment = PosTerminalPayment.objects.get(idempotency_key="premiere-01")
+    sumup.pay(payment.client_transaction_id, transaction_id="tx_1", status="FAILED")
+
+    assert start(
+        another_till, [{"item": ticket.pk, "count": 1}], key="seconde-01"
+    ).status_code == 201
+
+
+@pytest.mark.django_db
+def test_a_basket_nobody_ever_answered_stops_holding_the_reader(
+    till, another_till, ticket, shared_reader, sumup
+):
+    """
+    The failure this must not have. A payment left pending — a till that went
+    flat with a prompt up — would otherwise take card off the bar for the rest
+    of the evening, with nobody able to say why. Long past any customer still
+    standing there, the machine is cleared and the next basket goes on.
+    """
+    from pretix_openpos.api.views import READER_HELD_FOR
+
+    start(till, [{"item": ticket.pk, "count": 1}], key="abandonnee-01")
+    PosTerminalPayment.objects.filter(idempotency_key="abandonnee-01").update(
+        created=now() - READER_HELD_FOR * 2
+    )
+
+    response = start(another_till, [{"item": ticket.pk, "count": 1}], key="seconde-01")
+
+    assert response.status_code == 201
+    # Cleared first, or SumUp refuses the checkout and the cashier is left
+    # looking at a machine that says nothing.
+    assert [p for p in sumup.call_paths("POST") if p.endswith("/terminate")]
+
+
+@pytest.mark.django_db
+def test_the_abandoned_payment_is_not_written_off_by_the_till_that_took_over(
+    till, another_till, ticket, shared_reader, sumup
+):
+    # Clearing a screen says nothing about whether a card was charged. Only
+    # SumUp's own transaction does, and that is what settling asks — so the
+    # row stays open for the back office rather than being guessed at here.
+    from pretix_openpos.api.views import READER_HELD_FOR
+
+    start(till, [{"item": ticket.pk, "count": 1}], key="abandonnee-01")
+    PosTerminalPayment.objects.filter(idempotency_key="abandonnee-01").update(
+        created=now() - READER_HELD_FOR * 2
+    )
+
+    start(another_till, [{"item": ticket.pk, "count": 1}], key="seconde-01")
+
+    held = PosTerminalPayment.objects.get(idempotency_key="abandonnee-01")
+    assert held.status == PosTerminalPayment.STATUS_PENDING
+
+
+@pytest.mark.django_db
+def test_a_till_retrying_its_own_basket_is_not_blocked_by_itself(
+    till, ticket, reader_till, sumup
+):
+    # The replay path: same key, same basket. It must come back as the same
+    # payment rather than as "the reader is busy" — which it would, since the
+    # payment holding the reader is this one.
+    first = start(till, [{"item": ticket.pk, "count": 1}], key="meme-cle-01")
+    second = start(till, [{"item": ticket.pk, "count": 1}], key="meme-cle-01")
+
+    assert (first.status_code, second.status_code) == (201, 200)
+    assert PosTerminalPayment.objects.filter(idempotency_key="meme-cle-01").count() == 1
+
+
+@pytest.mark.django_db
+def test_a_reader_on_one_till_only_is_unaffected(till, ticket, reader_till, sumup):
+    # The ordinary case, and the one that must not have grown a lookup that
+    # refuses it: nothing else is on this machine.
+    assert start(till, [{"item": ticket.pk, "count": 1}]).status_code == 201
+
+
+@pytest.mark.django_db
+def test_a_payment_on_a_different_reader_does_not_block_this_one(
+    till, another_till, event, ticket, sumup
+):
+    first_reader = sumup.add_reader("rdr_BAR")
+    second_reader = sumup.add_reader("rdr_ENTREE")
+    PosDevice.objects.create(
+        device=till.device, role=PosDevice.ROLE_TILL, sumup_reader_id=first_reader
+    )
+    PosDevice.objects.create(
+        device=another_till.device, role=PosDevice.ROLE_TILL, sumup_reader_id=second_reader
+    )
+    start(till, [{"item": ticket.pk, "count": 1}], key="bar-01")
+
+    assert start(
+        another_till, [{"item": ticket.pk, "count": 1}], key="entree-01"
+    ).status_code == 201

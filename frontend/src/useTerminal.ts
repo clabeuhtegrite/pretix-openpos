@@ -122,6 +122,21 @@ export function useTerminal(
       try {
         apply(await api.terminalStart(pairing, { idempotency_key: key, positions }));
       } catch (err) {
+        // The reader is in the middle of somebody else's payment — two tills
+        // behind one bar sharing one machine. Nothing was put on the reader
+        // and nothing was charged, so this is a plain answer rather than an
+        // unknown: the panel says so, the method toggle stays live, and the
+        // sale goes through in cash or waits a moment.
+        if (errorCode(err) === "terminal_busy") {
+          setState({
+            phase: "failed",
+            amount: null,
+            currency: null,
+            message: t("payment.readerTaken"),
+            stalled: false,
+          });
+          return;
+        }
         // ``terminal_unsure`` is the server saying the same thing about its own
         // leg: it could not get an answer out of SumUp, so the amount may be on
         // the reader with only the answer lost. It arrives as a 400 and is

@@ -111,6 +111,16 @@ class DevicesView(OrganizerDetailViewMixin, OrganizerPermissionRequiredMixin, Te
                     and pos_device.sumup_reader_id not in {r for r, _l in readers},
                 }
             )
+        # Which tills share a machine. Said on the screen rather than refused:
+        # sharing works, and the one thing an organizer needs to know about it
+        # is that the two tills take turns on the card.
+        shared = {
+            row["reader"]
+            for row in rows
+            if row["reader"] and sum(1 for r in rows if r["reader"] == row["reader"]) > 1
+        }
+        for row in rows:
+            row["shares_reader"] = row["reader"] in shared
         ctx["rows"] = rows
         ctx["roles"] = PosDevice.ROLE_CHOICES
         ctx["readers"] = readers
@@ -202,10 +212,10 @@ class DevicesView(OrganizerDetailViewMixin, OrganizerPermissionRequiredMixin, Te
                     "A card reader can only be given to a till. Set “{device}” to "
                     "till, or take its reader away."
                 ).format(device=device.name)
-            if reader in seen:
-                return _(
-                    "Two devices cannot share one card reader. “{device}” wants one "
-                    "that is already taken."
-                ).format(device=device.name)
+            # Two tills sharing one reader is allowed: a bar with two tablets
+            # and one machine between them is a real counter. It is safe
+            # because the server serialises them — a basket cannot go on a
+            # reader another till is still waiting on — and the second till
+            # keeps taking cash meanwhile.
             seen.add(reader)
         return None

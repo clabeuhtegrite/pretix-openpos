@@ -175,6 +175,18 @@ export interface CartLine {
   refund?: boolean;
 }
 
+/**
+ * Money the till is holding for a customer whose order it just cancelled.
+ *
+ * Not a basket line: it is not something being sold, it is a figure the next
+ * payment is settled against, and it names the order it came from so the
+ * operator can see which correction they are in the middle of.
+ */
+export interface Credit {
+  amountCents: number;
+  order: string;
+}
+
 export type PaymentType = "cash" | "card";
 
 /** Where a card payment put on a reader has got to. */

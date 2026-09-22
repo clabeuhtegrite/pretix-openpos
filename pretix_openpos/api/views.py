@@ -35,6 +35,16 @@ CARD_DECLARED = "declared"
 #: A reader is assigned to this device and is the only way to pay by card on it.
 CARD_TERMINAL = "terminal"
 
+#: How long a reader is treated as held by a payment nobody has answered.
+#:
+#: One machine can only face one cardholder, so a payment waiting on a reader
+#: holds it against every till that shares it. Past this it is a leftover
+#: rather than a payment in progress — the prompt has timed out on the device
+#: long before — and a leftover that held the reader for the rest of the
+#: evening would be the worse failure of the two: it would take card payments
+#: off the bar entirely, with nobody able to say why.
+READER_HELD_FOR = timedelta(minutes=5)
+
 
 def get_pos_channel(organizer):
     """
@@ -968,6 +978,65 @@ class OpenPosViewSet(viewsets.ViewSet):
             "failure": payment.failure,
         }
 
+    @staticmethod
+    def _refuse_if_reader_is_busy(event, reader_id, idempotency_key, account):
+        """
+        One reader, one cardholder — even when two tills share it.
+
+        Two tablets behind one bar with one machine between them is a shape
+        Open POS allows, and nothing in SumUp's reader checkout makes it safe
+        on its own: it answers the *second* call with "busy", by which time
+        this server has written a payment row and spent the till's idempotency
+        key on a basket that never reached the reader. The cashier is then
+        looking at a failure for a payment that was never attempted, holding a
+        key they cannot reuse.
+
+        So the refusal is made here, before anything is written. The other till
+        keeps its cardholder, this one is told to wait or take cash, and its
+        basket is untouched — the key is minted per attempt, so pressing card
+        again a moment later is a clean first try rather than a retry.
+        """
+        if not reader_id:
+            return
+        held = (
+            PosTerminalPayment.objects.filter(
+                event__organizer=event.organizer,
+                reader_id=reader_id,
+                status=PosTerminalPayment.STATUS_PENDING,
+            )
+            .exclude(idempotency_key=idempotency_key)
+            .order_by("-created")
+            .first()
+        )
+        if held is None:
+            return
+        # Asked rather than assumed. The row reads pending because nobody has
+        # looked since it was written, which is not the same as the cardholder
+        # still standing there; this is the very call the other till's poll
+        # makes, and it is how a finished payment stops holding the machine.
+        held = settle_terminal_payment(held, account)
+        if held.status != PosTerminalPayment.STATUS_PENDING:
+            return
+
+        if held.created > now() - READER_HELD_FOR:
+            raise ValidationError(
+                {"detail": [
+                    _("The card reader is taking another payment. Wait for it to "
+                      "finish, or take this basket in cash.")
+                ], "code": "terminal_busy"}
+            )
+
+        # Long past anything a customer is still standing in front of. Clear
+        # the machine before using it, or SumUp refuses the checkout below and
+        # the cashier is left with a reader that says nothing. Best-effort by
+        # SumUp's own account, and safe to do here for the reason above: if the
+        # cardholder had in fact answered, settling would have said so and this
+        # line would not be reached.
+        try:
+            account.terminate_checkout(reader_id)
+        except SumUpError:
+            logger.info("Reader %s would not clear before a new payment", reader_id)
+
     @action(detail=False, methods=["post"], url_path="terminal/start", url_name="terminal-start")
     def terminal_start(self, request, **kwargs):
         """
@@ -998,6 +1067,10 @@ class OpenPosViewSet(viewsets.ViewSet):
                 self._terminal_payload(settle_terminal_payment(existing, account)),
                 status=status.HTTP_200_OK,
             )
+
+        self._refuse_if_reader_is_busy(
+            event, _pos_device.sumup_reader_id, idempotency_key, account
+        )
 
         channel = get_pos_channel(event.organizer)
         overrides = pos_price_overrides(event)

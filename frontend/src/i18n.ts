@@ -63,6 +63,8 @@ export const MESSAGES = {
     "payment.readerRefused": "The card was refused.",
     "payment.readerCancelled": "The payment was cancelled.",
     "payment.readerTimeout": "The reader waited too long for the card.",
+    "payment.readerTaken":
+      "The reader is taking a payment on the other till. Wait for it to finish, or take this sale in cash.",
     "payment.readerRetry": "Try again",
     "payment.readerStop": "Cancel the payment",
     "payment.readerCredit":
@@ -316,6 +318,8 @@ export const MESSAGES = {
     "payment.readerRefused": "La carte a été refusée.",
     "payment.readerCancelled": "Le paiement a été annulé.",
     "payment.readerTimeout": "Le lecteur a attendu la carte trop longtemps.",
+    "payment.readerTaken":
+      "Le lecteur encaisse sur l’autre caisse. Attendez la fin, ou prenez cette vente en espèces.",
     "payment.readerRetry": "Réessayer",
     "payment.readerStop": "Annuler le paiement",
     "payment.readerCredit":

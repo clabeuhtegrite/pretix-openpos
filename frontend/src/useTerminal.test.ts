@@ -90,6 +90,27 @@ describe("putting a basket on the reader", () => {
     expect(result.current.state?.stalled).toBe(true);
   });
 
+  it("says the reader is on the other till, and stops there", async () => {
+    // Two tablets behind one bar sharing one machine. Nothing was put on the
+    // reader and nothing was charged, so this is a plain answer rather than
+    // the unknown above — and the cashier needs the one sentence that tells
+    // them cash still works.
+    apiMock.terminalStart.mockRejectedValue(
+      new ApiError(400, "The card reader is taking another payment.", {
+        code: "terminal_busy",
+      }),
+    );
+    const { result } = renderHook(() => useTerminal(pairing, vi.fn()));
+
+    await act(async () => {
+      await result.current.start("key-1", []);
+    });
+
+    expect(result.current.state?.phase).toBe("failed");
+    expect(result.current.state?.stalled).toBe(false);
+    expect(result.current.state?.message).toBe(t("payment.readerTaken"));
+  });
+
   it("stops on a refusal the server understood", async () => {
     apiMock.terminalStart.mockRejectedValue(
       new ApiError(400, "Nothing is due on this basket. Settle it in cash."),
