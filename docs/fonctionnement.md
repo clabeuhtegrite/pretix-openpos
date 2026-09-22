@@ -331,7 +331,7 @@ En Docker/Kubernetes, [`deploy/Dockerfile`](../deploy/Dockerfile) intègre le pl
 
 ```bash
 cd frontend && npm run build && cd ..
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.14.0 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.15.1 .
 ```
 
 Deux pièges :
@@ -354,6 +354,17 @@ Deux pièges :
    prévente, créer un **produit à part** coché sur le seul canal Open POS
    (« Entrée sur place », par exemple) plutôt que de chercher un second prix :
    la recette reste lisible, un nom valant un prix.
+
+   > **En venant d'une version antérieure à la 0.15.** Le plugin tenait jusque-là
+   > un second prix par produit, dans un écran *Prix sur place* qui n'existe plus.
+   > La migration `0008` supprime ces lignes, et rien ne peut les ramener : là où
+   > un tarif sur place différait du prix pretix, le prix facturé à la caisse
+   > change au redémarrage. Avant de les effacer, la migration les écrit dans
+   > **l'historique de l'événement** (*Historique*, une entrée par événement, à la
+   > date de la mise à jour), qui nomme les produits ayant changé de prix et
+   > compte les autres. C'est la seule copie qui survit à la mise à jour, et c'est
+   > le premier endroit à regarder après avoir déployé cette version.
+
 4. **Choisir la liste de contrôle d'accès** — *Open POS → Réglages*. Les billets
    vendus sont pointés sur cette liste immédiatement. Laisser vide pour vendre
    sans pointer.

@@ -119,6 +119,63 @@ class PricesChanged(NoOpShredderMixin, EventLogEntryType):
 
 
 @log_entry_types.new()
+class PricesRemoved(NoOpShredderMixin, EventLogEntryType):
+    """
+    The upgrade that took the price list away, and what it cost.
+
+    Written once per event by migration ``0008``, from inside the migration,
+    just before the table is dropped. It is the only copy of those rows that
+    survives, and the question it exists to answer is a narrow one: *did
+    anything I sell change price when I deployed this?*
+
+    So it leads with the products that changed and counts the rest. A list of
+    forty products that stayed put is not an answer, it is a haystack.
+    """
+
+    action_type = "pretix_openpos.prices.removed"
+
+    def display(self, logentry, data):
+        currency = logentry.event.currency
+        removed = data.get("removed") or []
+        moved = [row for row in removed if row.get("changes")]
+        if not moved:
+            return _(
+                "The on-site price list was removed ({count} products). None of "
+                "them changed price: each was already worth its pretix price."
+            ).format(count=len(removed))
+        rest = len(removed) - len(moved)
+        heading = _(
+            "The on-site price list was removed, and {count} product(s) changed "
+            "price at the till because of it:"
+        ).format(count=len(moved))
+        tail = (
+            ""
+            if not rest
+            else _(" The other {count} were already worth their pretix price.").format(
+                count=rest
+            )
+        )
+        return format_html(
+            "{}<ul>{}</ul>{}",
+            heading,
+            format_html_join(
+                "", "<li>{}</li>",
+                ((self._line(row, currency),) for row in moved),
+            ),
+            tail,
+        )
+
+    @staticmethod
+    def _line(row, currency):
+        return format_html(
+            _("{item}: {before} at the till, now {after}"),
+            item=escape(_named(row)),
+            before=_money(row.get("from"), currency),
+            after=_money(row.get("to"), currency),
+        )
+
+
+@log_entry_types.new()
 class CategoriesChanged(NoOpShredderMixin, EventLogEntryType):
     """Which categories were reserved for the bar, and which for the door."""
 
