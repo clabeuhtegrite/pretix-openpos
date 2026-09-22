@@ -64,7 +64,7 @@
                 <ul class="list-unstyled" style="margin-bottom: 0">
                     {% for line in sells %}
                         <li>
-                            <strong>{{ line.role }}:</strong>
+                            <strong>{{ line.role }}</strong>
                             {% if line.categories %}
                                 {{ line.categories|join:", " }}
                             {% else %}

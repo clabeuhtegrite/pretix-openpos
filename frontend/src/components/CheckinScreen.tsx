@@ -346,10 +346,11 @@ export default function CheckinScreen({
           )}
           <div className="scanner-actions">
             {onSell && (
-              // First in the row on purpose: it is the one thing on this screen
-              // that takes money, and the queue it serves is somebody standing
-              // at the door without a ticket.
-              <button className="btn" onClick={onSell}>
+              // First on purpose: it is the one thing on this screen that takes
+              // money, and the queue it serves is somebody standing at the door
+              // without a ticket. On a row of its own above the other two, for
+              // the reason given beside .sell-button in styles.css.
+              <button className="btn sell-button" onClick={onSell}>
                 🛒 {t("checkin.sell")}
               </button>
             )}

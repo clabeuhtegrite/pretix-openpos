@@ -211,6 +211,99 @@ def test_clearing_a_reader_says_what_it_does_and_does_not_prove(
     assert "SumUp" in shown
 
 
+# -- the history pages themselves -------------------------------------------
+#
+# Everything above renders an entry by calling display() on it. The page an
+# organiser actually opens asks pretix a second question about every line —
+# which object it is about — and for an entry an event-level plugin registered
+# and then wrote on the organizer, pretix answers that by raising. Every entry
+# above rendered, and the organizer's history was a 500 from 0.12.0 to 0.15.1.
+#
+# So the pages are rendered here, whole, with the entries on them.
+
+def organizer_history(client, organizer):
+    return client.get(f"/control/organizer/{organizer.slug}/logs")
+
+
+@pytest.mark.django_db
+def test_the_organizer_history_opens_with_every_kind_of_entry_on_it(
+    backoffice, organizer, device, sumup
+):
+    from pretix_openpos.logdisplay import organizer_entry_types
+
+    # An evening of setting up, through the real screens: a new key for the
+    # account, a reader paired, given to a till, cleared and then removed.
+    backoffice.post(sumup_url(organizer), {
+        "action": "settings",
+        "openpos_sumup_merchant_code": sumup.merchant,
+        "openpos_sumup_api_key": "sup_sk_rotated",
+    })
+    backoffice.post(sumup_url(organizer), {
+        "action": "pair", "pairing_code": "ABCDEF", "reader_name": "Porte",
+    })
+    (reader,) = sumup.readers
+    backoffice.post(devices_url(organizer), {
+        f"role_{device.pk}": PosDevice.ROLE_TILL,
+        f"reader_{device.pk}": reader,
+    })
+    backoffice.post(sumup_url(organizer), {"action": "free", "reader_id": reader})
+    backoffice.post(sumup_url(organizer), {"action": "forget", "reader_id": reader})
+    # One of every kind the plugin writes on the organizer, or this proves less
+    # than its name says.
+    written = set(
+        organizer.all_logentries().filter(event=None).values_list("action_type", flat=True)
+    )
+    assert set(organizer_entry_types) <= written
+
+    response = organizer_history(backoffice, organizer)
+
+    assert response.status_code == 200
+    page = response.content.decode()
+    assert "The SumUp account was changed: API key." in page
+    assert f"A card reader was paired: {reader}" in page
+    # Down to the line, since the device's name is on this page anyway, in the
+    # filter's list of devices.
+    assert f"{device.name}: no role → till, card reader {reader}" in page
+    assert f"A card reader was asked to clear its screen: {reader}." in page
+    assert f"A card reader was removed: {reader}" in page
+    for action_type in organizer_entry_types:
+        assert action_type not in page
+    # The key itself, which is the other thing this page must never show.
+    assert "sup_sk_rotated" not in page
+
+
+@pytest.mark.django_db
+def test_an_organizer_entry_points_at_nothing_rather_than_raising(
+    backoffice, organizer, device
+):
+    """
+    The column the page crashed on, asked directly.
+
+    Not in pretix' registry, the entry takes the old road to its object: the
+    organizer it was written on, and a signal nobody answers for one. An empty
+    column is the right answer — the page is the organizer's own history.
+    """
+    backoffice.post(devices_url(organizer), {f"role_{device.pk}": PosDevice.ROLE_TILL})
+
+    entry = latest(organizer, "pretix_openpos.devices.changed")
+
+    assert entry.display_object == ""
+
+
+@pytest.mark.django_db
+def test_the_event_history_still_opens_with_the_plugin_s_entries_on_it(
+    backoffice, event, ticket
+):
+    # The other road: entries written on an event stay in pretix' registry,
+    # where the plugin can be checked against the event they were written on.
+    price_change(event, [moved(ticket, "Entrée", "10.00", "8.50")])
+
+    response = backoffice.get(f"/control/event/{event.organizer.slug}/{event.slug}/logs/")
+
+    assert response.status_code == 200
+    assert "The on-site prices were changed:" in response.content.decode()
+
+
 @pytest.mark.django_db
 def test_an_ordinary_sale_writes_no_off_tariff_entry(till, ticket, event):
     body = sell(till, [{"item": ticket.pk, "count": 1}]).json()

@@ -203,6 +203,73 @@ def test_the_new_screen_renders_in_french(backoffice, event, beer):
 
 
 @pytest.mark.django_db
+def test_what_each_device_sells_is_punctuated_in_french(backoffice, event, beer):
+    """
+    French sets a space before a colon, and the template used to type the colon
+    itself, after the translated words: "Un appareil de porte vend:". The colon
+    is part of the sentence now, where a translation can place it.
+    """
+    from pretix.base.models import ItemCategory, User
+
+    User.objects.filter(email="boss@example.org").update(locale="fr")
+    ItemCategory.objects.create(event=event, name="Bar")
+
+    page = backoffice.get(
+        f"/control/event/{event.organizer.slug}/{event.slug}/openpos/categories/"
+    ).content.decode()
+
+    assert "Un appareil de caisse vend :" in page
+    assert "Un appareil de porte vend :" in page
+    assert "vend:" not in page
+
+
+@pytest.mark.django_db
+def test_the_organizer_history_reads_in_french(backoffice, organizer, device):
+    """
+    The page that was a 500, in the language it is read in.
+
+    Its entries reach pretix by another road than the event's, and a road that
+    renders in English only would pass every other test here.
+    """
+    from pretix.base.models import User
+
+    from pretix_openpos.models import PosDevice
+
+    User.objects.filter(email="boss@example.org").update(locale="fr")
+    backoffice.post(
+        f"/control/organizer/{organizer.slug}/openpos/devices/",
+        {f"role_{device.pk}": PosDevice.ROLE_TILL},
+    )
+
+    response = backoffice.get(f"/control/organizer/{organizer.slug}/logs")
+
+    assert response.status_code == 200
+    page = response.content.decode()
+    assert "Les rôles des caisses ont été modifiés :" in page
+    assert f"{device.name} : aucun rôle → caisse" in page
+
+
+@pytest.mark.django_db
+def test_a_card_sale_is_a_card_sale_in_the_french_journal(backoffice, event, till, ticket):
+    """
+    Not "Lecteur de carte". A till without a reader takes cards too — on a
+    terminal of its own, keyed by hand — and the journal said "card reader" for
+    every one of those sales, reader or none.
+    """
+    from pretix.base.models import User
+
+    User.objects.filter(email="boss@example.org").update(locale="fr")
+    sell(till, [{"item": ticket.pk, "count": 1}], payment_type="card")
+
+    page = backoffice.get(
+        f"/control/event/{event.organizer.slug}/{event.slug}/openpos/sales/"
+    ).content.decode()
+
+    assert "<td>Carte</td>" in page
+    assert "Lecteur de carte" not in page
+
+
+@pytest.mark.django_db
 def test_a_till_told_it_may_not_sell_something_is_told_in_french(
     till, device, event, beer
 ):

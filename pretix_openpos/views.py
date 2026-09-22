@@ -106,6 +106,11 @@ class CategoriesView(EventPermissionRequiredMixin, TemplateView):
         # dropdowns say who may sell a category; this says what a tablet will
         # actually show, which is the thing being decided and is not the same
         # sentence read backwards.
+        #
+        # The colon is part of the sentence to translate rather than typed
+        # after it in the template: French puts a space before one, and a
+        # colon glued on outside the string read "vend:" in a French back
+        # office.
         ctx["sells"] = [
             {
                 "role": label,
@@ -116,8 +121,8 @@ class CategoriesView(EventPermissionRequiredMixin, TemplateView):
                 ],
             }
             for role, label in (
-                (PosDevice.ROLE_TILL, _("A till device sells")),
-                (PosDevice.ROLE_DOOR, _("A door device sells")),
+                (PosDevice.ROLE_TILL, _("A till device sells:")),
+                (PosDevice.ROLE_DOOR, _("A door device sells:")),
             )
         ]
         # Products in no category at all. They stay on every till whatever is

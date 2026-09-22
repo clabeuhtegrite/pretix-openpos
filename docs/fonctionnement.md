@@ -1,6 +1,6 @@
 # Fonctionnement de pretix-openpos
 
-Documentation de fonctionnement du plugin, version 0.14.0. Elle couvre trois
+Documentation de fonctionnement du plugin, version 0.15.2. Elle couvre trois
 choses, dans cet ordre : ce que le plugin ajoute à pretix, comment le mettre en
 service, et ce qui se passe exactement quand un bénévole encaisse.
 
@@ -176,6 +176,13 @@ caisse est appairée une fois, un lecteur appartient à l'association, et
 les soirées passées. Les deux écrans matériels sont gardés par la permission des
 devices de pretix — qui peut appairer une caisse peut dire à quoi elle sert.
 
+Cinq d'entre eux ont leur entrée dans le menu latéral de pretix : *Qui vend
+quoi* et *Ventes* sous **Open POS** dans celui de l'événement, les trois écrans
+d'organisateur dans celui de l'organisateur. Un lien n'y apparaît qu'à qui a la
+permission de l'écran derrière lui, et le menu **Open POS** n'apparaît pas du
+tout à qui ne peut ouvrir ni l'un ni l'autre. Le sixième, *Réglages*, reste sur
+la carte du plugin, sous *Paramètres → Plugins*.
+
 L'écran Affluence est strictement en lecture — un histogramme des
 scans d'entrée réussis par heure locale de l'événement, le pic et le creux, et
 le détail par événement. Les check-ins automatiques, les commandes en mode test,
@@ -331,7 +338,7 @@ En Docker/Kubernetes, [`deploy/Dockerfile`](../deploy/Dockerfile) intègre le pl
 
 ```bash
 cd frontend && npm run build && cd ..
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.15.1 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.15.2 .
 ```
 
 Deux pièges :
@@ -345,7 +352,7 @@ Deux pièges :
 
 ### 3.2 Configurer l'événement
 
-1. **Activer le plugin** — *Réglages → Plugins → Open POS*.
+1. **Activer le plugin** — *Paramètres → Plugins → Open POS*.
 2. **Rendre les produits vendables au guichet** — sur chaque produit, sous
    *Disponibilité*, cocher le canal **Open POS**. Un produit qui n'existe *que*
    sur place se crée en ne cochant que ce canal.
@@ -365,9 +372,11 @@ Deux pièges :
    > compte les autres. C'est la seule copie qui survit à la mise à jour, et c'est
    > le premier endroit à regarder après avoir déployé cette version.
 
-4. **Choisir la liste de contrôle d'accès** — *Open POS → Réglages*. Les billets
-   vendus sont pointés sur cette liste immédiatement. Laisser vide pour vendre
-   sans pointer.
+4. **Choisir la liste de contrôle d'accès** — *Open POS → Réglages*, dans le
+   menu *Paramètres* de la carte du plugin, sur la page de l'étape 1 : le menu
+   **Open POS** de la barre latérale ne mène qu'aux deux autres écrans de
+   l'événement. Les billets vendus sont pointés sur cette liste immédiatement.
+   Laisser vide pour vendre sans pointer.
 5. **Boutons supplémentaires** — *Open POS → Réglages*, section du bas. Les deux
    sont éteints tant qu'aucun produit ne leur est affecté :
    - **Produit pour les ventes libres** : active le bouton *Montant libre*, où
@@ -1648,6 +1657,16 @@ jamais : seuls les noms des champs modifiés sont enregistrés, ce qui est
 précisément la raison pour laquelle l'écran des réglages SumUp n'utilise pas
 celui de pretix — ce dernier écrit la *valeur* de chaque champ modifié dans
 l'historique.
+
+Les entrées écrites sur l'organisateur — rôles des appareils, compte SumUp,
+lecteurs appairés, libérés ou retirés — ne passent pas par le même chemin que
+celles d'un événement ([logdisplay.py](../pretix_openpos/logdisplay.py) dit
+pourquoi). De la 0.12.0 à la 0.15.1, elles passaient par le même, et la page
+*Journaux de l'organisateur* (*Voir le journal complet*, sous l'historique des
+modifications de l'organisateur) répondait par une erreur 500 dès que l'une
+d'elles s'y trouvait, c'est-à-dire dès qu'on avait enregistré l'écran des
+appareils ou réglé un lecteur. Rien n'était perdu : les entrées étaient en base,
+et la 0.15.2 les affiche.
 
 **Remboursements carte refusés par SumUp.** Une annulation de vente carte demande
 le remboursement par API, et le réseau peut répondre non : transaction déjà
