@@ -176,6 +176,13 @@ caisse est appairée une fois, un lecteur appartient à l'association, et
 les soirées passées. Les deux écrans matériels sont gardés par la permission des
 devices de pretix — qui peut appairer une caisse peut dire à quoi elle sert.
 
+Cinq d'entre eux ont leur entrée dans le menu latéral de pretix : *Qui vend
+quoi* et *Ventes* sous **Open POS** dans celui de l'événement, les trois écrans
+d'organisateur dans celui de l'organisateur. Un lien n'y apparaît qu'à qui a la
+permission de l'écran derrière lui, et le menu **Open POS** n'apparaît pas du
+tout à qui ne peut ouvrir ni l'un ni l'autre. Le sixième, *Réglages*, reste sur
+la carte du plugin, sous *Paramètres → Plugins*.
+
 L'écran Affluence est strictement en lecture — un histogramme des
 scans d'entrée réussis par heure locale de l'événement, le pic et le creux, et
 le détail par événement. Les check-ins automatiques, les commandes en mode test,
@@ -345,7 +352,7 @@ Deux pièges :
 
 ### 3.2 Configurer l'événement
 
-1. **Activer le plugin** — *Réglages → Plugins → Open POS*.
+1. **Activer le plugin** — *Paramètres → Plugins → Open POS*.
 2. **Rendre les produits vendables au guichet** — sur chaque produit, sous
    *Disponibilité*, cocher le canal **Open POS**. Un produit qui n'existe *que*
    sur place se crée en ne cochant que ce canal.
@@ -365,9 +372,11 @@ Deux pièges :
    > compte les autres. C'est la seule copie qui survit à la mise à jour, et c'est
    > le premier endroit à regarder après avoir déployé cette version.
 
-4. **Choisir la liste de contrôle d'accès** — *Open POS → Réglages*. Les billets
-   vendus sont pointés sur cette liste immédiatement. Laisser vide pour vendre
-   sans pointer.
+4. **Choisir la liste de contrôle d'accès** — *Open POS → Réglages*, dans le
+   menu *Paramètres* de la carte du plugin, sur la page de l'étape 1 : le menu
+   **Open POS** de la barre latérale ne mène qu'aux deux autres écrans de
+   l'événement. Les billets vendus sont pointés sur cette liste immédiatement.
+   Laisser vide pour vendre sans pointer.
 5. **Boutons supplémentaires** — *Open POS → Réglages*, section du bas. Les deux
    sont éteints tant qu'aucun produit ne leur est affecté :
    - **Produit pour les ventes libres** : active le bouton *Montant libre*, où

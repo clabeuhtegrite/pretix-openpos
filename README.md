@@ -242,7 +242,9 @@ rather than to a rolling minor.
    rather than looking for a second price: one name is worth one price, and
    that is what keeps the takings readable afterwards.
 4. **Choose the check-in list** under *Open POS → Settings*, so tickets are
-   checked in as they are sold. Leave it empty to sell without checking in. The
+   checked in as they are sold. It is in the *Settings* menu on the plugin's
+   card from step 1; the sidebar's **Open POS** menu leads to the event's other
+   two screens only. Leave it empty to sell without checking in. The
    same screen has **Issue invoices for till sales**, on by default: it is what
    lets a cancellation from the till issue a credit note. It covers the Open POS
    channel only — your webshop keeps its own invoicing rules — and unticking it
