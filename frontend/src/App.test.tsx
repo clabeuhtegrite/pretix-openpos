@@ -47,7 +47,9 @@ import { ApiError } from "./api";
 import { markReachable, markUnreachable } from "./connectivity";
 import { t } from "./i18n";
 import { formatMoney } from "./money";
-import { loadCashier, loadPairing, loadQueue, savePairing, saveQueue } from "./storage";
+import {
+  loadCashier, loadPairing, loadQueue, savePairing, saveFailures, saveQueue,
+} from "./storage";
 import { fillStorage } from "./test/setup";
 import type { Catalog, JournalLine, PosConfig, SaleResult } from "./types";
 
@@ -873,6 +875,29 @@ describe("the queue", () => {
     expect(
       screen.queryByRole("button", { name: t("offline.badgePending", { n: 1 }) }),
     ).toBeNull();
+  });
+
+  it("goes on announcing a refusal after the queue has drained", async () => {
+    // The rule the whole offline mode rests on is that no refusal is ever
+    // swallowed. The badge is the only door to the panel that shows them, and
+    // it used to close the moment the queue emptied — taking the unread
+    // refusal with it.
+    saveFailures([{
+      entry: {
+        kind: "checkin", id: "n1", at: "2026-08-16T22:00:00.000Z",
+        event: "festival", list: 7, secret: "s", name: "Alice",
+      },
+      at: "2026-08-16T22:05:00.000Z",
+      message: "Already scanned",
+    }]);
+
+    show();
+    await ready();
+
+    expect(loadQueue()).toEqual([]);
+    expect(
+      await screen.findByRole("button", { name: t("offline.badgeFailed", { n: 1 }) }),
+    ).toBeTruthy();
   });
 
   it("does not replay a queue in the middle of a payment", async () => {

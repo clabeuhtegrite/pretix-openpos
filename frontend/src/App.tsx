@@ -17,7 +17,7 @@ import { t } from "./i18n";
 import { fromCents, toCents } from "./money";
 import { newNonce } from "./nonce";
 import {
-  clearPairing, enqueue, loadCached, loadCashier, loadPairing, loadQueue,
+  clearPairing, enqueue, loadCached, loadCashier, loadFailures, loadPairing, loadQueue,
   loadUpdateAttempt, requestPersistence, saveCached, saveCashier, savePairing,
   saveUpdateAttempt,
 } from "./storage";
@@ -153,6 +153,16 @@ export default function App() {
 
   const online = useConnectivity();
   const [pending, setPending] = useState(() => loadQueue().length);
+  /**
+   * Entries the server refused, which nobody has dealt with yet.
+   *
+   * Counted here because the badge is the only door to the panel that shows
+   * them. A drain that sends forty sales and has one refused leaves nothing to
+   * send and a till that is back online — so the badge used to disappear,
+   * taking the unread refusal with it, in direct contradiction of the rule
+   * that no refusal is ever swallowed.
+   */
+  const [failures, setFailures] = useState(() => loadFailures().length);
   const [syncing, setSyncing] = useState(false);
   const [lastSync, setLastSync] = useState<SyncReport | null>(null);
   const [syncOpen, setSyncOpen] = useState(false);
@@ -215,6 +225,7 @@ export default function App() {
     } finally {
       syncingRef.current = false;
       setPending(loadQueue().length);
+      setFailures(loadFailures().length);
       setSyncing(false);
     }
   }, [pairing]);
@@ -698,14 +709,21 @@ export default function App() {
             {t("checkin.open")}
           </button>
         )}
-        {(!online || pending > 0) && (
+        {(!online || pending > 0 || failures > 0) && (
           <button
             className={`btn ghost topbar-action sync-badge${online ? "" : " is-offline"}`}
             onClick={() => setSyncOpen(true)}
           >
-            {online
-              ? t("offline.badgePending", { n: pending })
-              : t("offline.badgeOffline", { n: pending })}
+            {!online
+              ? t("offline.badgeOffline", { n: pending })
+              : pending > 0
+                ? t("offline.badgePending", { n: pending })
+                // Nothing left to send and the network is back, but something
+                // was refused and nobody has looked at it. "0 to send" would
+                // be true and useless; the badge has to name what is actually
+                // outstanding, because it is the only way into the panel that
+                // shows it.
+                : t("offline.badgeFailed", { n: failures })}
           </button>
         )}
         <button
@@ -805,6 +823,9 @@ export default function App() {
           defaultListId={doorList}
           admissionItems={config.admission_items}
           onListChange={setDoorListId}
+          // A scan admitted with no network is money's equivalent at the door:
+          // pretix has not heard of it yet, and only this count gets it sent.
+          onQueued={() => setPending(loadQueue().length)}
           // The door steps out to the grid to sell a ticket; every other device
           // already has the grid underneath and is merely closing an overlay.
           onSell={atDoor ? () => setCheckinOpen(false) : undefined}
@@ -819,7 +840,12 @@ export default function App() {
           report={lastSync}
           event={pairing.event}
           onSync={() => void sync()}
-          onClose={() => setSyncOpen(false)}
+          // Refusals are cleared from inside the panel, so the count that
+          // keeps the badge alive is re-read on the way out.
+          onClose={() => {
+            setSyncOpen(false);
+            setFailures(loadFailures().length);
+          }}
         />
       )}
 

@@ -103,11 +103,22 @@ interface Props {
    * no use for it: there the grid is already what is underneath.
    */
   onSell?: () => void;
+  /**
+   * Told when an entry has just been added to the offline queue.
+   *
+   * The app owns the badge and the automatic drain, and both are driven off a
+   * count it keeps. Without this, a door that only ever scans queued entries
+   * the app never heard about: the badge read "0" after a whole evening, and
+   * the drain bailed out the moment the network came back because as far as it
+   * knew there was nothing to send. The entries sat in the browser until
+   * somebody happened to relaunch the app.
+   */
+  onQueued?: () => void;
   onClose: () => void;
 }
 
 export default function CheckinScreen({
-  pairing, lists, defaultListId, admissionItems, onListChange, onSell, onClose,
+  pairing, lists, defaultListId, admissionItems, onListChange, onSell, onQueued, onClose,
 }: Props) {
   const [listId, setListId] = useState<number | null>(
     defaultListId ?? (lists.length ? lists[0].id : null),
@@ -232,6 +243,7 @@ export default function CheckinScreen({
               secret: code,
               name: result.position?.attendee_name ?? "",
             });
+            onQueued?.();
           }
         }
         setVerdict(result);

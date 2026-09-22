@@ -67,17 +67,91 @@ function describe(body: unknown, fallback: string): string {
   return fallback;
 }
 
+/**
+ * How long a request may hang before the till calls it a dead network.
+ *
+ * The failure this exists for is the venue wifi that accepts the socket and
+ * then leads nowhere — a captive portal, a half-open TCP, an access point with
+ * no uplink. Without a bound the browser sits on that for its own minute and
+ * more, and for all that time the till believes it is online: no offline
+ * queue, no keypad, a confirm button that does nothing. Bounding it turns a
+ * hang into the thing the app already knows how to survive.
+ *
+ * Generous, because the cost of being wrong is asymmetric. Going offline a few
+ * seconds early costs one replayed request; cutting off a write that the
+ * server was in the middle of committing costs an operator's confidence in the
+ * screen. Writes get longer still: ``terminal/start`` waits on SumUp, which
+ * the server itself allows twenty seconds for.
+ */
+const READ_TIMEOUT_MS = 15_000;
+const WRITE_TIMEOUT_MS = 30_000;
+
+/**
+ * A signal that gives up after `ms`, and still obeys the caller's own.
+ *
+ * Hand-rolled rather than `AbortSignal.timeout` with `AbortSignal.any`: the
+ * latter landed in Safari 17.4, so an older iPad would silently get no timeout
+ * at all — which is exactly the failure being removed here, reintroduced on
+ * the devices most likely to be on a venue's wifi.
+ */
+function withTimeout(signal: AbortSignal | undefined, ms: number) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  const relay = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) relay();
+    else signal.addEventListener("abort", relay);
+  }
+  return {
+    signal: controller.signal,
+    done() {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", relay);
+    },
+  };
+}
+
 async function request<T>(
   path: string,
-  options: { method?: string; body?: unknown; token?: string; signal?: AbortSignal } = {},
+  options: {
+    method?: string;
+    body?: unknown;
+    token?: string;
+    signal?: AbortSignal;
+    timeoutMs?: number;
+  } = {},
 ): Promise<T> {
   const { method = "GET", body, token, signal } = options;
+  const timeout = withTimeout(
+    signal,
+    options.timeoutMs ?? (method === "GET" ? READ_TIMEOUT_MS : WRITE_TIMEOUT_MS),
+  );
+
+  try {
+    return await send<T>(path, { method, body, token, signal, inner: timeout.signal });
+  } finally {
+    timeout.done();
+  }
+}
+
+async function send<T>(
+  path: string,
+  options: {
+    method: string;
+    body?: unknown;
+    token?: string;
+    /** The caller's own signal, for telling their abort from our timeout. */
+    signal?: AbortSignal;
+    inner: AbortSignal;
+  },
+): Promise<T> {
+  const { method, body, token, signal, inner } = options;
 
   let response: Response;
   try {
     response = await fetch(`${BASE}${path}`, {
       method,
-      signal,
+      signal: inner,
       headers: {
         "Content-Type": "application/json",
         ...(token ? { Authorization: `Device ${token}` } : {}),
@@ -85,9 +159,13 @@ async function request<T>(
       body: body === undefined ? undefined : JSON.stringify(body),
     });
   } catch (e) {
-    if (e instanceof DOMException && e.name === "AbortError") throw e;
-    // The request never reached the server: that, and not what the browser
-    // thinks of its network interface, is what puts the till in offline mode.
+    // The caller changed its mind — a screen closed, a poll superseded. That
+    // is not a verdict on the network and must not move the till offline.
+    if (signal?.aborted) throw e;
+    // Everything else is one fact: the request did not reach the server. Our
+    // own timeout lands here too, deliberately — a request that hung for
+    // fifteen seconds and one that was refused by the interface are the same
+    // thing from behind the counter.
     markUnreachable();
     throw new ApiError(0, "network", e);
   }

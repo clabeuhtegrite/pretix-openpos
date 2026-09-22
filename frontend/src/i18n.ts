@@ -168,6 +168,7 @@ export const MESSAGES = {
     "offline.offline": "No connection. Sales and scans are being kept on this till.",
     "offline.badgeOffline": "Offline · {n}",
     "offline.badgePending": "{n} to send",
+    "offline.badgeFailed": "{n} refused",
     "offline.nothingPending": "Nothing waiting to be sent.",
     "offline.stranded":
       "{n} kept for another event ({events}). They will be sent when this till is switched back to it.",
@@ -416,6 +417,7 @@ export const MESSAGES = {
     "offline.offline": "Pas de connexion. Ventes et scans sont conservés sur cette caisse.",
     "offline.badgeOffline": "Hors ligne · {n}",
     "offline.badgePending": "{n} à envoyer",
+    "offline.badgeFailed": "{n} refusé·e·s",
     "offline.nothingPending": "Rien en attente d’envoi.",
     "offline.stranded":
       "{n} en attente pour un autre événement ({events}). Elles partiront quand cette caisse y sera revenue.",
