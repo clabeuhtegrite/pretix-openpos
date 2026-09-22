@@ -410,6 +410,11 @@ export interface OfflineTicket {
   name: string;
   /** Already admitted when the snapshot was taken. */
   used: boolean;
+  /** Blocked in pretix, which refuses it at every door. Absent when not. */
+  blocked?: boolean;
+  /** Valid only from, or until, this moment. Absent when the ticket has no such limit. */
+  valid_from?: string;
+  valid_until?: string;
 }
 
 export interface OfflineSnapshot {

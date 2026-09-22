@@ -38,7 +38,10 @@ export function indexSnapshot(snapshot: OfflineSnapshot | null): SnapshotIndex |
  * Deliberately stricter than the server on one point and looser on another. An
  * unknown secret is refused, because the alternative is admitting anything
  * presented to a camera. A ticket the snapshot says is already used is refused
- * too. But no rules engine runs here, and nothing later than the snapshot is
+ * too, and so is one pretix refuses whatever the door: blocked, or outside the
+ * moments it is valid between — read on this device's clock at the time of the
+ * scan, so a ticket that becomes valid during the dropout walks in when it
+ * does. But no rules engine runs here, and nothing later than the snapshot is
  * known — which is why every scan is queued and settled against the server the
  * moment there is one.
  *
@@ -51,12 +54,21 @@ export function offlineVerdict(
   listId: number,
   secret: string,
   scannedHere: Set<string>,
+  now: number = Date.now(),
 ): RedeemResult {
   if (!index || index.listId !== listId) {
     return { status: "error", reason: "offline_no_snapshot" };
   }
   const ticket = index.tickets.get(secret);
   if (!ticket) return { status: "error", reason: "invalid" };
+  // pretix' own order: what the ticket is, before whether it was used.
+  if (ticket.blocked) return { status: "error", reason: "blocked" };
+  if (
+    (ticket.valid_from && now < Date.parse(ticket.valid_from)) ||
+    (ticket.valid_until && now > Date.parse(ticket.valid_until))
+  ) {
+    return { status: "error", reason: "invalid_time" };
+  }
   if (ticket.used || scannedHere.has(secret)) {
     return { status: "error", reason: "already_redeemed" };
   }

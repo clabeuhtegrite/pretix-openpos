@@ -778,6 +778,29 @@ def reachable_events(request):
     )
 
 
+def offline_restrictions(position):
+    """
+    What pretix refuses this ticket for at every door, for a guest list to carry.
+
+    A ticket blocked in the back office, or only valid from or until a given
+    moment, is refused online — and was let in with no network, since the guest
+    list said nothing about it. The moments are sent rather than applied here:
+    the app checks them against its own clock at the time of the scan, so a
+    ticket that becomes valid in the middle of a dropout walks in when it does.
+
+    Only when set, which is almost never, so that the list a phone downloads
+    does not grow by three empty keys per ticket.
+    """
+    restrictions = {}
+    if position.blocked:
+        restrictions["blocked"] = True
+    if position.valid_from:
+        restrictions["valid_from"] = position.valid_from.isoformat()
+    if position.valid_until:
+        restrictions["valid_until"] = position.valid_until.isoformat()
+    return restrictions
+
+
 class OpenPosViewSet(viewsets.ViewSet):
     """
     Everything the till needs, and nothing else.
@@ -1779,7 +1802,10 @@ class OpenPosViewSet(viewsets.ViewSet):
 
         with scopes_disabled():
             positions = (
-                clist.positions.only("secret", "item_id", "attendee_name_cached")
+                clist.positions.only(
+                    "secret", "item_id", "attendee_name_cached",
+                    "blocked", "valid_from", "valid_until",
+                )
                 .order_by("pk")[: OFFLINE_SNAPSHOT_LIMIT + 1]
             )
             rows = list(positions)
@@ -1801,6 +1827,7 @@ class OpenPosViewSet(viewsets.ViewSet):
                     # So a second scan of the same ticket is refused offline too,
                     # rather than discovered hours later at reconciliation.
                     "used": p.pk in entered,
+                    **offline_restrictions(p),
                 }
                 for p in rows
             ]

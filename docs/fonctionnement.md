@@ -1012,7 +1012,12 @@ Un survendu reste un survendu : c'est un fait à réconcilier après la soirée,
   propre porte** : changer de liste pendant la coupure affiche « pas de liste
   embarquée » plutôt que de faire entrer les invités de l'autre porte.
 - **Pas de moteur de règles hors ligne.** Les règles de check-in de pretix
-  (horaires, quotas d'entrée) ne s'appliquent qu'au retour du réseau.
+  (horaires, quotas d'entrée) ne s'appliquent pas à un scan hors ligne : la
+  personne est entrée sur la réponse du téléphone, et la reprise l'enregistre
+  comme un passage forcé. Un billet **bloqué**, ou présenté hors de sa
+  **période de validité**, est en revanche refusé hors ligne comme en ligne : la
+  liste embarquée le dit, et l'heure est celle du téléphone au moment du scan.
+  Avant la 0.18.0, il passait.
 - **Pas d'annulation hors ligne.** Un avoir demande le serveur.
 - **Un rejeu peut encore être refusé**, mais seulement pour une raison qui ne
   vient pas de la soirée : une file corrompue en stockage (les lignes ne
