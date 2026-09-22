@@ -342,6 +342,20 @@ describe("getting to the till", () => {
     declined.mockRestore();
   });
 
+  it("does not offer to unpair a till that has only lost the network", async () => {
+    // A till one retry from working, and a button whose price is a new code
+    // typed at the back office by somebody who is not in the room. This is a
+    // till that has never loaded, so there is no cache to fall back on.
+    apiMock.config.mockRejectedValue(new ApiError(0, "offline", true));
+    apiMock.catalog.mockRejectedValue(new ApiError(0, "offline", true));
+    show();
+
+    await screen.findByText(t("error.offline"));
+
+    expect(screen.queryByRole("button", { name: t("settings.unpair") })).toBeNull();
+    expect(screen.getByRole("button", { name: t("error.retry") })).toBeDefined();
+  });
+
   it("opens on what it was last told when the server is unreachable", async () => {
     // A till that had been here before must not become a brick mid-evening.
     const { user } = show();

@@ -1,6 +1,6 @@
 # Fonctionnement de pretix-openpos
 
-Documentation de fonctionnement du plugin, version 0.9.3. Elle couvre trois
+Documentation de fonctionnement du plugin, version 0.13.0. Elle couvre trois
 choses, dans cet ordre : ce que le plugin ajoute à pretix, comment le mettre en
 service, et ce qui se passe exactement quand un bénévole encaisse.
 
@@ -262,7 +262,7 @@ En Docker/Kubernetes, [`deploy/Dockerfile`](../deploy/Dockerfile) intègre le pl
 
 ```bash
 cd frontend && npm run build && cd ..
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.12.0 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.13.0 .
 ```
 
 Deux pièges :
@@ -387,7 +387,9 @@ saisi par réflexe n'est pas quelque chose qu'on met à un geste de distance.
    le client.
 3. **Panier** — les montants sont manipulés en **centimes entiers** côté client,
    jamais en flottants. Les quantités sont plafonnées par le stock restant quand
-   le quota est fini. L'affichage suit ce qu'il y a dedans : en écran étroit le
+   le quota est fini ; le nombre affiché sur une ligne est un bouton qui ouvre
+   les douze quantités d'un coup, une tournée de six ne se tape donc pas en six
+   appuis (§5sexies). L'affichage suit ce qu'il y a dedans : en écran étroit le
    panier occupe la hauteur qu'il lui faut, jusqu'à 60 % de l'espace, et c'est la
    grille au-dessus qui cède du terrain — le total et le bouton d'encaissement
    restent visibles en toutes circonstances.
@@ -1118,6 +1120,84 @@ déjà attribué reste attribué.
 
 ---
 
+## 5sexies. Ce qui se lit et ce qui s'entend
+
+Cette section décrit des choix d'écran. Ils n'ont pas de réglage au
+back-office et ne changent rien à ce qui est enregistré ; ils existent parce
+qu'une caisse se tient à bout de bras, dans une salle sombre et bruyante, par
+quelqu'un à qui on parle pendant qu'il tape.
+
+### La grille
+
+Le premier onglet, **Tout**, remet le catalogue entier. Les autres sont les
+catégories de l'événement, dans l'ordre de pretix.
+
+**Un produit épuisé passe à la fin de sa catégorie**, pas dehors. Grisé,
+toujours là : la caisse doit pouvoir dire que la buvette en vend et qu'il n'y
+en a plus, sans que le pouce le rencontre en premier.
+
+**Les photos de produits** que pretix connaît déjà (*Produits → un produit →
+Image*) s'affichent en bord droit de la case, en fondu vers le fond. La case
+garde exactement la hauteur qu'elle aurait sans : une grille qui grandit d'un
+tiers pour porter des photos est une grille qu'il faut faire défiler un soir de
+rush. Sans image, rien ne change. Ces fichiers sont gardés par le service
+worker dans un cache à part, pour qu'ils ne disparaissent pas au premier trou
+de réseau et qu'un déploiement ne les fasse pas retélécharger.
+
+### Le panier
+
+Le nombre affiché sur une ligne est un bouton. Il ouvre **Combien ?**, douze
+quantités : un appui suffit, sans validation. *Retirer* vide la ligne. Le
+`−` / `+` reste là pour tout le reste, et la quantité proposée s'arrête à ce
+que le quota permet.
+
+### Le son
+
+Trois sons, synthétisés par l'app — rien n'est téléchargé, une caisse hors
+réseau les fait quand même :
+
+| Quand | Ce qu'on entend |
+|---|---|
+| un produit entre dans le panier | un clic court |
+| un billet passe à la porte | une note brève |
+| un billet est refusé | deux notes descendantes |
+
+Cela se coupe dans *Réglages → Son*, et c'est activé par défaut.
+
+**Pourquoi c'est là :** un navigateur sur iPhone ou iPad **ne peut pas faire
+vibrer l'appareil**. Aucune version d'iOS ne l'a jamais permis. À une porte
+tenue au téléphone, un refus n'était donc annoncé que par un écran rouge, au
+moment précis où le bénévole regarde la personne et pas l'écran. Sur Android la
+vibration existe et continue de marcher ; le son vient en plus.
+
+**Et le bouton silence :** sur iOS, le son d'une page web obéit à l'interrupteur
+physique de sonnerie, alors qu'une vidéo ne lui obéit pas. Depuis iOS 17, une
+page peut réclamer la session audio dite *playback* et sortir de cette règle,
+ce que l'app fait au premier appui. Autrement dit : **la caisse sonne même si le
+téléphone est en silencieux**, ce qui est le comportement voulu à une porte, et
+ce qui rend l'interrupteur des réglages nécessaire.
+
+Sur un iPhone antérieur à iOS 17, le son se tait quand le téléphone est en
+silencieux ; il n'y a pas de contournement propre, et le seul remède est de
+sortir le téléphone du silencieux.
+
+### Le contraste
+
+Les deux palettes visent le niveau AA de WCAG pour tout texte à l'écran, et ce
+n'est pas décoratif : la personne qui lit est en train de rendre la monnaie. Un
+script du harness (`node harness/audit.mjs`) parcourt dix écrans dans les deux
+palettes, compose les fonds translucides et échoue s'il trouve un texte
+au-dessous du seuil ou une cible tactile sous 44 px. Il tourne contre le serveur
+de développement, pas en CI — §9.
+
+Deux conséquences visibles : le bleu des boutons pleins est plus sombre que
+celui qui sert d'encre, et **une vente annulée est barrée dans le journal**.
+Elle affichait son montant comme n'importe quelle vente, avec un discret
+« annulée » en gris ; la colonne se lisait alors comme une recette qui n'a
+jamais eu lieu, devant la personne qui compte la caisse à deux heures du matin.
+
+---
+
 ## 6. Les garde-fous
 
 ### 6.1 Le serveur est seul maître des prix
@@ -1764,6 +1844,25 @@ entier.
 
 `OPENPOS_BASE` permet de viser une autre instance que la pile de dev SQLite.
 
+**Le harness visuel** ([`frontend/harness/`](../frontend/harness/)) monte la
+vraie app devant un serveur simulé, pour qu'un écran puisse être *regardé* et
+pas seulement affirmé. Une suite jsdom ne verra jamais qu'un clavier dépasse
+d'un iPad mini ; c'est pourtant ce qui arrivait. Il se lance avec
+`npm run dev`, puis :
+
+```
+http://localhost:5174/static/pretix_openpos/pwa/harness.html?browser=1
+```
+
+Les paramètres d'URL — rôle, lecteur de carte, hors ligne, file d'attente,
+photos, palette — sont listés dans [`harness/README.md`](../frontend/harness/README.md).
+Trois scripts Playwright l'accompagnent : `shoot.mjs` prend des captures aux
+tailles des appareils réellement en service, `measure.mjs` mesure ce qui
+dépasse, et `audit.mjs` parcourt dix écrans dans les deux palettes et échoue
+sur un texte sous le seuil AA ou une cible tactile sous 44 px. Playwright
+n'est volontairement pas dans `package.json` — il télécharge un navigateur à
+l'installation — donc `npm i --no-save playwright` avant de s'en servir.
+
 ---
 
 ## 10. Dépannage
@@ -1774,6 +1873,7 @@ entier.
 | 500 sur le JavaScript de la caisse après déploiement | Image construite sans `npm run build` préalable |
 | L'image refuse de démarrer sur le cluster | Image arm64 sur un nœud amd64 : rebâtir avec `--platform linux/amd64` |
 | Aucun produit dans le catalogue | Canal **Open POS** non coché sur les produits, ou produits sans quota disponible |
+| Les photos de produits ne s'affichent pas | Le produit n'a pas d'image dans pretix — ou les médias sont servis depuis un autre domaine (S3, CDN) : la coquille annonce `img-src 'self' data:`, et une image d'ailleurs est bloquée. La case reste vide, la vente n'est pas gênée |
 | Un produit reste « Épuisé » alors qu'aucune limite n'est atteinte | Il n'est rattaché à aucun quota : pretix ne peut pas le vendre, et la caisse le montre comme épuisé plutôt que de le laisser au panier pour être refusé au paiement. Créer un quota (illimité au besoin) et l'y rattacher |
 | « Une erreur est survenue » avec un 401 ou 403 au lancement | Device révoqué ou supprimé, plugin désactivé sur l'événement — ou un CDN / pare-feu qui conteste la requête. *Réessayer* d'abord ; *Dépairer* seulement si le device a bien été révoqué |
 | L'événement n'apparaît pas au moment de l'appairage | Plugin non activé sur l'événement, ou événement non *live*, ou device sans accès |

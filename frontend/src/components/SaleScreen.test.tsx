@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -571,5 +571,45 @@ describe("how many", () => {
     await user.click(screen.getByRole("button", { name: "4" }));
 
     expect(onSetCount).toHaveBeenCalledWith("11:", 4);
+  });
+});
+
+describe("a category that goes away", () => {
+  it("falls back to everything rather than showing an empty grid", () => {
+    // The catalogue is reloaded between sales, and what a device is allowed to
+    // sell can change under it. A tab left pointing at nothing used to leave a
+    // blank grid whose only way out was a tab nobody would think to press.
+    const { rerender, container } = render(
+      <SaleScreen
+        catalog={catalog}
+        cart={[]}
+        currency="EUR"
+        customSale={null}
+        depositBack={null}
+        onAdd={vi.fn()}
+        onCustomSale={vi.fn()}
+        onDepositBack={vi.fn()}
+        onSetCount={vi.fn()}
+        onClear={vi.fn()}
+        onCharge={vi.fn()}
+      />,
+    );
+    const props = {
+      cart: [], currency: "EUR", customSale: null, depositBack: null,
+      onAdd: vi.fn(), onCustomSale: vi.fn(), onDepositBack: vi.fn(),
+      onSetCount: vi.fn(), onClear: vi.fn(), onCharge: vi.fn(),
+    };
+    fireEvent.click(screen.getByRole("tab", { name: "Bar" }));
+    expect(container.querySelectorAll(".grid .product")).toHaveLength(2);
+
+    rerender(
+      <SaleScreen
+        catalog={{ categories: catalog.categories.filter((c) => c.id !== 1) }}
+        {...props}
+      />,
+    );
+
+    expect(container.querySelectorAll(".grid .product").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: /T-shirt · S/ })).toBeDefined();
   });
 });

@@ -116,7 +116,13 @@ export default function App() {
   const [pairing, setPairing] = useState<Pairing | null>(loadPairing);
   const [config, setConfig] = useState<PosConfig | null>(null);
   const [catalog, setCatalog] = useState<Catalog | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  /**
+   * Why the till could not open, when it could not.
+   *
+   * `refused` is the server turning this device away — the only case where
+   * unpairing is the answer, and the only case that offers it.
+   */
+  const [loadError, setLoadError] = useState<{ text: string; refused: boolean } | null>(null);
 
   /**
    * The basket, restored if this till was interrupted mid-sale.
@@ -327,7 +333,7 @@ export default function App() {
       // cache below: a revoked device selling from a stale catalogue would
       // only be refused again at the first sale, in front of a customer.
       if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
-        setLoadError(t("error.refused", { detail: err.message }));
+        setLoadError({ text: t("error.refused", { detail: err.message }), refused: true });
         return;
       }
 
@@ -338,7 +344,7 @@ export default function App() {
       // whole shape of the bug this replaced. It is also the one thing here
       // that somebody can fix in a minute from the back office.
       if (errorCode(err) === "series_closed") {
-        setLoadError(describeError(err));
+        setLoadError({ text: describeError(err), refused: false });
         return;
       }
 
@@ -353,7 +359,7 @@ export default function App() {
         setCatalog(cachedCatalog);
         return;
       }
-      setLoadError(describeError(err));
+      setLoadError({ text: describeError(err), refused: false });
     }
   }, []);
 
@@ -742,19 +748,26 @@ export default function App() {
       <div className="centered">
         <div className="panel">
           <h2>{t("error.title")}</h2>
-          <div className="error-banner">{loadError}</div>
+          <div className="error-banner">{loadError.text}</div>
           <button className="btn primary" onClick={() => void load(pairing)}>
             {t("error.retry")}
           </button>
-          <button
-            className="btn ghost"
-            style={{ marginTop: 10 }}
-            onClick={() => {
-              if (confirm(t("settings.unpairConfirm"))) unpair();
-            }}
-          >
-            {t("settings.unpair")}
-          </button>
+          {/* Only when the server has turned this device away. A till that
+              has merely lost the network is one retry from working, and
+              unpairing it costs a new code typed at the back office by
+              somebody who is not in the room — which is not a button to leave
+              under a volunteer's thumb at one in the morning. */}
+          {loadError.refused && (
+            <button
+              className="btn ghost"
+              style={{ marginTop: 10 }}
+              onClick={() => {
+                if (confirm(t("settings.unpairConfirm"))) unpair();
+              }}
+            >
+              {t("settings.unpair")}
+            </button>
+          )}
         </div>
       </div>
     );

@@ -98,7 +98,12 @@ export default function SaleScreen({
   /** The basket line whose count is being asked for, by key. */
   const [counting, setCounting] = useState<string | null>(null);
 
-  const shown = active === "all" ? categories : categories.filter((c) => c.id === active);
+  // A tab can outlive its category: the catalogue is reloaded between sales,
+  // and what an appliance is allowed to sell can change under it. Falling back
+  // to everything beats an empty grid whose only way out is a tab the operator
+  // has to think to press.
+  const narrowed = categories.filter((c) => c.id === active);
+  const shown = active === "all" || narrowed.length === 0 ? categories : narrowed;
   const total = cart.reduce((sum, line) => sum + line.unitPrice * line.count, 0);
   const countingLine = cart.find((line) => line.key === counting) ?? null;
 
