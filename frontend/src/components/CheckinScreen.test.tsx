@@ -920,6 +920,18 @@ describe("selling a ticket at the door", () => {
     expect(screen.queryByRole("button", { name: `🛒 ${t("checkin.sell")}` })).toBeNull();
   });
 
+  it("puts selling first, on a row of its own above the search and the head count", () => {
+    // Three buttons side by side did not fit an iPhone. jsdom lays nothing
+    // out, so what is pinned here is the markup the layout in styles.css rests
+    // on: the button leads the row, and carries the class that gives it a
+    // whole line.
+    const { container } = show({ onSell: vi.fn() });
+
+    const sell = screen.getByRole("button", { name: `🛒 ${t("checkin.sell")}` });
+    expect(container.querySelector(".scanner-actions")?.firstElementChild).toBe(sell);
+    expect(sell.className).toContain("sell-button");
+  });
+
   it("hands the door over to the grid when asked", async () => {
     const onSell = vi.fn();
     const { user } = show({ onSell });

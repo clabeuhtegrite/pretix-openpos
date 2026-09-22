@@ -1343,9 +1343,11 @@ table.takings thead th {
 }
 
 /* Side by side: the footer eats into the camera preview, and on a phone in
-   portrait every row of it is a row the operator cannot aim with. */
+   portrait every row of it is a row the operator cannot aim with. Wrapping is
+   for the door's third button only, below. */
 .scanner-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
@@ -1364,6 +1366,26 @@ table.takings thead th {
   flex: 1;
   padding: 0 6px;
   font-variant-numeric: tabular-nums;
+}
+
+/*
+ * The door's "Vendre", on a row of its own above the other two.
+ *
+ * The row was drawn for two buttons, search and head count at 3:1, and fitted
+ * every iPhone that way. Selling joined them as a third, at the search's
+ * share, and 3:3:1 does not fit a phone 375 to 430 points wide: "Chercher un
+ * nom" ran out of its button and across the head count, and "👥 214" out of
+ * its own, with nowrap and min-width: 0 letting both happen without a sound.
+ * A full row costs the camera one more strip of height — the price of keeping
+ * the search a size a thumb finds with a queue waiting, which is the reason
+ * the row is shaped the way it is at all.
+ *
+ * A whole row as its basis is what sends the other two onto the next one,
+ * where they share it 3:1 exactly as before. A device that is not the door
+ * has no such button and keeps its single row.
+ */
+.scanner-actions .btn.sell-button {
+  flex-basis: 100%;
 }
 
 .select,
