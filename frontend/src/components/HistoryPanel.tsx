@@ -273,6 +273,7 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
                     key={line.seq}
                     className={
                       `history-row${cancellation || depositBack ? " is-cancellation" : ""}` +
+                      (line.cancelled ? " is-cancelled" : "") +
                       (line.testmode ? " is-testmode" : "")
                     }
                     onClick={() => setOpenSeq(line.seq)}

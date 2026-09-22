@@ -27,18 +27,21 @@
   --border: #2f3849;
   --text: #eef2f8;
   --text-dim: #9aa7bd;
-  --accent: #3b82f6;
-  --accent-strong: #2563eb;
+  --accent: #2563eb;
+  --accent-strong: #1d4ed8;
   --success: #22c55e;
   --success-strong: #16a34a;
   --danger: #ef4444;
   --warning: #f59e0b;
 
-  /* Ink versions of the three above. On a dark surface the fill already reads
-     as text, so these are the same colour. */
+  /* Ink versions of the fills above. On a dark surface the green, the amber
+     and the red already read as text, so those three are the same colour; the
+     blue is not, because it had to be darkened until white lettering could sit
+     on it, and a blue that dark is unreadable as ink on a dark screen. */
+  --accent-text: #60a5fa;
   --success-text: #22c55e;
   --warning-text: #f59e0b;
-  --danger-text: #ef4444;
+  --danger-text: #f87171;
   /* Ink on the red wash rather than on the page: the wash is already red. */
   --danger-on-tint: #fecaca;
 
@@ -86,6 +89,7 @@
     --danger: #ef4444;
     --warning: #f59e0b;
 
+    --accent-text: #1d4ed8;
     --success-text: #15803d;
     --warning-text: #a4600a;
     --danger-text: #b42318;
@@ -116,6 +120,7 @@
   --danger: #ef4444;
   --warning: #f59e0b;
 
+  --accent-text: #1d4ed8;
   --success-text: #15803d;
   --warning-text: #a4600a;
   --danger-text: #b42318;
@@ -416,7 +421,7 @@ button {
 }
 
 .product.is-action .price {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 /* Money going the other way, and the amber the till uses everywhere else for
@@ -960,7 +965,7 @@ button {
   margin-bottom: 14px;
   border-radius: 999px;
   background:
-    linear-gradient(90deg, transparent 0 25%, var(--accent) 25% 75%, transparent 75% 100%)
+    linear-gradient(90deg, transparent 0 25%, var(--accent-text) 25% 75%, transparent 75% 100%)
     0 0 / 250% 100% no-repeat,
     var(--border);
   animation: reader-wait 1.6s linear infinite;
@@ -980,7 +985,7 @@ button {
 @media (prefers-reduced-motion: reduce) {
   .pay-reader.is-waiting::before {
     animation: none;
-    background: var(--accent);
+    background: var(--accent-text);
   }
 }
 
@@ -1131,7 +1136,7 @@ button {
 }
 
 .field input:focus {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: -1px;
 }
 
@@ -1740,6 +1745,25 @@ table.takings thead th {
 
 .history-row-total.is-negative {
   color: var(--warning-text);
+}
+
+/*
+ * A sale that has since been reversed.
+ *
+ * It used to say so in the meta line, in thirteen-point grey, while its amount
+ * stayed in the same white as every sale that did happen. The column then read
+ * as takings that were never taken — and the person most likely to total that
+ * column is the volunteer counting the drawer at two in the morning. Struck
+ * through, it reads as reversed before any figure is compared.
+ */
+.history-row.is-cancelled .history-row-order,
+.history-row.is-cancelled .history-row-total {
+  text-decoration: line-through;
+}
+
+.history-row.is-cancelled .history-row-total {
+  color: var(--text-dim);
+  font-weight: 600;
 }
 
 .history-detail-head {

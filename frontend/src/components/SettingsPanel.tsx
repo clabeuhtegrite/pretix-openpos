@@ -13,6 +13,8 @@ interface Props {
   cashier: string;
   theme: Theme;
   onThemeChange: (theme: Theme) => void;
+  sound: boolean;
+  onSoundChange: (on: boolean) => void;
   onCashierChange: (name: string) => void;
   onRefresh: () => void;
   onUnpair: () => void;
@@ -53,7 +55,8 @@ function TakingsRow({ label, takings, currency }: { label: string; takings: Taki
 }
 
 export default function SettingsPanel({
-  pairing, currency, cashier, theme, onThemeChange, onCashierChange, onRefresh, onUnpair,
+  pairing, currency, cashier, theme, onThemeChange, sound, onSoundChange, onCashierChange,
+  onRefresh, onUnpair,
   onClose, onEventChange,
 }: Props) {
   const [summary, setSummary] = useState<SummaryResponse | null>(null);
@@ -163,6 +166,31 @@ export default function SettingsPanel({
             ))}
           </div>
           <div className="help">{t("settings.themeHelp")}</div>
+        </div>
+
+        {/* The same two buttons as the palette above, because it is the same
+            kind of answer and a till should not have two ways of saying yes. */}
+        <div className="field">
+          <span className="field-label">{t("settings.sound")}</span>
+          <div className="segmented" role="group" aria-label={t("settings.sound")}>
+            <button
+              type="button"
+              className="btn"
+              aria-pressed={sound}
+              onClick={() => onSoundChange(true)}
+            >
+              {t("settings.soundOn")}
+            </button>
+            <button
+              type="button"
+              className="btn"
+              aria-pressed={!sound}
+              onClick={() => onSoundChange(false)}
+            >
+              {t("settings.soundOff")}
+            </button>
+          </div>
+          <div className="help">{t("settings.soundHelp")}</div>
         </div>
 
         <h3 style={{ fontSize: 16, marginTop: 24 }}>{t("summary.title")}</h3>

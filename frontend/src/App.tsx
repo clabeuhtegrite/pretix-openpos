@@ -16,6 +16,7 @@ import { describeError } from "./errors";
 import { t } from "./i18n";
 import { fromCents, toCents } from "./money";
 import { newNonce } from "./nonce";
+import { play, setSoundEnabled, soundEnabled, unlock } from "./sound";
 import {
   clearBasket, clearPairing, enqueue, loadBasket, loadCached, loadCashier, loadFailures,
   loadPairing, loadQueue, loadUpdateAttempt, requestPersistence, saveBasket, saveCached,
@@ -129,6 +130,7 @@ export default function App() {
   const [cart, setCart] = useState<CartLine[]>(() => restored?.cart ?? []);
   const [cashier, setCashier] = useState<string>(loadCashier);
   const [theme, setTheme] = useState<Theme>(loadTheme);
+  const [sound, setSound] = useState(soundEnabled);
   /** Read once at startup: the server version a previous reload already tried. */
   const [updateTried] = useState<string | null>(loadUpdateAttempt);
 
@@ -195,6 +197,23 @@ export default function App() {
   // What is queued is money that exists nowhere else yet; ask the browser not
   // to evict it.
   useEffect(requestPersistence, []);
+
+  /**
+   * Start the audio on the first tap, whatever that tap was.
+   *
+   * No browser will start an audio context outside a gesture, and the sound
+   * that matters most — a refused ticket at the door — arrives on a camera
+   * frame rather than a tap. So it is claimed at the first opportunity,
+   * whichever screen the operator happens to be on.
+   */
+  useEffect(() => {
+    const once = () => {
+      unlock();
+      window.removeEventListener("pointerdown", once);
+    };
+    window.addEventListener("pointerdown", once);
+    return () => window.removeEventListener("pointerdown", once);
+  }, []);
 
   /**
    * Keep the basket on disk, so a reload does not lose it.
@@ -402,6 +421,9 @@ export default function App() {
   }
 
   function addProduct(product: Sellable) {
+    // Before the state update, not after: the point of the click is that the
+    // tap registered, whichever way the basket then goes.
+    play("add");
     setCart((current) => {
       const existing = current.find((line) => line.key === product.key);
       if (!existing) {
@@ -952,6 +974,14 @@ export default function App() {
           onCashierChange={(name) => {
             setCashier(name);
             saveCashier(name);
+          }}
+          sound={sound}
+          onSoundChange={(on) => {
+            setSound(on);
+            setSoundEnabled(on);
+            // So the choice is heard the moment it is made, rather than at the
+            // next sale.
+            if (on) play("ok");
           }}
           onRefresh={() => {
             void load(pairing);

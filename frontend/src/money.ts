@@ -15,14 +15,31 @@ export function fromCents(cents: number): string {
   return (cents / 100).toFixed(2);
 }
 
+/**
+ * A real minus sign, not a hyphen.
+ *
+ * Intl writes a negative amount with U+002D, which is a short dash a good deal
+ * lighter than the digits beside it; the app types U+2212 wherever it writes
+ * one itself, on the basket's "−" button and on the deposit tile. Two glyphs
+ * for the same thing sat on the same screen. This one is the one to keep: at
+ * arm's length across a room, the difference a cashier has to catch is between
+ * money coming in and money going out, and the longer bar is the one that can
+ * be seen.
+ */
+function realMinus(formatted: string): string {
+  return formatted.replace(/\u002d/g, "\u2212");
+}
+
 export function formatMoney(cents: number, currency: string, locale?: string): string {
   try {
-    return new Intl.NumberFormat(locale ?? navigator.language, {
-      style: "currency",
-      currency,
-    }).format(cents / 100);
+    return realMinus(
+      new Intl.NumberFormat(locale ?? navigator.language, {
+        style: "currency",
+        currency,
+      }).format(cents / 100),
+    );
   } catch {
     // Unknown currency code: better a bare number than a crashed till.
-    return `${fromCents(cents)} ${currency}`;
+    return realMinus(`${fromCents(cents)} ${currency}`);
   }
 }

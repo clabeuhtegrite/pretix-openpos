@@ -44,4 +44,15 @@ describe("formatMoney", () => {
   it("degrades to a bare number rather than crash on a broken code", () => {
     expect(formatMoney(100, "EURO", "en-US")).toBe("1.00 EURO");
   });
+
+  it("writes a negative amount with a real minus sign", () => {
+    // Intl writes U+002D, a hyphen shorter and lighter than the digits next to
+    // it. The till types U+2212 everywhere it writes one itself, and across a
+    // room that bar is the difference between money in and money out.
+    expect(formatMoney(-330, "EUR", "en-US")).toBe("\u2212€3.30");
+  });
+
+  it("uses the same sign when it has fallen back to a bare number", () => {
+    expect(formatMoney(-100, "EURO", "en-US")).toBe("\u22121.00 EURO");
+  });
 });

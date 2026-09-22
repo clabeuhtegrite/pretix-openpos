@@ -2,7 +2,8 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { apiMock } = vi.hoisted(() => ({
+const { apiMock, sound } = vi.hoisted(() => ({
+  sound: { play: vi.fn(), unlock: vi.fn(), setSoundEnabled: vi.fn(), soundEnabled: vi.fn(() => true) },
   apiMock: {
     config: vi.fn(),
     catalog: vi.fn(),
@@ -26,6 +27,10 @@ vi.mock("./api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./api")>();
   return { ...actual, api: apiMock };
 });
+
+// The sounds have their own tests, and jsdom has no Web Audio anyway. Here it
+// is a thing that records what the till asked to be heard.
+vi.mock("./sound", () => sound);
 
 // No camera in jsdom, and the door has its own tests. What is kept is the
 // way out, so a test can close the door again.
@@ -359,6 +364,61 @@ describe("getting to the till", () => {
     await user.click(screen.getByRole("button", { name: t("error.retry") }));
 
     expect(await screen.findByRole("button", { name: /Bière/ })).toBeDefined();
+  });
+});
+
+describe("hearing the till", () => {
+  it("clicks when a product goes in the basket", async () => {
+    // A cashier ringing up a round is looking at the customer, not at the
+    // screen. The click is how they know the tap took.
+    sound.play.mockClear();
+    const { user } = show();
+    await ready();
+
+    await user.click(tile(/Bière/));
+
+    expect(sound.play).toHaveBeenCalledWith("add");
+  });
+
+  it("starts the audio on the first tap, whatever that tap was", async () => {
+    // No browser will open an audio context outside a gesture, and a refused
+    // ticket at the door arrives on a camera frame rather than a tap.
+    sound.unlock.mockClear();
+    const { user } = show();
+    await ready();
+
+    await user.click(screen.getByRole("tab", { name: "Bar" }));
+
+    expect(sound.unlock).toHaveBeenCalled();
+  });
+
+  it("remembers being told to keep quiet", async () => {
+    const { user } = show();
+    await ready();
+    await user.click(screen.getByRole("button", { name: "settings" }));
+
+    await user.click(await screen.findByRole("button", { name: t("settings.soundOff") }));
+
+    expect(sound.setSoundEnabled).toHaveBeenCalledWith(false);
+  });
+
+  it("says something the moment sound is switched back on", async () => {
+    // Otherwise the operator has to ring a sale up to find out whether the
+    // switch did anything.
+    apiMock.summary.mockResolvedValue({
+      since: "2026-08-16T04:00:00Z", device: null,
+      event: { count: 0, cancellations: 0, cash: "0.00", card: "0.00", total: "0.00" },
+    });
+    const { user } = show();
+    await ready();
+    await user.click(screen.getByRole("button", { name: "settings" }));
+    await user.click(await screen.findByRole("button", { name: t("settings.soundOff") }));
+    sound.play.mockClear();
+
+    await user.click(screen.getByRole("button", { name: t("settings.soundOn") }));
+
+    expect(sound.setSoundEnabled).toHaveBeenLastCalledWith(true);
+    expect(sound.play).toHaveBeenCalledWith("ok");
   });
 });
 

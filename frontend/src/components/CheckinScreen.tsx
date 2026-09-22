@@ -5,6 +5,7 @@ import { useConnectivity } from "../connectivity";
 import { t, type MessageKey } from "../i18n";
 import { newNonce } from "../nonce";
 import { indexSnapshot, offlineVerdict } from "../offline";
+import { play } from "../sound";
 import { enqueue, loadQueue } from "../storage";
 import type { Attendance, CheckinListInfo, Pairing, RedeemResult } from "../types";
 import { useBackClose } from "../useBackClose";
@@ -50,7 +51,8 @@ const ATTENDANCE_SETTLE_MS = 1200;
  *
  * At a loud door, looking up at the right moment is not a given. Android
  * vibrates; iOS has no web vibration at all and simply does not, which is why
- * the red screen stays the actual answer and this is only a nudge.
+ * the sound in sound.ts carries this on every iPhone and the red screen stays
+ * the actual answer either way.
  */
 function buzz(): void {
   try {
@@ -253,7 +255,16 @@ export default function CheckinScreen({
             ? { ...c, ok: c.ok + 1 }
             : { ...c, other: c.other + 1 };
         });
-        if (result.status !== "ok") buzz();
+        // Heard, not felt: the door is all iPhones and none of them vibrate.
+        // A scan that went through says so too, quietly, because silence on a
+        // scan reads as "did it even read it?" and gets the ticket presented
+        // twice.
+        if (result.status === "ok") {
+          play("ok");
+        } else {
+          play("refused");
+          buzz();
+        }
         if (result.status === "ok" && online) {
           // The room may just have changed. Still asked of the server rather
           // than added up here: the figure counts every door and every till,
