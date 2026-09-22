@@ -538,6 +538,53 @@ describe("on a till with a card reader of its own", () => {
     expect(onConfirm).not.toHaveBeenCalled();
   });
 
+  const paid = {
+    phase: "paid" as const, amount: "12.34", currency: "EUR", message: null, stalled: false,
+  };
+
+  it("will not let a charged card be booked as cash", async () => {
+    // The panel only stays open at this point because posting the sale
+    // failed, so there is a red banner on screen — which is exactly when
+    // somebody starts pressing things. One tap on "Espèces" and one on
+    // "Valider" used to record a cash sale for money that went on a card, and
+    // the drawer came up short by that amount at closing.
+    const { user, onConfirm } = show(
+      { cardMode: "terminal", terminal: paid, error: "Le serveur n'a pas répondu" },
+      null,
+    );
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+
+    await user.click(screen.getByRole("button", { name: t("payment.cash") }));
+
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: t("payment.cash") })).toHaveProperty("disabled", true);
+  });
+
+  it("will not let the operator walk away from a charged card either", async () => {
+    const { user, onCancel } = show(
+      { cardMode: "terminal", terminal: paid, error: "Le serveur n'a pas répondu" },
+      null,
+    );
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+
+    expect(screen.getByRole("button", { name: t("payment.back") })).toHaveProperty("disabled", true);
+    expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it("offers to record the sale by hand once the card has been charged", async () => {
+    // The automatic post is what normally ends this, so the button only
+    // appears when that has failed — and then it is the only correct move.
+    const { user, onConfirm } = show(
+      { cardMode: "terminal", terminal: paid, error: "Le serveur n'a pas répondu" },
+      null,
+    );
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+
+    await user.click(screen.getByRole("button", { name: t("payment.cardConfirm") }));
+
+    expect(onConfirm).toHaveBeenCalledWith("card", null, "12.34");
+  });
+
   it("reads out the figure the reader is showing, not the basket's", async () => {
     // They can differ: the server prices the basket when it puts it on the
     // reader, and this app's catalogue can be a refresh behind. The customer

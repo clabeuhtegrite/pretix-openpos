@@ -36,7 +36,17 @@ interface Props {
   error: string | null;
   /** Money already taken back off the customer, from a sale cancelled to be corrected. */
   credit?: { amountCents: number; order: string } | null;
-  onConfirm: (paymentType: PaymentType, cashGiven: string | null) => void;
+  /**
+   * ``charged`` is what the reader actually took, when one did. Passed on
+   * rather than left to the caller: the server priced the basket when it put
+   * it on the reader, and that figure — not this app's, whose catalogue can
+   * be a refresh behind — is the one the customer agreed to.
+   */
+  onConfirm: (
+    paymentType: PaymentType,
+    cashGiven: string | null,
+    charged?: string,
+  ) => void;
   onCancel: () => void;
 }
 
@@ -136,6 +146,20 @@ export default function PaymentPanel({
   const readerCannot = onReader && (totalCents <= 0 || credit != null);
   const readerBusy =
     onReader && (terminal?.phase === "starting" || terminal?.phase === "waiting");
+  /**
+   * The card has been charged, whatever happened next.
+   *
+   * Normally nothing is visible here: the sale posts itself the moment the
+   * reader reports the money, and the panel closes. It matters when that post
+   * fails — an unreachable server, an error — because the panel then stays
+   * open on a red banner with the question still on screen. The lock has to
+   * outlast the waiting: one tap on "Espèces" and one on "Valider" would
+   * record a cash sale for money that went on a card, and the drawer comes up
+   * short by that amount at closing. A red banner is exactly when somebody
+   * starts pressing things.
+   */
+  const readerPaid = onReader && terminal?.phase === "paid";
+  const methodLocked = busy || readerBusy || readerPaid;
 
   /**
    * Answering the question, and — on a reader till — putting the basket on it.
@@ -183,7 +207,7 @@ export default function PaymentPanel({
                 className="btn"
                 aria-pressed={method === "cash"}
                 onClick={() => choose("cash")}
-                disabled={busy || readerBusy}
+                disabled={methodLocked}
               >
                 {t("payment.cash")}
               </button>
@@ -191,7 +215,7 @@ export default function PaymentPanel({
                 className="btn"
                 aria-pressed={method === "card"}
                 onClick={() => choose("card")}
-                disabled={busy || readerBusy}
+                disabled={methodLocked}
               >
                 {t("payment.card")}
               </button>
@@ -338,19 +362,28 @@ export default function PaymentPanel({
               className="btn ghost"
               style={{ flex: 1 }}
               onClick={readerBusy ? onTerminalStop : onCancel}
-              disabled={busy}
+              // Leaving is not on offer once the card has been charged: the
+              // only correct move is recording the sale, which is the button
+              // beside this one.
+              disabled={busy || readerPaid}
             >
               {readerBusy ? t("payment.readerStop") : t("payment.back")}
             </button>
             {/* Absent rather than disabled: the two buttons above are the step,
                 and a greyed-out "Valider" beside them reads as a till that is
                 stuck rather than as a question waiting for an answer. */}
-            {method !== null && !(method === "card" && onReader) && (
+            {method !== null && (!(method === "card" && onReader) || readerPaid) && (
               <button
                 className="btn success"
                 style={{ flex: 2 }}
                 disabled={busy || (method === "cash" && short)}
-                onClick={() => onConfirm(method, cashGiven)}
+                onClick={() =>
+                  // The third figure exists only when a reader took the money,
+                  // and is only ever read in that case.
+                  readerPaid && terminal?.amount
+                    ? onConfirm(method, cashGiven, terminal.amount)
+                    : onConfirm(method, cashGiven)
+                }
               >
                 {busy
                   ? t("payment.working")

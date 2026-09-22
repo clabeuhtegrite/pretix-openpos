@@ -213,6 +213,21 @@ export function isRetryable(error: unknown): boolean {
 }
 
 /**
+ * The machine-readable half of a refusal, when the server sent one.
+ *
+ * Some 4xx answers are not refusals at all — ``terminal_unsure`` says "we
+ * could not ask", which the till has to treat as a payment still running
+ * rather than as one that failed. Reading that off a code rather than off the
+ * message is the same rule the server keeps on its own side: prose is
+ * translated, codes are not.
+ */
+export function errorCode(error: unknown): string | null {
+  if (!(error instanceof ApiError)) return null;
+  const body = error.body as { code?: unknown } | null | undefined;
+  return typeof body?.code === "string" ? body.code : null;
+}
+
+/**
  * One basket line on its way to the server: products and quantities.
  *
  * The same payload for a checkout and for a card reader, because it is the

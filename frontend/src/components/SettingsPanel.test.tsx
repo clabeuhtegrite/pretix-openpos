@@ -12,9 +12,10 @@ vi.mock("../api", async (importOriginal) => {
   return { ...actual, api: { ...actual.api, posEvents, summary } };
 });
 
-import { t } from "../i18n";
+import { locale, t } from "../i18n";
 import { formatMoney } from "../money";
-import type { Pairing, PosEvent, SummaryResponse } from "../types";
+import { saveQueue } from "../storage";
+import type { Pairing, PosEvent, QueuedSale, SummaryResponse } from "../types";
 import SettingsPanel from "./SettingsPanel";
 
 /**
@@ -169,6 +170,51 @@ describe("the takings", () => {
     await waitFor(() => expect(summary).toHaveBeenCalled());
     // Still fully usable: this is a report, not a gate.
     expect(screen.getByRole("button", { name: t("settings.close") })).toBeDefined();
+  });
+
+  it("says so, and offers another go, rather than three dots for ever", async () => {
+    // This is the closing-time screen. At half past one a spinner that never
+    // resolves is worse than a sentence saying what happened.
+    summary.mockRejectedValue(new Error("offline"));
+    const { user } = show();
+    await screen.findByText(t("summary.failed"));
+    summary.mockResolvedValue(takings);
+
+    await user.click(screen.getByRole("button", { name: t("summary.retry") }));
+
+    expect(await screen.findByText(t("summary.allTills"))).toBeDefined();
+  });
+
+  it("names the till day it is reporting on", async () => {
+    // A till day starts at six in the morning, so a bar that closes at 5:40
+    // and counts the drawer at 6:15 reads zeros everywhere — true, and
+    // useless without this line.
+    const clock = new Date(takings.since).toLocaleTimeString(locale, {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    show();
+
+    expect(await screen.findByText(t("summary.since", { time: clock }))).toBeDefined();
+  });
+
+  it("owns up to what this till has not managed to send", async () => {
+    // The figures come from the server, so a sale encashed during a dropout
+    // is not in them. Somebody comparing this screen with the drawer would
+    // otherwise find a difference with nothing here to explain it.
+    const queued: QueuedSale = {
+      kind: "sale", id: "k1", at: "2026-08-16T22:00:00.000Z", event: "festival",
+      positions: [], chargedTotal: "12.00", paymentType: "cash", cashGiven: "12.00",
+      cashChange: "0.00", cashier: "Ana", admits: false, label: "1× Bière",
+    };
+    saveQueue([queued]);
+    show();
+
+    expect(
+      await screen.findByText(
+        t("summary.queued", { n: 1, amount: formatMoney(1200, "EUR") }),
+      ),
+    ).toBeDefined();
   });
 });
 

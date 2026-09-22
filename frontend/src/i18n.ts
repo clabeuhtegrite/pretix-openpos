@@ -169,6 +169,11 @@ export const MESSAGES = {
     "offline.badgeOffline": "Offline · {n}",
     "offline.badgePending": "{n} to send",
     "offline.badgeFailed": "{n} refused",
+    "summary.since": "Since {time} — a till day runs from one morning to the next.",
+    "summary.queued":
+      "Not counted above: {n} sale(s) this till has not been able to send yet, {amount} of them in cash.",
+    "summary.failed": "The server could not be asked for the takings.",
+    "summary.retry": "Try again",
     "offline.nothingPending": "Nothing waiting to be sent.",
     "offline.stranded":
       "{n} kept for another event ({events}). They will be sent when this till is switched back to it.",
@@ -418,6 +423,11 @@ export const MESSAGES = {
     "offline.badgeOffline": "Hors ligne · {n}",
     "offline.badgePending": "{n} à envoyer",
     "offline.badgeFailed": "{n} refusé·e·s",
+    "summary.since": "Depuis {time} — une journée de caisse va d'un matin à l'autre.",
+    "summary.queued":
+      "Non compté ci-dessus : {n} vente(s) que cette caisse n'a pas encore pu envoyer, dont {amount} en espèces.",
+    "summary.failed": "Le serveur n'a pas pu être interrogé pour le relevé.",
+    "summary.retry": "Réessayer",
     "offline.nothingPending": "Rien en attente d’envoi.",
     "offline.stranded":
       "{n} en attente pour un autre événement ({events}). Elles partiront quand cette caisse y sera revenue.",

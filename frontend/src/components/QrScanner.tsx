@@ -60,6 +60,7 @@ export default function QrScanner({
     let frame = 0;
     let lastDecode = 0;
     let stopped = false;
+    let restarting = false;
 
     async function start() {
       if (!navigator.mediaDevices?.getUserMedia) {
@@ -89,6 +90,17 @@ export default function QrScanner({
 
       const [track] = stream.getVideoTracks();
       trackRef.current = track ?? null;
+      // A track that ends is the failure this screen cannot afford to hide:
+      // the <video> keeps its last frame, `starting` is false and `error` is
+      // null, so the door looks like it is scanning and decodes nothing while
+      // a queue builds in front of it. The OS ends a track for reasons that
+      // have nothing to do with this app — another app taking the camera, a
+      // call, a tab suspended long enough.
+      // Optional-chained on the method for the same reason getCapabilities is
+      // below: this file already meets browsers that do not carry every part
+      // of the API, and a scanner that throws on one is worse than a scanner
+      // that cannot recover on it.
+      track?.addEventListener?.("ended", () => void restart());
       const capabilities = track?.getCapabilities?.() as
         | (MediaTrackCapabilities & { torch?: boolean })
         | undefined;
@@ -138,9 +150,46 @@ export default function QrScanner({
       if (result?.data) onDecodeRef.current(result.data);
     }
 
+    /**
+     * Take the camera again after the system has taken it away.
+     *
+     * Everything is torn down first, including the stream: asking for a second
+     * one while the first is still held is how a device ends up with two live
+     * tracks and a lamp nobody can put out.
+     */
+    async function restart() {
+      if (stopped || restarting) return;
+      restarting = true;
+      cancelAnimationFrame(frame);
+      trackRef.current = null;
+      stream?.getTracks().forEach((track) => track.stop());
+      stream = null;
+      setStarting(true);
+      try {
+        await start();
+      } finally {
+        restarting = false;
+      }
+    }
+
+    /**
+     * Coming back to the screen is the moment to check the camera survived.
+     *
+     * `ended` covers the track the system closed outright; this covers the one
+     * it merely muted, and it costs nothing when the camera is fine — the
+     * check is a flag on a track, not a new stream.
+     */
+    function onVisible() {
+      if (document.visibilityState !== "visible" || stopped) return;
+      const track = trackRef.current;
+      if (!track || track.readyState === "ended" || track.muted) void restart();
+    }
+
+    document.addEventListener("visibilitychange", onVisible);
     void start();
     return () => {
       stopped = true;
+      document.removeEventListener("visibilitychange", onVisible);
       cancelAnimationFrame(frame);
       trackRef.current = null;
       // Stopping the track puts the lamp out with it; no separate switch-off is

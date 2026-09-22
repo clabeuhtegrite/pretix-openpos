@@ -453,7 +453,11 @@ export default function App() {
    * customer is still standing there — rather than being shown a receipt for
    * something that will never exist.
    */
-  function sellOffline(paymentType: PaymentType, cashGiven: string | null): SaleResult {
+  function sellOffline(
+    paymentType: PaymentType,
+    cashGiven: string | null,
+    charged?: string,
+  ): SaleResult {
     const admissionItems = new Set(config?.admission_items ?? []);
     const entry: QueuedSale = {
       kind: "sale",
@@ -472,7 +476,11 @@ export default function App() {
         ...(line.description ? { description: line.description } : {}),
         ...(line.refund ? { refund: true } : {}),
       })),
-      chargedTotal: fromCents(total),
+      // What the reader took, when one did: the server priced this basket
+      // when it put it on the reader, and that is the figure the customer
+      // agreed to. Without it the receipt and the sync panel read out this
+      // app's own total, which is not what the card paid.
+      chargedTotal: charged ?? fromCents(total),
       paymentType,
       cashGiven,
       cashChange:
@@ -559,7 +567,7 @@ export default function App() {
     if (!online) {
       setPayError(null);
       try {
-        const result = sellOffline(paymentType, cashGiven);
+        const result = sellOffline(paymentType, cashGiven, charged);
         setSale(result);
         setPaying(null);
         setCart([]);
@@ -603,7 +611,7 @@ export default function App() {
         // server understood and refused, and queueing a refusal would only mean
         // being refused again later, out of sight of the person who could fix it.
         try {
-          const queued = sellOffline(paymentType, cashGiven);
+          const queued = sellOffline(paymentType, cashGiven, charged);
           setSale(queued);
           setPaying(null);
           setCart([]);
