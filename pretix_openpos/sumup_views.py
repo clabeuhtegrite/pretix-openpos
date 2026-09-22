@@ -100,6 +100,8 @@ class SumUpView(OrganizerSettingsFormView):
         # organizer waits for a page.
         live = account.reader_status(reader_id) if paired else None
         state = str((live or {}).get("state") or "")
+        # A float in SumUp's answer (72.5), which nobody reads to the decimal.
+        battery = (live or {}).get("battery_level")
         return {
             "id": reader_id,
             "name": reader.get("name") or reader_id,
@@ -118,7 +120,10 @@ class SumUpView(OrganizerSettingsFormView):
             "online": bool(live) and live.get("status") == "ONLINE",
             "state": state,
             "busy": state in SumUpAccount.BUSY_STATES,
-            "battery": (live or {}).get("battery_level"),
+            # It takes no payment until it has finished, and SumUp readers
+            # update themselves when switched on — the start of an evening.
+            "updating": state == SumUpAccount.STATE_UPDATING,
+            "battery": round(battery) if isinstance(battery, (int, float)) else None,
             "firmware": (live or {}).get("firmware_version") or "",
             "connection": (live or {}).get("connection_type") or "",
         }

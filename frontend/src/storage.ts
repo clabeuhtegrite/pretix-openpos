@@ -10,6 +10,7 @@ const FAILURES_KEY = "openpos.failures.v1";
 const SNAPSHOT_KEY = "openpos.snapshot.v1";
 const UPDATE_KEY = "openpos.updateTried.v1";
 const BASKET_KEY = "openpos.basket.v1";
+const REVOKE_KEY = "openpos.revoke.v1";
 
 /**
  * Ask the browser to keep this data.
@@ -128,6 +129,39 @@ export function savePairing(pairing: Pairing): void {
 
 export function clearPairing(): void {
   localStorage.removeItem(PAIRING_KEY);
+}
+
+/**
+ * Tokens of pairings this till has given up, until pretix has heard so.
+ *
+ * The token was already in this storage, under the pairing. It stays exactly
+ * as long as it takes to tell pretix it is dead — see `useDeviceRevoke` — and
+ * not a request longer.
+ */
+export function loadRevocations(): string[] {
+  const saved = readJson<unknown>(REVOKE_KEY, []);
+  return Array.isArray(saved)
+    ? saved.filter((token): token is string => typeof token === "string" && token !== "")
+    : [];
+}
+
+export function queueRevocation(token: string): void {
+  const pending = loadRevocations();
+  if (!pending.includes(token)) writeRevocations([...pending, token]);
+}
+
+export function forgetRevocation(token: string): void {
+  writeRevocations(loadRevocations().filter((pending) => pending !== token));
+}
+
+function writeRevocations(tokens: string[]): void {
+  try {
+    if (tokens.length) localStorage.setItem(REVOKE_KEY, JSON.stringify(tokens));
+    else localStorage.removeItem(REVOKE_KEY);
+  } catch {
+    // Storage refused: the device stays active in the back office until
+    // somebody revokes it there, which is where every unpairing used to end.
+  }
 }
 
 /**

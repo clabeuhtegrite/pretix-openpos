@@ -283,6 +283,16 @@ export const api = {
     return request("/device/update", { method: "POST", body: description, token });
   },
 
+  /**
+   * End this device in pretix: its token stops working, for good.
+   *
+   * pretix' native endpoint, the one its documentation asks any app that lets
+   * a device be removed to call. `useDeviceRevoke` decides when.
+   */
+  revokeDevice(token: string): Promise<unknown> {
+    return request("/device/revoke", { method: "POST", token });
+  },
+
   config(p: Pairing): Promise<PosConfig> {
     return request(`/organizers/${p.organizer}/events/${p.event}/openpos/config/`, {
       token: p.token,

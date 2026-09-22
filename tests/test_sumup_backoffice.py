@@ -153,6 +153,27 @@ def test_a_reader_says_what_it_is_doing_right_now(backoffice, organizer, sumup):
 
 
 @pytest.mark.django_db
+def test_the_battery_is_read_out_in_whole_percent(backoffice, organizer, sumup):
+    # SumUp sends a float. "72.5%" is a precision nobody at a counter wants.
+    sumup.set_state(sumup.add_reader("rdr_A"), "IDLE", battery_level=72.4)
+
+    page = backoffice.get(sumup_url(organizer)).content.decode()
+
+    assert "72.4" not in page
+    assert "Battery 72%" in page
+
+
+@pytest.mark.django_db
+def test_a_reader_updating_itself_is_not_ready(backoffice, organizer, sumup):
+    sumup.set_state(sumup.add_reader("rdr_A"), "UPDATING_FIRMWARE")
+
+    page = backoffice.get(sumup_url(organizer)).content.decode()
+
+    assert "Updating itself" in page
+    assert ">Ready<" not in page
+
+
+@pytest.mark.django_db
 def test_a_reader_with_a_card_waiting_on_it_is_not_ready(backoffice, organizer, sumup):
     sumup.set_state(sumup.add_reader("rdr_A"), "WAITING_FOR_CARD")
 

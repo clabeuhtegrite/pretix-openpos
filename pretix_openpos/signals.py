@@ -2,7 +2,7 @@ from django.dispatch import receiver
 from django.urls import resolve, reverse
 from django.utils.translation import gettext_lazy as _
 from pretix.api.signals import register_device_security_profile
-from pretix.base.signals import register_payment_providers, register_sales_channel_types
+from pretix.base.signals import event_copy_data, register_payment_providers, register_sales_channel_types
 from pretix.control.signals import nav_event, nav_organizer
 
 from .channels import PosSalesChannelType
@@ -27,6 +27,14 @@ def openpos_device_security_profile(sender, **kwargs):
 def openpos_payment_providers(sender, **kwargs):
     # pretix instantiates these itself with the event, so hand back classes.
     return [OpenPosCashProvider, OpenPosCardProvider]
+
+
+@receiver(event_copy_data, dispatch_uid="openpos_event_copy_data")
+def openpos_event_copy_data(sender, other, **kwargs):
+    """An event created as a copy keeps the till set up as the original was."""
+    from .copying import copy_pos_setup
+
+    copy_pos_setup(sender, other, kwargs)
 
 
 @receiver(nav_event, dispatch_uid="openpos_nav_event")

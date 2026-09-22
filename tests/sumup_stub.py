@@ -12,6 +12,13 @@ that does not exist until they have, and a refund that only ever points at one.
 
 It records every call, so a test can say what the server asked as well as what
 it did with the answer.
+
+The shapes are SumUp's published ones (``openapi.yaml`` in
+github.com/sumup/sumup-openapi), not remembered ones. This stub was first
+written from memory, and three of its answers were wrong in ways that made the
+suite pass against an API that does not exist: a refund answered 204 where
+SumUp answers 201, a reader's status at the top level where SumUp puts it
+under ``data``, and a busy reader as a 409 where SumUp sends a 422 naming it.
 """
 import json
 import re
@@ -30,6 +37,22 @@ class FakeResponse:
         return self._payload
 
 
+def reader_offline():
+    """What SumUp answers a checkout for a reader that is off or out of range."""
+    return FakeResponse(
+        422, {"errors": {"type": "READER_OFFLINE", "detail": "The device is offline."}}
+    )
+
+
+def reader_busy():
+    """What SumUp answers within a minute of the last request it accepted."""
+    return FakeResponse(
+        422,
+        {"errors": {"type": "READER_BUSY",
+                    "detail": "There is a pending checkout for the device."}},
+    )
+
+
 class FakeSumUp:
     """One merchant's readers, transactions and refunds."""
 
@@ -39,6 +62,9 @@ class FakeSumUp:
         self.readers = {}
         #: client_transaction_id -> the transaction, or None while there is none.
         self.transactions = {}
+        #: checkout_id -> the request put on a reader, as SumUp keeps it:
+        #: ``pending`` until the cardholder answers it or it ends unpaid.
+        self.checkouts = {}
         self.refunds = []
         #: Every call made, as (method, path, json body).
         self.calls = []
@@ -89,7 +115,35 @@ class FakeSumUp:
             "status": status,
             "amount": "10.00",
         }
+        for checkout in self._checkouts_for(client_transaction_id):
+            checkout["status"] = (
+                "successful" if status in ("SUCCESSFUL", "PAID_OUT")
+                else "pending" if status == "PENDING"
+                else "failed"
+            )
         return client_transaction_id
+
+    def walk_away(self, client_transaction_id=None, *, status="cancelled"):
+        """
+        End the request on the reader with no card ever presented.
+
+        What SumUp does once the request expires with nobody in front of it
+        (``cancelled``), or once the cashier's stop has reached the device
+        (``failed``, what the spec says a terminated request reports). No
+        transaction is created: the Transactions API goes on answering 404,
+        and only the request itself says it is over.
+        """
+        if client_transaction_id is None:
+            client_transaction_id = next(iter(self.transactions))
+        for checkout in self._checkouts_for(client_transaction_id):
+            checkout["status"] = status
+        return client_transaction_id
+
+    def _checkouts_for(self, client_transaction_id):
+        return [
+            c for c in self.checkouts.values()
+            if c["client_transaction_id"] == client_transaction_id
+        ]
 
     @property
     def started(self):
@@ -128,6 +182,9 @@ class FakeSumUp:
         checkout = re.fullmatch(rf"{re.escape(prefix)}/([^/]+)/checkout", path)
         if method == "POST" and checkout:
             return self._checkout(checkout.group(1))
+        request = re.fullmatch(rf"{re.escape(prefix)}/([^/]+)/checkout/([^/]+)", path)
+        if method == "GET" and request:
+            return self._reader_checkout(request.group(1), request.group(2))
         terminate = re.fullmatch(rf"{re.escape(prefix)}/([^/]+)/terminate", path)
         if method == "POST" and terminate:
             return self._terminate
@@ -175,12 +232,37 @@ class FakeSumUp:
                 return FakeResponse(404, {"message": "no such reader"})
             self._counter += 1
             client_transaction_id = f"ctx_{self._counter}"
+            checkout_id = f"chk_{self._counter}"
             # Nothing exists yet: the cardholder has not been asked. That is
             # what makes the till's first poll a 404 rather than a failure.
             self.transactions[client_transaction_id] = None
+            self.checkouts[checkout_id] = {
+                "checkout_id": checkout_id,
+                "client_transaction_id": client_transaction_id,
+                "reader": reader_id,
+                "status": "pending",
+            }
             return FakeResponse(
-                201, {"data": {"client_transaction_id": client_transaction_id}}
+                201,
+                {"data": {
+                    "checkout_id": checkout_id,
+                    "client_transaction_id": client_transaction_id,
+                }},
             )
+
+        return handler
+
+    def _reader_checkout(self, reader_id, checkout_id):
+        def handler(body, params):
+            checkout = self.checkouts.get(checkout_id)
+            if checkout is None or checkout["reader"] != reader_id:
+                return FakeResponse(404, {"detail": "not found"})
+            return FakeResponse(200, {"data": {
+                "checkout_id": checkout_id,
+                "client_transaction_id": checkout["client_transaction_id"],
+                "status": checkout["status"],
+                "payment_failure_reason": None,
+            }})
 
         return handler
 
@@ -189,13 +271,15 @@ class FakeSumUp:
             state = self.reader_states.get(reader_id)
             if state is None:
                 return FakeResponse(404, {"message": "not supported"})
-            return FakeResponse(200, state)
+            return FakeResponse(200, {"data": state})
 
         return handler
 
     def _terminate(self, body, params):
-        # SumUp confirms nothing here, by design.
-        return FakeResponse(204)
+        # SumUp confirms nothing here, by design, and the device obeys in its
+        # own time: the request stays pending until ``walk_away`` says the
+        # stop has reached it.
+        return FakeResponse(202, {})
 
     def _transaction(self, body, params):
         key = params.get("client_transaction_id") or params.get("id")
@@ -215,6 +299,6 @@ class FakeSumUp:
             if not known:
                 return FakeResponse(404, {"message": "no such transaction"})
             self.refunds.append((transaction_id, (body or {}).get("amount")))
-            return FakeResponse(204)
+            return FakeResponse(201, {})
 
         return handler

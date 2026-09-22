@@ -338,6 +338,18 @@ describe("the endpoints", () => {
     });
   });
 
+  it("ends the device in pretix with its own token and nothing else", async () => {
+    // pretix' native endpoint for an app that removes a device. The token is
+    // the only thing that says which device; there is nothing to send.
+    await api.revokeDevice("tok");
+
+    const [url, options] = callArgs();
+    expect(url).toBe("/api/v1/device/revoke");
+    expect(options.method).toBe("POST");
+    expect(options.headers).toMatchObject({ Authorization: "Device tok" });
+    expect(options.body).toBeUndefined();
+  });
+
   it("describes the device after an update exactly as it did at pairing", async () => {
     const { deviceDescription } = await import("./api");
     await api.initialize("init-code");

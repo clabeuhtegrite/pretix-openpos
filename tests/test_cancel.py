@@ -47,6 +47,35 @@ def test_cancelling_reverses_the_order_the_money_and_the_journal(till, event, ti
 
 
 @pytest.mark.django_db
+def test_the_order_history_says_the_refund_was_created_before_it_was_done(
+    till, event, ticket
+):
+    """
+    What pretix writes itself whenever it creates a refund. Without it the
+    order's history showed a refund done that had never been created, and
+    pretix' own "refund created" webhook never fired for a till's refund.
+    """
+    sale = sell(till, [{"item": ticket.pk, "count": 1}]).json()
+
+    cancel(till, sale["journal_seq"])
+
+    order = Order.objects.get(code=sale["order"]["code"])
+    refund = order.refunds.get()
+    history = list(
+        order.all_logentries()
+        .filter(action_type__startswith="pretix.event.order.refund.")
+        .order_by("pk")
+        .values_list("action_type", "data")
+    )
+    assert [action for action, _data in history] == [
+        "pretix.event.order.refund.created",
+        "pretix.event.order.refund.done",
+    ]
+    assert f'"local_id": {refund.local_id}' in history[0][1]
+    assert '"provider": "openpos_cash"' in history[0][1]
+
+
+@pytest.mark.django_db
 def test_the_sale_it_reverses_is_left_exactly_as_it_was(till, event, ticket):
     sale = sell(till, [{"item": ticket.pk, "count": 2}]).json()
     before = PosSale.objects.get(seq=sale["journal_seq"])

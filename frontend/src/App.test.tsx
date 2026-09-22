@@ -21,6 +21,7 @@ const { apiMock, sound } = vi.hoisted(() => ({
     redeem: vi.fn(),
     initialize: vi.fn(),
     updateDevice: vi.fn(),
+    revokeDevice: vi.fn(),
   },
 }));
 
@@ -54,8 +55,8 @@ import { markReachable, markUnreachable } from "./connectivity";
 import { t } from "./i18n";
 import { formatMoney } from "./money";
 import {
-  clearBasket, loadBasket, loadCashier, loadDeviceReport, loadPairing, loadQueue, savePairing,
-  saveBasket, saveDeviceReport, saveFailures, saveQueue,
+  clearBasket, loadBasket, loadCashier, loadDeviceReport, loadPairing, loadQueue, loadRevocations,
+  savePairing, saveBasket, saveDeviceReport, saveFailures, saveQueue,
 } from "./storage";
 import { fillStorage } from "./test/setup";
 import type { Catalog, JournalLine, PosConfig, SaleResult } from "./types";
@@ -1317,6 +1318,46 @@ describe("the settings", () => {
 
     expect(screen.getByText(t("pairing.title"))).toBeDefined();
     expect(loadPairing()).toBeNull();
+    confirmed.mockRestore();
+  });
+
+  it("tells pretix the unpaired till is gone, so it reads revoked there", async () => {
+    // Forgetting the token was all unpairing did: the device went on reading
+    // "active" in the back office, with a token that still worked.
+    apiMock.revokeDevice.mockResolvedValue({});
+    const confirmed = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const { user } = show();
+    await ready();
+
+    await user.click(screen.getByRole("button", { name: "settings" }));
+    await user.click(await screen.findByRole("button", { name: new RegExp(t("settings.unpair")) }));
+
+    await waitFor(() => expect(apiMock.revokeDevice).toHaveBeenCalledWith("tok"));
+    await waitFor(() => expect(loadRevocations()).toEqual([]));
+    confirmed.mockRestore();
+  });
+
+  it("unpairs without a network, and tells pretix once there is one", async () => {
+    apiMock.revokeDevice.mockRejectedValueOnce(new ApiError(0, "network"));
+    const confirmed = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const { user } = show();
+    await ready();
+
+    await user.click(screen.getByRole("button", { name: "settings" }));
+    await user.click(await screen.findByRole("button", { name: new RegExp(t("settings.unpair")) }));
+
+    expect(screen.getByText(t("pairing.title"))).toBeDefined();
+    await waitFor(() => expect(apiMock.revokeDevice).toHaveBeenCalledTimes(1));
+    expect(loadRevocations()).toEqual(["tok"]);
+
+    // What the API layer does after a request that never arrived, and then
+    // once the network is back.
+    act(() => markUnreachable());
+    apiMock.revokeDevice.mockResolvedValue({});
+    act(() => markReachable());
+
+    await waitFor(() => expect(loadRevocations()).toEqual([]));
+    expect(apiMock.revokeDevice).toHaveBeenCalledTimes(2);
     confirmed.mockRestore();
   });
 

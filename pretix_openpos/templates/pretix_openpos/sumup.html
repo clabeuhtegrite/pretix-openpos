@@ -93,6 +93,8 @@
                                             <span class="text-muted">{% trans "Unknown" %}</span>
                                         {% elif not row.online %}
                                             <span class="label label-danger">{% trans "Offline" %}</span>
+                                        {% elif row.updating %}
+                                            <span class="label label-warning">{% trans "Updating itself" %}</span>
                                         {% elif row.busy %}
                                             <span class="label label-warning">{% trans "Taking a payment" %}</span>
                                         {% else %}

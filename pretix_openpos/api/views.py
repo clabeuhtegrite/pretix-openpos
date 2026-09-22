@@ -25,7 +25,7 @@ from ..channels import POS_CHANNEL, PosSalesChannelType
 from ..invoicing import pos_invoices_enabled
 from ..models import PosCategory, PosDevice, PosSale, PosTerminalPayment
 from ..payment import CARD, CASH
-from ..sumup import SumUpAccount, SumUpError, still_running, succeeded
+from ..sumup import CHECKOUT_CLOSED, SumUpAccount, SumUpError, still_running, succeeded
 from ..webhook import webhook_url
 
 logger = logging.getLogger(__name__)
@@ -290,8 +290,25 @@ def selling_subevent(event, at=None, *, settled=False):
     )
 
 
+def setting_row_id(event, setting):
+    """
+    The id of the row one of the till's settings names, or ``None``.
+
+    Read as text and parsed here rather than asked for ``as_type=int``: the
+    settings screen stores its "none" choice as an empty string, not as an
+    absent setting, and hierarkey turns ``""`` into a ValueError. Every till
+    request reads these, so saving that screen with a button switched off —
+    or with the check-in list left on "Do not check in automatically" —
+    answered every one of them with a server error.
+    """
+    try:
+        return int(event.settings.get(setting))
+    except (TypeError, ValueError):
+        return None
+
+
 def checkin_list_for(event):
-    pk = event.settings.get("openpos_checkin_list", as_type=int)
+    pk = setting_row_id(event, "openpos_checkin_list")
     if not pk:
         return None
     return event.checkin_lists.filter(pk=pk).first()
@@ -305,7 +322,7 @@ def configured_item(event, setting):
     that has since been deleted — which is what keeps the button off rather
     than pointing at nothing.
     """
-    pk = event.settings.get(setting, as_type=int)
+    pk = setting_row_id(event, setting)
     if not pk:
         return None
     return event.items.filter(pk=pk).first()
@@ -520,6 +537,30 @@ def settle_terminal_payment(payment, account):
         payment.status = PosTerminalPayment.STATUS_FAILED
         payment.failure = str(exc.message)[:190]
         payment.save(update_fields=["status", "failure", "updated"])
+        return payment
+
+    if transaction_data is None and payment.checkout_id:
+        # No card has been presented, which on its own says nothing: the
+        # customer may still be looking for theirs. The request on the reader
+        # knows better — it reads cancelled once the cashier has pressed stop,
+        # or once it expired with nobody in front of it — and without asking
+        # it, the till went on waiting for a card that was never coming, with
+        # the reader held against every till that shares it. Only a request
+        # that ended unpaid closes the payment here: "successful" waits for
+        # the transaction, which is what a refund will need.
+        checkout = account.reader_checkout(payment.reader_id, payment.checkout_id)
+        if checkout and checkout.get("status") in CHECKOUT_CLOSED:
+            payment.status = PosTerminalPayment.STATUS_FAILED
+            # SumUp's word, in the same case as the Transactions API's, which
+            # is what the till turns into a sentence.
+            payment.failure = str(checkout["status"]).upper()[:190]
+            payment.save(update_fields=["status", "failure", "updated"])
+            logger.info(
+                "Reader checkout %s ended %s: %s",
+                payment.checkout_id,
+                checkout["status"],
+                checkout.get("payment_failure_reason") or "no reason given",
+            )
         return payment
 
     if still_running(transaction_data):
@@ -1506,7 +1547,7 @@ class OpenPosViewSet(viewsets.ViewSet):
         # rather than a charge nobody in pretix has ever heard of. The reverse
         # order would lose exactly the payments that matter most.
         try:
-            payment.client_transaction_id = account.start_checkout(
+            payment.client_transaction_id, payment.checkout_id = account.start_checkout(
                 _pos_device.sumup_reader_id,
                 amount=total,
                 currency=event.currency,
@@ -1536,7 +1577,7 @@ class OpenPosViewSet(viewsets.ViewSet):
             raise ValidationError(
                 {"detail": [exc.message], "code": "terminal_unreachable"}
             )
-        payment.save(update_fields=["client_transaction_id", "updated"])
+        payment.save(update_fields=["client_transaction_id", "checkout_id", "updated"])
 
         return Response(self._terminal_payload(payment), status=status.HTTP_201_CREATED)
 
@@ -2255,6 +2296,16 @@ class OpenPosViewSet(viewsets.ViewSet):
                 "cashier": sale.cashier,
                 "reason": reason,
             },
+        )
+        # What pretix writes itself whenever it creates a refund, in its API
+        # and in its own refund dialog alike. Without it, the order's history
+        # showed a refund done — or failed — that had never been created, and
+        # pretix' own "refund created" webhook never fired for a till's.
+        order.log_action(
+            "pretix.event.order.refund.created",
+            {"local_id": refund.local_id, "provider": refund.provider},
+            user=request.user if request.user.is_authenticated else None,
+            auth=request.auth,
         )
         if settle_now:
             self._mark_refund_done(request, refund)

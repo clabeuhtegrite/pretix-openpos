@@ -114,6 +114,39 @@ def test_turning_till_invoicing_off_takes_the_channel_out_of_pretix_own_list(
 
 
 @pytest.mark.django_db
+def test_switching_every_button_off_leaves_a_till_that_still_sells(
+    backoffice, till, event, ticket, checkin_list, misc, deposit
+):
+    """
+    The screen stores its "none" choices as empty strings rather than removing
+    the settings, and each was read back as a number: a till whose free-amount
+    button had just been switched off answered every request with a 500.
+    """
+    event.settings.set("openpos_checkin_list", str(checkin_list.pk))
+    url = f"/control/event/{event.organizer.slug}/{event.slug}/openpos/"
+
+    backoffice.post(
+        url,
+        {
+            "openpos_checkin_list": "",
+            "openpos_custom_item": "",
+            "openpos_deposit_item": "",
+        },
+    )
+
+    event.settings.flush()
+    assert event.settings.get("openpos_custom_item") == ""
+    config = till.get("config")
+    assert config.status_code == 200
+    assert config.json()["custom_sale"]["enabled"] is False
+    assert config.json()["deposit"]["enabled"] is False
+    sale = sell(till, [{"item": ticket.pk, "count": 1}])
+    assert sale.status_code == 201, sale.content
+    # Sold, and nobody checked in: the list was switched off too.
+    assert sale.json()["checked_in"] is None
+
+
+@pytest.mark.django_db
 def test_the_sales_column_counts_customers_served_and_nothing_else(
     backoffice, till, event, beer, deposit
 ):

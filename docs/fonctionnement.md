@@ -1,6 +1,6 @@
 # Fonctionnement de pretix-openpos
 
-Documentation de fonctionnement du plugin, version 0.16.0. Elle couvre trois
+Documentation de fonctionnement du plugin, version 0.17.0. Elle couvre trois
 choses, dans cet ordre : ce que le plugin ajoute à pretix, comment le mettre en
 service, et ce qui se passe exactement quand un bénévole encaisse.
 
@@ -338,7 +338,7 @@ En Docker/Kubernetes, [`deploy/Dockerfile`](../deploy/Dockerfile) intègre le pl
 
 ```bash
 cd frontend && npm run build && cd ..
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.16.0 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.17.0 .
 ```
 
 Deux pièges :
@@ -385,11 +385,28 @@ Deux pièges :
    - **Produit de consigne** : active le bouton *Retour consigne*. La consigne
      elle-même se vend comme n'importe quel produit ; ce réglage n'ajoute que le
      retour. Voir §5quater.
+
+   Remettre un de ces menus sur « aucun » éteint la fonction, et c'est tout.
+   Jusqu'à la 0.17.0, enregistrer la page avec un menu sur « aucun » empêchait
+   la caisse de s'ouvrir : le réglage était relu comme un nombre.
+
 6. **Réserver les catégories, si besoin** — *Open POS → Qui vend quoi*. Facultatif
    et sans effet tant qu'on n'y touche pas : chaque catégorie part sur *toutes les
    caisses*. Réserver *Bar* à la caisse et *Entrées* à la porte est la mise en
    place courante ; elle ne prend effet que sur les appareils à qui un rôle a été
    donné (§3.3 et §2.7bis).
+
+**Copier une soirée.** Un événement créé en copiant un autre (*Copier la
+configuration depuis…* dans l'assistant de pretix) reprend la configuration
+Open POS, pointée sur **ses propres** liste et produits : la liste de contrôle
+d'accès, les produits montant libre et consigne, et *Qui vend quoi*. pretix
+recopie les réglages tels quels puis laisse chaque plugin remettre ses
+références d'aplomb (signal `event_copy_data`), ce qu'Open POS ne faisait pas
+avant la 0.17.0 : la copie gardait les numéros de l'ancien événement, et la
+soirée copiée ne pointait plus les billets vendus, perdait ses deux boutons et
+revendait la bière à la porte, sans rien qui le dise. Un événement copié avec
+une version antérieure se répare en rechoisissant la liste et les deux produits
+dans *Open POS → Réglages* et en refaisant *Qui vend quoi*.
 
 ### 3.3 Créer une caisse
 
@@ -1135,6 +1152,42 @@ lecteur, un pour revenir. Et ce que répond l'annulation, c'est ce qui s'est
 réellement passé — une carte présentée dans la même seconde est un paiement, et
 la caisse est prévenue plutôt que de laisser partir un client qui a payé.
 
+### Un paiement que personne ne paie
+
+L'API Transactions n'a rien tant qu'aucune carte n'a été présentée. Seule, elle
+ne distingue pas « le client cherche sa carte » de « le caissier a appuyé sur
+*Arrêter* » ou « le client est reparti ». Le serveur garde donc aussi
+l'identifiant de la **demande** posée sur le lecteur (`checkout_id`, dans la
+réponse de SumUp au lancement) et, tant qu'il n'existe pas de transaction, il
+demande à SumUp où en est cette demande
+(`GET /v0.1/merchants/{m}/readers/{r}/checkout/{checkout_id}`) :
+
+- **échouée** ou **annulée** — l'interruption a atteint le lecteur, ou la
+  demande a expiré sans personne devant — clôt le paiement tout de suite. La
+  caisse peut passer en espèces, et un lecteur partagé se libère pour l'autre
+  caisse sans attendre les cinq minutes ;
+- **réussie** attend la transaction, qui porte l'identifiant dont un
+  remboursement aura besoin ;
+- **en attente**, ou pas de réponse, ne change rien.
+
+La transaction reste interrogée la première et reste celle qui fait foi : une
+carte présentée au dernier moment est un paiement, quoi que dise la demande. Un
+paiement lancé avant la 0.17.0 n'a pas d'identifiant de demande et se règle
+comme avant, par la seule API Transactions.
+
+### Quand le lecteur refuse la demande
+
+SumUp refuse de poser un montant sur un lecteur **hors ligne** (éteint, ou hors
+de portée du wifi) et sur un lecteur **encore occupé** : il garde chaque lecteur
+une minute après chaque demande acceptée, carte présentée ou non, si bien qu'un
+paiement arrêté puis relancé aussitôt est refusé. La caisse le dit en ces
+termes — « Le lecteur de carte est hors ligne. Vérifiez qu'il est allumé et
+connecté, puis réessayez », « Le lecteur de carte traite encore la demande
+précédente. Réessayez dans une minute » — et non plus par un « SumUp a refusé
+cette demande » qui ne disait rien à personne. Rien n'a été posé sur le
+lecteur : le paiement est clos, *Réessayer* repart d'une clé neuve, et les
+espèces restent possibles.
+
 ### Ce que le lecteur ne fait pas
 
 - **Un panier qui rend de l'argent.** SumUp ne rembourse que contre une
@@ -1162,6 +1215,14 @@ sans la carte du client**, et répond ce qu'il en est :
 
 Une correction de commande après une annulation carte ne porte donc **pas
 d'avoir** : l'argent est reparti. Le panier corrigé s'encaisse en entier.
+
+SumUp répond `201` à un remboursement qu'il accepte. Jusqu'à la 0.17.0, le
+plugin n'attendait que `200` ou `204` et annonçait donc `failed` pour un
+remboursement passé : le bandeau rouge envoyait rembourser une seconde fois
+depuis l'app SumUp un client déjà remboursé.
+
+Dans l'historique de la commande, le remboursement apparaît comme pretix
+l'écrit lui-même : *créé*, puis *effectué* ou *échoué*.
 
 Si la connexion meurt entre l'annulation et le remboursement, la caisse
 réessaie avec la même clé : le serveur lui rend l'annulation telle quelle *et*
@@ -1193,7 +1254,9 @@ Deux détails qui comptent :
   qu'un client encore devant la machine : il demande d'abord à SumUp ce qu'est
   devenu ce paiement. C'est exactement l'appel que fait l'autre caisse en
   interrogeant.
-- Un paiement auquel personne n'a jamais répondu cesse de tenir le lecteur au
+- Un paiement que SumUp dit arrêté ou expiré libère le lecteur aussitôt (voir
+  *Un paiement que personne ne paie*). Un paiement auquel personne n'a jamais
+  répondu, et que SumUp dit encore en attente, cesse de tenir le lecteur au
   bout de **cinq minutes**, et l'écran de la machine est effacé avant d'y
   remettre un panier. Une tablette tombée en rade avec une invite affichée aurait
   sinon coupé la carte pour le reste de la soirée, sans que personne puisse dire
@@ -1203,10 +1266,13 @@ Deux détails qui comptent :
 ### Ce que le lecteur dit de lui-même
 
 L'écran *Lecteurs de carte* interroge chaque lecteur appairé : joignable ou non,
-au repos ou en train de prendre une carte, batterie, type de connexion, version
-de firmware. C'est la question qu'on se pose vraiment avant d'ouvrir une porte —
-l'appairage ne répond ni à « est-ce qu'il est allumé » ni à « est-ce qu'il est
-chargé ».
+au repos, en train de prendre une carte ou **en train de se mettre à jour** (il
+ne prend aucun paiement avant d'avoir fini, et un lecteur SumUp se met à jour de
+lui-même à l'allumage), batterie, type de connexion, version de firmware.
+C'est la question qu'on se pose vraiment avant d'ouvrir une porte — l'appairage
+ne répond ni à « est-ce qu'il est allumé » ni à « est-ce qu'il est chargé ».
+Jusqu'à la 0.17.0, cette colonne affichait *Inconnu* pour tous les lecteurs :
+SumUp range l'état sous `data`, et le plugin le cherchait à la racine.
 
 Un lecteur qui ne peut pas répondre s'affiche **Inconnu**, jamais *Hors ligne* :
 la route d'état demande un firmware 3.3.39.0 sur un Solo là où encaisser demande
@@ -1514,7 +1580,8 @@ ligne est là parce que son absence coûte cher une fois la porte ouverte.
 6. *Open POS → Lecteurs de carte* : le lecteur est **Appairé** et, dans la
    colonne *En ce moment*, **Prêt**. « Inconnu » veut dire que le lecteur est
    trop ancien pour répondre à cette question et non qu'il est éteint ; « Hors
-   ligne » veut dire qu'il l'est vraiment.
+   ligne » veut dire qu'il l'est vraiment ; « Mise à jour en cours » veut dire
+   attendre qu'il ait fini.
 7. La **batterie** affichée est suffisante, ou le lecteur est sur son socle.
 8. Si un lecteur affiche **Encaissement en cours** alors que personne
    n'encaisse, presser **Effacer son écran** : il reste bloqué d'une soirée à
@@ -1528,8 +1595,9 @@ ligne est là parce que son absence coûte cher une fois la porte ouverte.
 10. *Open POS → Ventes* : la chaîne du journal ne signale rien, et la section
     **Paiements carte sans vente** est vide. Si elle ne l'est pas, régler ces
     lignes avant d'en ajouter de nouvelles.
-11. Les **tarifs sur place** sont ceux de ce soir. Un tarif modifié pendant une
-    vente est géré, mais c'est une seconde de flottement devant un client.
+11. Les **prix des produits** dans pretix sont ceux de ce soir. Un prix modifié
+    pendant une vente est géré, mais c'est une seconde de flottement devant un
+    client.
 
 ### 7.0bis Si SumUp tombe en pleine soirée
 
@@ -1568,7 +1636,11 @@ caisse ne dépend de SumUp que pour la carte.
   matin dans le fuseau de l'événement**, pas à minuit : une soirée traverse
   minuit, et le chiffre qu'on rapproche du tiroir à 1 h 30 doit couvrir toute la
   soirée, pas les quatre-vingt-dix dernières minutes ;
-- *Recharger* et *Dépairer*.
+- *Recharger* et *Dépairer*. Dépairer révoque aussi l'appareil dans pretix,
+  comme pretix le demande à toute app qui retire un appareil (`/device/revoke`) :
+  il passe *révoqué* dans la liste des appareils de l'organisateur au lieu d'y
+  rester actif avec un token valable que plus personne ne détient. Sans réseau
+  à ce moment-là, la caisse le fait dès qu'elle le retrouve.
 
 Le relevé affiche aussi l'**heure de début** de la journée de caisse, et
 signale les ventes encore en file d'attente hors ligne avec leur montant en
@@ -1884,7 +1956,7 @@ le tarif d'hier.
 | 400 `no_terminal` | Appel `terminal/` depuis une caisse sans lecteur | Idem ; l'app n'offre ce chemin qu'en mode `terminal` |
 | 400 `nothing_to_charge` | Panier qui ne doit rien, ou qui rend de l'argent | L'app le dit avant d'appeler : *à régler en espèces* |
 | 400 `sold_out` | Produit épuisé, vérifié avant de demander la carte | Affiche le message tel quel |
-| 400 `terminal_unreachable` | SumUp injoignable au moment de solliciter le lecteur | Affiche le motif, avec *Réessayer* (nouvelle clé) |
+| 400 `terminal_unreachable` | SumUp a refusé de solliciter le lecteur : lecteur hors ligne, encore occupé par la demande précédente, clé refusée… | Affiche le motif, avec *Réessayer* (nouvelle clé) |
 | 400 `no_payment` | `terminal/status` ou `terminal/cancel` sur un panier jamais démarré | Affiche le motif |
 | 401 / 403 | Device révoqué, ou plugin désactivé sur l'événement | Affiche le motif, avec *Réessayer* et *Dépairer* ; l'appairage n'est jamais effacé tout seul |
 
