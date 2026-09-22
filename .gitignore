@@ -39,3 +39,6 @@ frontend/coverage/
 .DS_Store
 .idea/
 .vscode/
+
+# Captures du banc d'essai visuel.
+frontend/harness/shots/
