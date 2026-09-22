@@ -407,8 +407,19 @@ button {
 
 /* ---------- cart ---------- */
 
+/*
+ * A share of the screen rather than a fixed strip.
+ *
+ * 340px was written against one tablet. On the iPads actually behind the bar
+ * it is between a quarter and a third of the width, and on the widest of them
+ * that strip stays the same while the grid gets everything — so the basket
+ * ends up with a product name broken over three lines beside an acre of empty
+ * column. The clamp keeps it readable at both ends: never so narrow that a
+ * price and a stepper cannot sit side by side, never so wide that it is taking
+ * room from the thing being tapped.
+ */
 .cart {
-  flex: 0 0 340px;
+  flex: 0 0 clamp(320px, 30%, 420px);
   display: flex;
   flex-direction: column;
   background: var(--surface);
@@ -437,10 +448,27 @@ button {
   color: var(--text-dim);
 }
 
+/*
+ * Two rows beside the grid, one row underneath it.
+ *
+ * Beside the grid the basket is a column of about 340px, and a product name
+ * competing with a stepper and a price on the same line had 130px to do it in:
+ * "Bière pression 25cl" came out over three lines, at which point neither the
+ * name nor the quantity could be read at a glance. Giving the name the whole
+ * width and putting the controls under it costs about 30px of height per line
+ * and buys back the thing the operator is checking before they take the money.
+ *
+ * Stacked under the grid — a phone — the basket is as wide as the screen and
+ * the single row was never the problem, so the rule below puts it back.
+ */
 .line {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    "label   label"
+    "stepper amount";
   align-items: center;
-  gap: 10px;
+  gap: 4px 10px;
   padding: 8px;
   border-radius: 10px;
 }
@@ -450,9 +478,17 @@ button {
 }
 
 .line .label {
-  flex: 1;
+  grid-area: label;
   min-width: 0;
   line-height: 1.25;
+}
+
+.line .stepper {
+  grid-area: stepper;
+}
+
+.line .amount {
+  grid-area: amount;
 }
 
 .line .label small {
@@ -474,9 +510,13 @@ button {
   gap: 2px;
 }
 
+/* 40px was under the 44 this app asks of everything else, on the one control
+   that exists to correct a mis-tap — so the button for fixing a mistake was
+   the easiest one on screen to get wrong. The name above no longer competes
+   for the width, so there is room to make it the size it should have been. */
 .stepper button {
-  width: 40px;
-  height: 40px;
+  width: 48px;
+  height: 48px;
   border-radius: 8px;
   background: var(--surface-2);
   font-size: 20px;
@@ -484,8 +524,9 @@ button {
 }
 
 .stepper .count {
-  min-width: 32px;
+  min-width: 40px;
   text-align: center;
+  font-size: 18px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
 }
@@ -657,15 +698,27 @@ button {
   color: var(--danger-text);
 }
 
+/*
+ * Four rows of three, sized between a comfortable key and the smallest one a
+ * thumb can still be trusted with.
+ *
+ * Both numbers live here because the panel below sizes itself from them: the
+ * keypad is the one part of an encaissement that can give height back, so a
+ * screen that is sixty points short takes it out of the keys rather than out
+ * of the row that says what to hand back.
+ */
 .keypad {
+  --key: 64px;
+  --key-min: 44px;
+  --key-gap: 10px;
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
+  gap: var(--key-gap);
   margin: 14px 0;
 }
 
 .keypad button {
-  min-height: 64px;
+  min-height: var(--key);
   border-radius: var(--radius);
   background: var(--surface-2);
   font-size: 24px;
@@ -718,6 +771,37 @@ button {
   min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  display: flex;
+  flex-direction: column;
+}
+
+/*
+ * The keypad takes whatever height is left, and nothing else gives any up.
+ *
+ * With every row at a fixed 64px the panel had one height, and screens do not:
+ * an iPad mini in landscape is 744 points tall, about sixty short, so the last
+ * row — 00, 0, and the key that clears a wrong amount — sat under the pinned
+ * Back/Confirm bar and had to be scrolled to, one-handed, with a customer
+ * holding out a note. Letting the keypad flex fits it on the short screens and
+ * makes the keys bigger than they were on the tall ones. 44px is the floor,
+ * not the size: below that the body scrolls, which is honest, rather than
+ * shrinking a digit to something nobody can hit.
+ */
+.pay-panel .pay-body > * {
+  flex: none;
+}
+
+.pay-panel .pay-body > .keypad {
+  /* Preferred height first, floor second: the keys are 64px wherever the
+     screen allows it, and only a screen that cannot hold that takes them
+     down towards 44. Below the floor the body scrolls, as before. */
+  flex: 0 1 calc(4 * var(--key) + 3 * var(--key-gap));
+  min-height: calc(4 * var(--key-min) + 3 * var(--key-gap));
+  grid-template-rows: repeat(4, minmax(var(--key-min), 1fr));
+}
+
+.pay-panel .keypad button {
+  min-height: var(--key-min);
 }
 
 /* Negative margins so the rule sits edge to edge across the panel rather than
@@ -1685,12 +1769,9 @@ table.takings thead th {
   }
 
   .pay-panel .keypad {
-    gap: 8px;
+    --key: 56px;
+    --key-gap: 8px;
     margin: 10px 0 0;
-  }
-
-  .pay-panel .keypad button {
-    min-height: 56px;
   }
 
   .pay-panel .quick-tender {
@@ -1708,10 +1789,27 @@ table.takings thead th {
   }
 }
 
-/* Portrait phones: the basket moves below the grid rather than squeezing it. */
-@media (max-width: 720px) {
+/*
+ * Held upright: the basket moves below the grid rather than squeezing it.
+ *
+ * The width test alone stranded every tablet. An iPad in portrait is 744 to
+ * 1024 points wide, so it kept the side-by-side layout and gave the grid two
+ * columns next to a basket column a thousand pixels tall and empty — the worst
+ * of both, on a screen that has height to spare and wants the width. Asking
+ * the orientation instead catches them, and leaves a phone in landscape where
+ * it was, beside the grid.
+ */
+@media (max-width: 720px), (orientation: portrait) {
   .workspace {
     flex-direction: column;
+  }
+
+  /* As wide as the screen: the name never had to fight the stepper here, and
+     one row per line fits three more of them above the fold. */
+  .line {
+    grid-template-columns: 1fr auto auto;
+    grid-template-areas: "label stepper amount";
+    gap: 10px;
   }
 
   .cart {
@@ -1790,5 +1888,71 @@ table.takings thead th {
   .product {
     min-height: 84px;
     padding: 12px;
+  }
+}
+
+/*
+ * Short and wide: a phone held in landscape, or a tablet in a stand.
+ *
+ * About 340px of panel for a title, a question, two amounts, a keypad and a
+ * pinned Back/Confirm bar. The keypad already gives up what height it can — it
+ * is down to its 44px floor here — so the rest of the panel gives up the
+ * padding instead: the frame around the panel, the title over it, and the bar
+ * under it. That is the difference between a keypad with a row and a half on
+ * screen and one with three.
+ *
+ * Deliberately every panel and not only this one: a settings screen or a
+ * journal on a screen this short is in exactly the same bind.
+ */
+@media (max-height: 560px) and (min-width: 481px) {
+  .overlay,
+  .centered {
+    padding: calc(8px + env(safe-area-inset-top)) calc(12px + env(safe-area-inset-right))
+      calc(8px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left));
+  }
+
+  .panel {
+    padding: 16px 20px;
+  }
+
+  .panel h2 {
+    font-size: 18px;
+    margin-bottom: 10px;
+  }
+
+  .pay-panel {
+    padding: 16px 20px 0;
+  }
+
+  .pay-panel .pay-toggle {
+    margin-bottom: 10px;
+  }
+
+  .pay-panel .amount-display {
+    padding: 6px 0;
+  }
+
+  .pay-panel .keypad {
+    --key-gap: 8px;
+    margin: 8px 0 0;
+  }
+
+  .pay-panel .quick-tender {
+    margin-bottom: 8px;
+  }
+
+  .pay-panel .quick-tender button {
+    min-height: 48px;
+  }
+
+  .pay-panel .pay-actions {
+    margin: 0 -20px;
+    padding: 8px 20px 12px;
+  }
+
+  /* Still the two things that must never be a scroll away, so they keep a
+     target a thumb can find; everything above them is what gave way. */
+  .pay-panel .pay-actions .btn {
+    min-height: 52px;
   }
 }

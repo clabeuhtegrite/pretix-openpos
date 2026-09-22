@@ -3,12 +3,26 @@ import { chromium } from "playwright";
 const BASE = process.env.BASE ?? "http://localhost:5174/static/pretix_openpos/pwa/harness.html";
 const OUT = process.env.OUT ?? new URL("shots/", import.meta.url).pathname;
 
-// A 10" tablet in landscape is the real device; a phone in landscape is the
-// fallback grip Ad's volunteers use.
-const TABLET = { width: 1280, height: 800 };
-const TABLET_P = { width: 800, height: 1280 };
-const PHONE_L = { width: 844, height: 390 };
-const PHONE_P = { width: 390, height: 844 };
+/**
+ * Les appareils réellement en service : des iPhone tenus en portrait à la
+ * porte, des iPad tenus en paysage au bar. Les quatre dernières tailles ne
+ * sont pas du matériel d'Ad ; elles sont là pour qu'une mise en page cesse de
+ * casser ailleurs sans qu'on le voie. Une capture peut aussi donner la
+ * sienne : {"w": 1133, "h": 744}.
+ */
+const SIZES = {
+  "iphone-mini": { width: 375, height: 812 },
+  iphone: { width: 393, height: 852 },
+  "iphone-max": { width: 440, height: 956 },
+  "ipad-mini": { width: 1133, height: 744 },
+  ipad: { width: 1180, height: 820 },
+  "ipad-pro": { width: 1366, height: 1024 },
+  "ipad-portrait": { width: 820, height: 1180 },
+  tablet: { width: 1280, height: 800 },
+  tabletP: { width: 800, height: 1280 },
+  phoneL: { width: 844, height: 390 },
+  phoneP: { width: 390, height: 844 },
+};
 
 import { mkdirSync } from "node:fs";
 mkdirSync(OUT, { recursive: true });
@@ -19,7 +33,7 @@ const browser = await chromium.launch(
   process.env.CHROMIUM ? { executablePath: process.env.CHROMIUM } : {},
 );
 for (const s of shots) {
-  const size = s.size === "phoneL" ? PHONE_L : s.size === "phoneP" ? PHONE_P : s.size === "tabletP" ? TABLET_P : TABLET;
+  const size = s.w ? { width: s.w, height: s.h } : (SIZES[s.size] ?? SIZES["ipad-mini"]);
   const ctx = await browser.newContext({
     viewport: size,
     deviceScaleFactor: 1,
