@@ -1396,6 +1396,33 @@ une soirée ordinaire, et veut donc dire quelque chose quand elle ne l'est pas.
 Elle est en lecture seule, délibérément — quoi faire de l'une de ces lignes est
 une décision, pas quelque chose qu'un chargement de page doit trancher.
 
+**Vendu à un prix qui avait changé.** Une vente encaissée pendant que la caisse
+était coupée a été tarifée depuis le catalogue qu'elle avait en cache, et le
+client a payé ce montant-là. La commande est donc créée à ce qui a réellement
+été encaissé — facturer une somme que personne n'a versée serait pire — et
+l'écart est reporté plutôt que lissé. Une section de la page Ventes le liste
+pour l'intervalle affiché, ligne par ligne, avec le total de l'écart : c'est de
+l'argent réel, présent dans la caisse et absent du tarif. L'export CSV porte les
+deux mêmes colonnes, `tariff_total` et `off_tariff`, vides sur toutes les autres
+lignes — un tableur peut donc les sommer sans lire la colonne des positions à
+l'œil.
+
+Le même écart est écrit dans l'historique de la commande elle-même, qui est
+l'endroit où l'on regarde quand une seule commande ne colle pas au tarif deux
+jours après. Auparavant le panneau de resynchronisation de la caisse était le
+seul endroit où la chose était dite, une fois, à qui tenait la tablette.
+
+**L'historique en clair.** Tout ce que le plugin écrit dans l'historique pretix
+s'affiche en toutes lettres, et dit ce qui a changé plutôt que combien de choses
+ont changé : « Bière : 3,50 € → 4,00 € » plutôt que « 6 produits modifiés ». Les
+deux côtés de chaque changement et les noms sont recopiés dans l'entrée au
+moment où elle est écrite, puisqu'un produit renommé ou supprimé la saison
+suivante laisserait l'entrée pointer vers rien. La clé API SumUp n'y figure
+jamais : seuls les noms des champs modifiés sont enregistrés, ce qui est
+précisément la raison pour laquelle l'écran des réglages SumUp n'utilise pas
+celui de pretix — ce dernier écrit la *valeur* de chaque champ modifié dans
+l'historique.
+
 Les commandes elles-mêmes sont des commandes pretix ordinaires : elles
 apparaissent dans les listes, les exports et les rapports habituels, sur le canal
 Open POS, avec la répartition espèces/carte. Le bloc de paiement de la page de

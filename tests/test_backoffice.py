@@ -591,3 +591,115 @@ def test_the_integrity_check_still_reads_the_whole_journal(
     context = backoffice.get(sales_url(event) + "?from=2026-09-19&to=2026-09-19").context
 
     assert context["tampered_with"] is not None
+
+
+# -- sold at a price the tariff no longer carries -------------------------
+
+def replayed(till, event, positions, **kwargs):
+    """A sale rung up while the till was cut off, arriving late."""
+    from datetime import timedelta
+
+    from django.utils.timezone import now
+
+    total = sum(
+        (Decimal(p["price"]) * p["count"] for p in positions), Decimal("0.00")
+    )
+    return sell(
+        till,
+        positions,
+        offline={
+            "recorded_at": (now() - timedelta(hours=2)).isoformat(),
+            "charged_total": str(total),
+        },
+        **kwargs,
+    )
+
+
+@pytest.mark.django_db
+def test_a_replay_at_the_old_price_is_shown_with_the_difference(
+    backoffice, till, event, ticket
+):
+    """
+    The only place this was ever said was the till's own resync panel, once,
+    to whoever was holding the tablet. The person reconciling the evening two
+    days later saw an order at a price the price list does not explain.
+    """
+    PosPrice.objects.create(event=event, item=ticket, price=Decimal("12.00"))
+    replayed(till, event, [{"item": ticket.pk, "count": 2, "price": "10.00"}])
+
+    page = backoffice.get(sales_url(event)).content.decode()
+
+    assert "Sold at a price that had changed" in page
+    # Both sides, and the gap: four euros that are in the drawer and not in
+    # the price list.
+    assert "10.00" in page and "12.00" in page
+    # Four euros that are in the drawer and not in the price list. The money
+    # filter puts the currency between the sign and the digits.
+    assert "-€4.00" in page
+
+
+@pytest.mark.django_db
+def test_an_ordinary_evening_shows_no_such_section(backoffice, till, event, ticket):
+    sell(till, [{"item": ticket.pk, "count": 1}])
+
+    page = backoffice.get(sales_url(event)).content.decode()
+
+    # Empty on the ordinary evening, so its presence means something.
+    assert "Sold at a price that had changed" not in page
+
+
+@pytest.mark.django_db
+def test_a_replay_at_the_current_price_is_not_a_divergence(
+    backoffice, till, event, ticket
+):
+    replayed(till, event, [{"item": ticket.pk, "count": 1, "price": "10.00"}])
+
+    page = backoffice.get(sales_url(event)).content.decode()
+
+    assert "Sold at a price that had changed" not in page
+
+
+@pytest.mark.django_db
+def test_the_section_follows_the_evening_filter(backoffice, till, event, ticket):
+    from datetime import date
+
+    PosPrice.objects.create(event=event, item=ticket, price=Decimal("12.00"))
+    replayed(
+        till, event, [{"item": ticket.pk, "count": 1, "price": "10.00"}],
+        idempotency_key="vendredi-1",
+    )
+    on_night(event, "vendredi-1", date(2026, 9, 12))
+
+    page = backoffice.get(
+        sales_url(event) + "?from=2026-09-19&to=2026-09-19"
+    ).content.decode()
+
+    # It belongs to the evening being reconciled, unlike the orphan card
+    # payments above it, which need seeing whatever range is on screen.
+    assert "Sold at a price that had changed" not in page
+
+
+@pytest.mark.django_db
+def test_the_export_carries_the_tariff_the_screen_compares_against(
+    backoffice, till, event, ticket
+):
+    PosPrice.objects.create(event=event, item=ticket, price=Decimal("12.00"))
+    replayed(
+        till, event, [{"item": ticket.pk, "count": 2, "price": "10.00"}],
+        idempotency_key="rejoue-01",
+    )
+    sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="enligne-1")
+
+    response = backoffice.get(sales_url(event) + "?export=csv")
+    rows = b"".join(response.streaming_content).decode().strip().splitlines()
+
+    header = rows[0].lstrip("﻿").split(";")
+    assert "tariff_total" in header and "off_tariff" in header
+    tariff = header.index("tariff_total")
+    gap = header.index("off_tariff")
+    values = [row.split(";") for row in rows[1:]]
+    # One row diverged; the ordinary sale's cells are blank rather than zero,
+    # because "the tariff agreed" and "there was no tariff to compare" are
+    # different answers.
+    assert sorted(cells[tariff] for cells in values) == ["", "24.00"]
+    assert sorted(cells[gap] for cells in values) == ["", "-4.00"]

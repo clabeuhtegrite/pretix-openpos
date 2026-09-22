@@ -98,6 +98,19 @@ class PricesView(EventPermissionRequiredMixin, TemplateView):
                 }
         return rows
 
+    @staticmethod
+    def _change(row, before, after):
+        """One moved line, readable years later without the database."""
+        variation = row["variation"]
+        return {
+            "item": row["item"].pk,
+            "item_name": str(row["item"].name),
+            "variation": variation.pk if variation else None,
+            "variation_name": str(variation.value) if variation else None,
+            "from": None if before is None else str(before),
+            "to": None if after is None else str(after),
+        }
+
     def get_context_data(self, submitted=None, **kwargs):
         ctx = super().get_context_data(**kwargs)
         rows = list(self._rows().values())
@@ -156,23 +169,31 @@ class PricesView(EventPermissionRequiredMixin, TemplateView):
                 self.get_context_data(submitted=request.POST)
             )
 
-        changed = 0
+        # Both sides of every line that moved, not a count of them. A history
+        # that says "6 products were changed" answers nothing anyone asks of
+        # it: the question is always which product, from what, to what, and by
+        # the time it is asked the price list has moved on again. The names go
+        # in too, because an item renamed or deleted next season would leave
+        # the entry pointing at nothing.
+        changed = []
         with transaction.atomic():
             for row, price in parsed:
                 item, variation = row["item"], row["variation"]
+                before = row["pos_price"]
                 if price is None:
                     deleted, _details = PosPrice.objects.filter(
                         event=request.event, item=item, variation=variation
                     ).delete()
-                    changed += 1 if deleted else 0
+                    if deleted:
+                        changed.append(self._change(row, before, None))
                     continue
 
                 obj, created = PosPrice.objects.update_or_create(
                     event=request.event, item=item, variation=variation,
                     defaults={"price": price},
                 )
-                if created or row["pos_price"] != price:
-                    changed += 1
+                if created or before != price:
+                    changed.append(self._change(row, before, price))
 
         request.event.log_action(
             "pretix_openpos.prices.changed", user=request.user, data={"changed": changed}
@@ -203,6 +224,63 @@ class Echo:
 #: while to wake, a till that polled late. Anything still open after this was
 #: not slow, it was abandoned.
 UNRESOLVED_AFTER = timedelta(minutes=20)
+
+
+def sold_off_tariff(sales):
+    """
+    Journal rows that were replayed at a price the tariff no longer carries.
+
+    A sale rung up while the till was cut off was priced from the tariff it had
+    cached, and the customer paid that. The order is created at what was
+    actually charged, because invoicing a sum nobody handed over is the worse
+    of the two lies — and the divergence is recorded on the line rather than
+    smoothed away.
+
+    Until now the only place it was ever said out loud was the till's own
+    resync panel, to whoever was holding the tablet, once. This is the same
+    thing in the place the evening is reconciled: the difference is real money
+    that is in the drawer and not in the price list, and it has to be added up
+    somewhere.
+
+    Takes an already-filtered queryset, so it follows the screen's own range.
+    """
+    rows = []
+    difference = Decimal("0.00")
+    for sale in sales.filter(offline=True).order_by("-seq"):
+        lines = []
+        for line in sale.positions:
+            if not line.get("tariff_price"):
+                continue
+            # The journal holds these as strings — it is JSON, and a price
+            # that came back as a float would be a worse bug than any of the
+            # ones on this page. Widened here rather than in the template,
+            # which has no arithmetic and whose money filter refuses a string.
+            charged = Decimal(line["unit_price"])
+            tariff = Decimal(line["tariff_price"])
+            difference += (charged - tariff) * line["count"]
+            lines.append({**line, "unit_price": charged, "tariff_price": tariff})
+        if lines:
+            rows.append({"sale": sale, "lines": lines})
+    return rows, difference
+
+
+def off_tariff_total(sale):
+    """
+    What the price list would have charged for this basket, or ``None``.
+
+    ``None`` rather than the total whenever nothing diverged, so a reader can
+    tell "the tariff agreed" from "the tariff was never compared" — an online
+    sale has no cached tariff to differ from and its row is blank, not zero.
+    """
+    if not any(line.get("tariff_price") for line in sale.positions):
+        return None
+    return sum(
+        (
+            Decimal(line.get("tariff_price") or line["unit_price"]) * line["count"]
+            for line in sale.positions
+        ),
+        Decimal("0.00"),
+    )
 
 
 def unresolved_terminal_payments(event):
@@ -373,7 +451,14 @@ class SalesView(EventPermissionRequiredMixin, ListView):
         header = [
             "seq", "kind", "datetime", "order", "till", "till_serial", "cashier",
             "payment_type", "total", "cash_given", "cash_change", "testmode",
-            "offline", "cancels_seq", "reason", "positions",
+            # What the price list would have charged for the same basket, and
+            # the gap. Blank on every row but an offline replay whose tariff
+            # had moved, so a column of blanks with three figures in it is the
+            # honest shape of this: it is a rare thing that matters when it
+            # happens, and a spreadsheet can sum it without reading the
+            # positions column by eye.
+            "offline", "tariff_total", "off_tariff", "cancels_seq", "reason",
+            "positions",
         ]
 
         def rows():
@@ -396,6 +481,7 @@ class SalesView(EventPermissionRequiredMixin, ListView):
                     )
                     for line in sale.positions
                 )
+                tariff_total = off_tariff_total(sale)
                 yield writer.writerow([
                     sale.seq,
                     sale.kind,
@@ -410,6 +496,8 @@ class SalesView(EventPermissionRequiredMixin, ListView):
                     "" if sale.cash_change is None else sale.cash_change,
                     "1" if sale.testmode else "",
                     "1" if sale.offline else "",
+                    "" if tariff_total is None else tariff_total,
+                    "" if tariff_total is None else sale.total - tariff_total,
                     "" if sale.cancels_seq is None else sale.cancels_seq,
                     sale.reason,
                     positions,
@@ -525,6 +613,10 @@ class SalesView(EventPermissionRequiredMixin, ListView):
         # is the full audit.
         ctx["tampered_with"] = PosSale.verify_chain_cached(self.request.event)
         ctx["unresolved_card"] = unresolved_terminal_payments(self.request.event)
+        # Follows the filter, unlike the two blocks above it: this is money
+        # that belongs to the evening being reconciled, not a loose end that
+        # needs seeing whatever range is on screen.
+        ctx["off_tariff"], ctx["off_tariff_difference"] = sold_off_tariff(all_sales)
         # Echoed back so the form keeps what was asked for, and so the export
         # link can carry it.
         ctx["filter_from"] = (self.request.GET.get("from") or "").strip()

@@ -151,7 +151,11 @@ class DevicesView(OrganizerDetailViewMixin, OrganizerPermissionRequiredMixin, Te
             messages.error(request, error)
             return self.render_to_response(self.get_context_data())
 
-        changed = 0
+        # Both sides of every device that moved, not a count. "3 devices were
+        # changed" is unreadable the moment anyone needs it — which is when a
+        # till has stopped taking cards and somebody is working out whether the
+        # reader was moved to the other tablet an hour ago, and by whom.
+        changed = []
         with transaction.atomic():
             for device in devices:
                 role, reader = submitted[device.pk]
@@ -166,7 +170,14 @@ class DevicesView(OrganizerDetailViewMixin, OrganizerPermissionRequiredMixin, Te
                 PosDevice.objects.update_or_create(
                     device=device, defaults={"role": role, "sumup_reader_id": reader}
                 )
-                changed += 1
+                changed.append({
+                    "device": device.pk,
+                    "device_name": device.name,
+                    "role": role,
+                    "role_before": current.role,
+                    "reader": reader,
+                    "reader_before": current.sumup_reader_id,
+                })
 
         request.organizer.log_action(
             "pretix_openpos.devices.changed", user=request.user, data={"changed": changed}

@@ -56,6 +56,8 @@ def test_a_price_that_moved_during_the_dropout_is_reported(till, event, ticket):
         {
             "item": ticket.pk,
             "item_name": "Entrée",
+            "variation": None,
+            "variation_name": None,
             "charged": "10.00",
             "tariff": "12.00",
         }
@@ -63,6 +65,18 @@ def test_a_price_that_moved_during_the_dropout_is_reported(till, event, ticket):
     # And on the journal line itself, so it survives the tariff being edited again.
     sale = PosSale.objects.get(seq=body["journal_seq"])
     assert sale.positions[0]["tariff_price"] == "12.00"
+
+    # And in the order's own history, which is where somebody looks when one
+    # order's total does not match the price list two days later. The till's
+    # resync panel used to be the only place this was ever said.
+    entry = (
+        Order.objects.get(code=body["order"]["code"])
+        .all_logentries()
+        .get(action_type="pretix_openpos.order.off_tariff")
+    )
+    assert entry.parsed_data["lines"][0]["charged"] == "10.00"
+    assert "10.00" in entry.display() and "12.00" in entry.display()
+    assert "Entrée" in entry.display()
 
 
 @pytest.mark.django_db

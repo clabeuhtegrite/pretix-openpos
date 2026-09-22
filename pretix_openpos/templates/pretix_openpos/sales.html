@@ -130,6 +130,85 @@
     {% endif %}
 
     {% comment %}
+        Sales replayed at a price the tariff no longer carries. Said once to
+        whoever held the tablet at resync, and until this section to nobody
+        else — least of all the person reconciling the evening two days later,
+        who sees an order at a price the price list does not explain.
+    {% endcomment %}
+    {% if off_tariff %}
+        <div class="row">
+            <div class="col-md-12">
+                <h3>{% trans "Sold at a price that had changed" %}</h3>
+                <div class="alert alert-info">
+                    {% blocktrans trimmed %}
+                        These sales were rung up while the till was cut off, priced from the
+                        tariff it had cached, and the customer paid that. The order is recorded
+                        at what was actually charged — invoicing a sum nobody handed over would
+                        be worse — so the difference below is real money that is in the drawer
+                        and not in the price list.
+                    {% endblocktrans %}
+                </div>
+                <table class="table table-condensed">
+                    <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>{% trans "Date" %}</th>
+                        <th>{% trans "Order" %}</th>
+                        <th>{% trans "Product" %}</th>
+                        {% comment %}
+                            Per unit, because that is what the price list holds and
+                            what anyone compares against. The count is in the product
+                            column, and the footer's difference is the whole basket.
+                        {% endcomment %}
+                        <th class="text-right">{% trans "Charged, each" %}</th>
+                        <th class="text-right">{% trans "Price list, each" %}</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    {% for row in off_tariff %}
+                        {% for line in row.lines %}
+                            <tr>
+                                {% comment %}
+                                    One journal row can hold several diverging lines, so the
+                                    first three columns are written once and spanned.
+                                {% endcomment %}
+                                {% if forloop.first %}
+                                    <td rowspan="{{ row.lines|length }}">{{ row.sale.seq }}</td>
+                                    <td rowspan="{{ row.lines|length }}">{{ row.sale.datetime|date:"SHORT_DATETIME_FORMAT" }}</td>
+                                    <td rowspan="{{ row.lines|length }}">
+                                        {% if row.sale.order %}
+                                            <a href="{% url "control:event.order" organizer=request.event.organizer.slug event=request.event.slug code=row.sale.order_code %}">
+                                                {{ row.sale.order_code }}
+                                            </a>
+                                        {% else %}
+                                            {{ row.sale.order_code|default:"—" }}
+                                        {% endif %}
+                                    </td>
+                                {% endif %}
+                                <td>
+                                    {{ line.count }}× {{ line.item_name }}
+                                    {% if line.variation_name %}<small class="text-muted">{{ line.variation_name }}</small>{% endif %}
+                                </td>
+                                <td class="text-right">{{ line.unit_price|money:currency }}</td>
+                                <td class="text-right text-muted">{{ line.tariff_price|money:currency }}</td>
+                            </tr>
+                        {% endfor %}
+                    {% endfor %}
+                    </tbody>
+                    <tfoot>
+                    <tr>
+                        <th colspan="5">
+                            {% trans "Difference against the price list" %}
+                        </th>
+                        <th class="text-right">{{ off_tariff_difference|money:currency }}</th>
+                    </tr>
+                    </tfoot>
+                </table>
+            </div>
+        </div>
+    {% endif %}
+
+    {% comment %}
         Nights, not calendar days: a till day starts at six in the morning
         because an evening crosses midnight. Asking for one date gives that
         whole evening, small hours included.

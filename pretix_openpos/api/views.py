@@ -736,6 +736,10 @@ class OpenPosViewSet(viewsets.ViewSet):
                     {
                         "item": item.pk,
                         "item_name": str(item.name),
+                        # Two variations of one item move independently, so the
+                        # name alone would name the wrong thing half the time.
+                        "variation": variation.pk if variation else None,
+                        "variation_name": str(variation.value) if variation else None,
                         "charged": str(price),
                         "tariff": str(tariff),
                     }
@@ -890,6 +894,23 @@ class OpenPosViewSet(viewsets.ViewSet):
                     user=request.user if request.user.is_authenticated else None,
                     auth=request.auth,
                 )
+
+                if off_tariff:
+                    # Told to the till at resync, and until now told to nobody
+                    # else. The volunteer who happens to be holding the tablet
+                    # sees it once, in a panel they then dismiss; the person
+                    # reconciling the evening two days later sees an order at a
+                    # price the tariff does not explain and has nothing to go
+                    # on. The order's own history is where pretix keeps "what
+                    # happened to this order", so it goes there — the journal
+                    # line already carries the same figures, but the journal is
+                    # not what anybody opens when a single order looks odd.
+                    order.log_action(
+                        "pretix_openpos.order.off_tariff",
+                        data={"lines": off_tariff},
+                        user=request.user if request.user.is_authenticated else None,
+                        auth=request.auth,
+                    )
 
                 sale = PosSale.record(
                     event=event,
