@@ -1392,6 +1392,17 @@ class OpenPosViewSet(viewsets.ViewSet):
             body["card_refund"] = (
                 self._refund_card(event, original) if original else "none"
             )
+            # And the books are brought in line with what just happened. A
+            # cancellation whose card refund was refused the first time leaves a
+            # failed refund on the order; succeeding on the retry has to clear
+            # it, or the order page keeps saying the customer was never paid
+            # back long after they were.
+            if original is not None and original.order_id:
+                self._settle_refund(
+                    request,
+                    original.order.refunds.order_by("-local_id").first(),
+                    body["card_refund"],
+                )
             return Response(body, status=status.HTTP_200_OK)
 
         sale = PosSale.objects.filter(event=event, seq=data["seq"]).select_related("order").first()
@@ -1436,7 +1447,13 @@ class OpenPosViewSet(viewsets.ViewSet):
                 raise ValidationError({"seq": [str(e)]})
 
             order.refresh_from_db()
-            refund = self._record_refund(request, order, sale, data["reason"])
+            refund = self._record_refund(
+                request, order, sale, data["reason"],
+                # A reader is about to be asked, after this transaction, and it
+                # can refuse. Nothing may claim the money is back until it has
+                # answered.
+                settle_now=self._reader_payment(event, sale) is None,
+            )
 
             cancellation = PosSale.record(
                 event=event,
@@ -1501,7 +1518,29 @@ class OpenPosViewSet(viewsets.ViewSet):
         # So the cancellation stands first, and the card is a separate step
         # whose outcome is reported rather than assumed.
         body["card_refund"] = self._refund_card(event, sale)
+        self._settle_refund(request, refund, body["card_refund"])
         return Response(body, status=status.HTTP_201_CREATED)
+
+    @staticmethod
+    def _reader_payment(event, sale):
+        """
+        The reader payment this sale was settled by, if a reader settled it.
+
+        One lookup for two questions that must never disagree: whether the
+        server is going to ask SumUp for the money back, and which transaction
+        to ask about. A cash sale, or a card taken on somebody's phone, has
+        none — there is nothing here for this server to refund.
+        """
+        if sale.payment_type != PosSale.PAYMENT_CARD:
+            return None
+        payment = PosTerminalPayment.objects.filter(
+            event=event,
+            idempotency_key=sale.idempotency_key,
+            status=PosTerminalPayment.STATUS_SUCCESSFUL,
+        ).first()
+        if payment is None or not payment.transaction_id:
+            return None
+        return payment
 
     def _refund_card(self, event, sale):
         """
@@ -1523,14 +1562,8 @@ class OpenPosViewSet(viewsets.ViewSet):
             refund it from the SumUp app, and has to be told so plainly rather
             than shown a cancellation that looks complete.
         """
-        if sale.payment_type != PosSale.PAYMENT_CARD:
-            return "none"
-        payment = PosTerminalPayment.objects.filter(
-            event=event,
-            idempotency_key=sale.idempotency_key,
-            status=PosTerminalPayment.STATUS_SUCCESSFUL,
-        ).first()
-        if payment is None or not payment.transaction_id:
+        payment = self._reader_payment(event, sale)
+        if payment is None:
             return "none"
         if payment.refunded:
             return "already"
@@ -1570,6 +1603,31 @@ class OpenPosViewSet(viewsets.ViewSet):
         since = start_of_business_day(event)
         sales = PosSale.objects.filter(event=event, datetime__gte=since)
 
+        # Reversals written tonight of sales rung up on an earlier day.
+        #
+        # Their money nets off below and that is RIGHT: the cash physically left
+        # this drawer tonight, so the figure to count against still has to
+        # include it. What was wrong was that it did so invisibly — a volunteer
+        # saw a takings line quietly short by thirty euros with nothing on
+        # screen to say why, and no way to tell it from a miscount. So the
+        # arithmetic is left alone and the amount is reported beside it.
+        earlier_seqs = set(
+            PosSale.objects.filter(event=event, datetime__lt=since).values_list(
+                "seq", flat=True
+            )
+        )
+
+        def from_earlier_days(qs):
+            rows = qs.filter(
+                kind=PosSale.KIND_CANCELLATION, cancels_seq__in=earlier_seqs
+            )
+            amount = rows.aggregate(total=Sum("total"))["total"] or Decimal("0.00")
+            return {
+                "count": rows.count(),
+                # Negative, like the rows themselves: this is money that left.
+                "total": str(amount.quantize(Decimal("0.01"))),
+            }
+
         def totals(qs):
             # Two aggregate queries per bucket, instead of fetching every row
             # of the night to add it up in Python.
@@ -1603,6 +1661,11 @@ class OpenPosViewSet(viewsets.ViewSet):
                 result[payment_type] = str(amount)
                 grand += amount
             result["total"] = str(grand)
+            # Included in the figures above rather than excluded from them, and
+            # named so the volunteer counting the drawer knows what they are
+            # counting. Absent when there are none, which is most nights.
+            earlier = from_earlier_days(qs)
+            result["earlier_days"] = earlier if earlier["count"] else None
             return result
 
         # Test-mode money never existed, so it must not be in the figure a
@@ -1813,15 +1876,22 @@ class OpenPosViewSet(viewsets.ViewSet):
             reversed_lines.append(entry)
         return reversed_lines
 
-    def _record_refund(self, request, order, sale, reason):
+    def _record_refund(self, request, order, sale, reason, *, settle_now):
         """
         Record that the money went back out.
 
         Cancelling an order does not by itself say the customer was paid back —
         pretix would keep showing the payment as taken. The refund is what makes
-        the books agree with the drawer. It is marked done immediately because
-        it is: cash out of the till, or an operator who has just refunded on the
-        card terminal standing in front of the customer.
+        the books agree with the drawer.
+
+        ``settle_now`` is whether it can be marked done here. It can when the
+        money moves in the same breath as this call: cash out of the till, or a
+        card taken on somebody's phone and given back the same way. It cannot
+        when a reader is about to be asked, because that call is made after this
+        transaction commits and it can be refused. Marking it done first was a
+        real hole: a refusal left pretix showing a completed refund while the
+        money was still on the customer's card, which is the one state where the
+        books and the customer disagree and nothing records which is right.
         """
         payment = order.payments.filter(
             state=OrderPayment.PAYMENT_STATE_CONFIRMED
@@ -1844,11 +1914,42 @@ class OpenPosViewSet(viewsets.ViewSet):
                 "reason": reason,
             },
         )
+        if settle_now:
+            self._mark_refund_done(request, refund)
+        return refund
+
+    @staticmethod
+    def _mark_refund_done(request, refund):
         refund.done(
             user=request.user if request.user.is_authenticated else None,
             auth=request.auth,
         )
-        return refund
+
+    def _settle_refund(self, request, refund, outcome):
+        """
+        Write down what SumUp actually did with the money.
+
+        Called once the card has been asked, outside the transaction. Anything
+        other than a refusal means the amount is on its way back and the refund
+        stands; a refusal leaves it failed, which is what makes the order page
+        say the money was *not* returned. Without this the operator is the only
+        record that it was not, and they are at a bar.
+        """
+        if refund is None or refund.state == OrderRefund.REFUND_STATE_DONE:
+            return
+        if outcome == "failed":
+            refund.state = OrderRefund.REFUND_STATE_FAILED
+            refund.save(update_fields=["state"])
+            # In pretix' own log, on the order, where somebody reconciling the
+            # evening will be looking.
+            refund.order.log_action(
+                "pretix.event.order.refund.failed",
+                {"local_id": refund.local_id, "provider": refund.provider},
+                user=request.user if request.user.is_authenticated else None,
+                auth=request.auth,
+            )
+            return
+        self._mark_refund_done(request, refund)
 
     def _credit_note_number(self, order):
         invoice = order.invoices.filter(is_cancellation=True).order_by("-pk").first()

@@ -328,3 +328,37 @@ describe("getting back to the till", () => {
     expect(onClose).not.toHaveBeenCalled();
   });
 });
+
+describe("money paid back on another day's sale", () => {
+  it("says how much, because nothing else on this screen would", async () => {
+    // Somebody came back a week later and was refunded out of tonight's
+    // drawer. The takings are short by exactly that much — correctly — and a
+    // volunteer counting cash cannot tell that from a miscount.
+    summary.mockResolvedValue({
+      ...takings,
+      event: {
+        ...takings.event,
+        cash: "270.00",
+        total: "470.00",
+        earlier_days: { count: 1, total: "-30.00" },
+      },
+    });
+    show();
+
+    expect(
+      await screen.findByText(
+        t("summary.earlierDays", { n: 1, amount: formatMoney(3000, "EUR") }),
+      ),
+    ).toBeTruthy();
+  });
+
+  it("says nothing on an ordinary evening", async () => {
+    // A line reading "0,00 paid back on 0 earlier sales" on every closing
+    // screen is noise that trains people to skip the section that matters.
+    summary.mockResolvedValue(takings);
+    show();
+
+    await screen.findByText(t("summary.allTills"));
+    expect(screen.queryByText(/earlier day|autre jour/)).toBeNull();
+  });
+});

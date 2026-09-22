@@ -252,6 +252,8 @@ export const MESSAGES = {
     "history.notCancellable": "This entry cannot be cancelled from the till.",
     "summary.cancellations": "{n} cancellations are already netted off these figures.",
     "summary.depositRefunds": "{n} deposits handed back are already netted off these figures.",
+    "summary.earlierDays":
+      "{amount} of this was paid back tonight on {n} sale(s) from an earlier day. The drawer really is short by that much.",
     "settings.event": "Event",
     "settings.eventHelp": "Only events with Open POS enabled are listed.",
     "settings.switching": "Switching…",
@@ -510,6 +512,8 @@ export const MESSAGES = {
     "history.notCancellable": "Cette écriture ne peut pas être annulée depuis la caisse.",
     "summary.cancellations": "{n} annulations sont déjà déduites de ces montants.",
     "summary.depositRefunds": "{n} consignes rendues sont déjà déduites de ces montants.",
+    "summary.earlierDays":
+      "{amount} ont été rendus ce soir sur {n} vente(s) d’un autre jour. Le tiroir est bien inférieur d’autant.",
     "settings.event": "Événement",
     "settings.eventHelp": "Seuls les événements où Open POS est activé sont listés.",
     "settings.switching": "Changement…",

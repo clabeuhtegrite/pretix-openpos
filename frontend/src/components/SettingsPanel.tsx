@@ -201,6 +201,21 @@ export default function SettingsPanel({
             {t("summary.depositRefunds", { n: summary.event.deposit_refunds ?? 0 })}
           </div>
         )}
+        {summary?.event.earlier_days && (
+          // The one that cannot be worked out from this screen. Somebody came
+          // back days later and was paid out of tonight's drawer: the takings
+          // above are short by that much, correctly, and nothing else here
+          // would ever say so.
+          <div className="attendance-note">
+            {t("summary.earlierDays", {
+              n: summary.event.earlier_days.count,
+              amount: formatMoney(
+                Math.abs(toCents(summary.event.earlier_days.total)),
+                currency,
+              ),
+            })}
+          </div>
+        )}
         {summary && (
           // A till day starts at six in the morning, so a bar that closes at
           // 5:40 and counts the drawer at 6:15 reads zeros everywhere. True,

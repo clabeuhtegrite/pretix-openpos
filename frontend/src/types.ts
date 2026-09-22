@@ -421,6 +421,16 @@ export interface Takings {
   cancellations: number;
   /** Deposits handed back; same story, and equally not a sale. */
   deposit_refunds?: number;
+  /**
+   * Reversals made in this window of sales rung up on an EARLIER day.
+   *
+   * Their money is netted off the figures below and belongs there — the cash
+   * left this drawer tonight. Named separately because a takings line quietly
+   * short by thirty euros is indistinguishable from a miscount, and the
+   * volunteer counting is the person least able to go and find out. Null on
+   * an ordinary evening.
+   */
+  earlier_days?: { count: number; total: string } | null;
   cash: string;
   card: string;
   total: string;

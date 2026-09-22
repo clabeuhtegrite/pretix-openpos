@@ -652,6 +652,110 @@ def test_a_refund_sumup_refuses_is_said_plainly(till, ticket, reader_till, sumup
 
 
 @pytest.mark.django_db
+def test_a_refused_refund_leaves_pretix_saying_the_money_is_still_out(
+    till, event, ticket, reader_till, sumup
+):
+    """
+    The hole this closes. pretix used to mark the refund *done* before SumUp had
+    been asked at all, so a refusal left the order page showing a completed
+    refund while the amount was still on the customer's card. The books and the
+    customer then disagree and nothing on the server records which is right —
+    the only witness is a volunteer at a bar who saw a red banner an hour ago.
+    """
+    from pretix.base.models.orders import OrderRefund
+
+    take_payment(till, [{"item": ticket.pk, "count": 1}], sumup=sumup)
+    sale = sell(
+        till, [{"item": ticket.pk, "count": 1}], payment_type="card", idempotency_key=KEY
+    ).json()
+    sumup.next_response = FakeResponse(422, {"message": "too late"})
+
+    till.post("cancel", {"seq": sale["journal_seq"], "idempotency_key": "cancel-1"})
+
+    refund = OrderRefund.objects.get(order__event=event)
+    assert refund.state == OrderRefund.REFUND_STATE_FAILED
+    # And the order still counts the payment as taken, which is the truth.
+    assert refund.payment.state != "refunded"
+
+
+@pytest.mark.django_db
+def test_a_refund_that_goes_through_is_marked_done(till, event, ticket, reader_till, sumup):
+    from pretix.base.models.orders import OrderRefund
+
+    take_payment(till, [{"item": ticket.pk, "count": 1}], sumup=sumup)
+    sale = sell(
+        till, [{"item": ticket.pk, "count": 1}], payment_type="card", idempotency_key=KEY
+    ).json()
+
+    till.post("cancel", {"seq": sale["journal_seq"], "idempotency_key": "cancel-1"})
+
+    assert OrderRefund.objects.get(order__event=event).state == (
+        OrderRefund.REFUND_STATE_DONE
+    )
+
+
+@pytest.mark.django_db
+def test_a_retry_that_gets_the_money_back_clears_the_failed_refund(
+    till, event, ticket, reader_till, sumup
+):
+    # Otherwise the order page keeps saying the customer was never paid back,
+    # long after they were.
+    from pretix.base.models.orders import OrderRefund
+
+    take_payment(till, [{"item": ticket.pk, "count": 1}], sumup=sumup)
+    sale = sell(
+        till, [{"item": ticket.pk, "count": 1}], payment_type="card", idempotency_key=KEY
+    ).json()
+    sumup.next_exception = requests.ConnectTimeout("no route")
+    till.post("cancel", {"seq": sale["journal_seq"], "idempotency_key": "cancel-1"})
+    assert OrderRefund.objects.get(order__event=event).state == (
+        OrderRefund.REFUND_STATE_FAILED
+    )
+
+    till.post("cancel", {"seq": sale["journal_seq"], "idempotency_key": "cancel-1"})
+
+    assert OrderRefund.objects.get(order__event=event).state == (
+        OrderRefund.REFUND_STATE_DONE
+    )
+
+
+@pytest.mark.django_db
+def test_a_cash_refund_is_done_the_moment_it_is_recorded(till, event, ticket):
+    # No reader is asked, so there is nothing to wait for: the money left the
+    # drawer while the customer was standing there. Making this one provisional
+    # too would leave every cash cancellation looking unfinished for ever.
+    from pretix.base.models.orders import OrderRefund
+
+    sale = sell(
+        till, [{"item": ticket.pk, "count": 1}], payment_type="cash", cash_given="10.00"
+    ).json()
+
+    till.post("cancel", {"seq": sale["journal_seq"], "idempotency_key": "cancel-1"})
+
+    assert OrderRefund.objects.get(order__event=event).state == (
+        OrderRefund.REFUND_STATE_DONE
+    )
+
+
+@pytest.mark.django_db
+def test_a_card_taken_on_a_phone_is_done_straight_away_too(till, event, ticket):
+    # Declared card, no reader on this till: the operator refunded it themselves
+    # in the card provider's app. This server has nothing to ask and nothing to
+    # wait for.
+    from pretix.base.models.orders import OrderRefund
+
+    sale = sell(
+        till, [{"item": ticket.pk, "count": 1}], payment_type="card"
+    ).json()
+
+    till.post("cancel", {"seq": sale["journal_seq"], "idempotency_key": "cancel-1"})
+
+    assert OrderRefund.objects.get(order__event=event).state == (
+        OrderRefund.REFUND_STATE_DONE
+    )
+
+
+@pytest.mark.django_db
 def test_a_cash_sale_has_no_card_to_refund(till, ticket, reader_till, sumup):
     sale = sell(
         till, [{"item": ticket.pk, "count": 1}], payment_type="cash", cash_given="10.00"
