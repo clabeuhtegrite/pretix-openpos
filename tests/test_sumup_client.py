@@ -12,14 +12,7 @@ import pytest
 import requests
 
 from pretix_openpos.sumup import (
-    ERR_BUSY,
-    ERR_NOT_FOUND,
-    ERR_UNAVAILABLE,
-    SumUpAccount,
-    SumUpError,
-    minor_units,
-    still_running,
-    succeeded,
+    ERR_BUSY, ERR_NOT_FOUND, ERR_UNAVAILABLE, SumUpAccount, SumUpError, minor_units, still_running, succeeded,
 )
 
 from .sumup_stub import FakeResponse
@@ -160,6 +153,49 @@ def test_forgetting_a_reader_removes_it(account, sumup):
     account.forget_reader(reader_id)
 
     assert sumup.readers == {}
+
+
+@pytest.mark.django_db
+def test_a_reader_says_what_it_is_doing(account, sumup):
+    sumup.set_state(sumup.add_reader("rdr_A"), "WAITING_FOR_CARD")
+
+    assert account.reader_status("rdr_A")["state"] == "WAITING_FOR_CARD"
+
+
+@pytest.mark.django_db
+def test_a_reader_that_cannot_answer_is_not_an_error(account, sumup):
+    """
+    The status endpoint needs firmware 3.3.39.0 on a Solo; taking payments
+    needs 3.3.24.3. A reader in between works and cannot answer this, so "we
+    do not know" is the honest result rather than an exception on a page load.
+    """
+    sumup.add_reader("rdr_A")
+
+    assert account.reader_status("rdr_A") is None
+
+
+@pytest.mark.django_db
+def test_an_answer_with_no_status_in_it_is_no_answer(account, sumup):
+    sumup.next_response = FakeResponse(200, {"battery_level": 50})
+
+    assert account.reader_status("rdr_A") is None
+
+
+@pytest.mark.django_db
+def test_asking_a_reader_is_bounded_harder_than_the_rest(account, sumup, monkeypatch):
+    # One call per reader, made while an organizer waits for a page. A reader
+    # that has gone quiet must not hold that page for the usual fifteen
+    # seconds to say so.
+    seen = {}
+
+    def capture(method, url, **kwargs):
+        seen.update(kwargs)
+        return FakeResponse(200, {"status": "ONLINE", "state": "IDLE"})
+
+    monkeypatch.setattr("pretix_openpos.sumup.requests.request", capture)
+    account.reader_status("rdr_A")
+
+    assert seen["timeout"] == (5, 5)
 
 
 # -- payments ---------------------------------------------------------------

@@ -59,7 +59,8 @@
                         <thead>
                             <tr>
                                 <th>{% trans "Reader" %}</th>
-                                <th>{% trans "State" %}</th>
+                                <th>{% trans "Pairing" %}</th>
+                                <th>{% trans "Right now" %}</th>
                                 <th>{% trans "Till" %}</th>
                                 <th></th>
                             </tr>
@@ -80,6 +81,36 @@
                                             <span class="label label-danger">{{ row.status }}</span>
                                         {% endif %}
                                     </td>
+                                    {% comment %}
+                                        What the device itself says, asked live. A reader that
+                                        cannot be asked — a Solo on firmware older than 3.3.39.0,
+                                        or a SumUp slow to answer — says so as "unknown" rather
+                                        than being drawn as offline: not knowing and being told
+                                        it is off are different things to act on.
+                                    {% endcomment %}
+                                    <td>
+                                        {% if not row.live %}
+                                            <span class="text-muted">{% trans "Unknown" %}</span>
+                                        {% elif not row.online %}
+                                            <span class="label label-danger">{% trans "Offline" %}</span>
+                                        {% elif row.busy %}
+                                            <span class="label label-warning">{% trans "Taking a payment" %}</span>
+                                        {% else %}
+                                            <span class="label label-success">{% trans "Ready" %}</span>
+                                        {% endif %}
+                                        {% if row.live %}
+                                            <br>
+                                            <small class="text-muted">
+                                                {% if row.battery is not None %}
+                                                    {% blocktrans trimmed with level=row.battery %}
+                                                        Battery {{ level }}%
+                                                    {% endblocktrans %} ·
+                                                {% endif %}
+                                                {{ row.connection }}
+                                                {% if row.firmware %}· {{ row.firmware }}{% endif %}
+                                            </small>
+                                        {% endif %}
+                                    </td>
                                     <td>
                                         {% if row.till %}
                                             {{ row.till.name }}
@@ -88,7 +119,24 @@
                                         {% endif %}
                                     </td>
                                     <td class="text-right">
-                                        <form action="" method="post">
+                                        {% comment %}
+                                            Only when there is something on the screen to clear.
+                                            An idle reader has nothing to free, and a button that
+                                            does nothing on most rows is a button nobody trusts
+                                            on the one row where it matters.
+                                        {% endcomment %}
+                                        {% if row.busy %}
+                                            <form action="" method="post" class="form-inline"
+                                                  style="display:inline">
+                                                {% csrf_token %}
+                                                <input type="hidden" name="action" value="free">
+                                                <input type="hidden" name="reader_id" value="{{ row.id }}">
+                                                <button type="submit" class="btn btn-default btn-xs">
+                                                    {% trans "Clear its screen" %}
+                                                </button>
+                                            </form>
+                                        {% endif %}
+                                        <form action="" method="post" style="display:inline">
                                             {% csrf_token %}
                                             <input type="hidden" name="action" value="forget">
                                             <input type="hidden" name="reader_id" value="{{ row.id }}">
@@ -107,6 +155,15 @@
                         Removing a reader also takes it off the till it was given to. That till
                         goes back to card payments typed in by the cashier — it does not stop
                         selling.
+                    {% endblocktrans %}
+                </p>
+                <p class="text-muted">
+                    {% blocktrans trimmed %}
+                        “Clear its screen” takes an abandoned amount off a reader that is stuck
+                        waiting for a card — a till that crashed mid-payment, a basket put on and
+                        walked away from. Until it is cleared the reader refuses the next payment
+                        as busy. It does not say whether the card was charged: check the till
+                        sales page before ringing the sale up again.
                     {% endblocktrans %}
                 </p>
             {% endif %}

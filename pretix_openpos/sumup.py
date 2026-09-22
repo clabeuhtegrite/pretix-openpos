@@ -125,7 +125,10 @@ class SumUpAccount:
 
     # -- plumbing ----------------------------------------------------------
 
-    def _call(self, method, path, *, json=None, params=None, expect=(200, 201, 204)):
+    def _call(
+        self, method, path, *, json=None, params=None, expect=(200, 201, 204),
+        timeout=None,
+    ):
         if not self.configured:
             raise SumUpError(
                 _("SumUp is not set up for this organizer yet."),
@@ -143,7 +146,7 @@ class SumUpAccount:
                     "Authorization": f"Bearer {self._api_key}",
                     "Accept": "application/json",
                 },
-                timeout=TIMEOUT,
+                timeout=timeout or TIMEOUT,
             )
         except requests.RequestException as exc:
             # Includes both timeouts and DNS/TLS failures. Retryable: the till
@@ -237,6 +240,50 @@ class SumUpAccount:
             f"/v0.1/merchants/{self.merchant_code}/readers/{reader_id}",
             expect=(200, 204),
         )
+
+    #: What a reader says it is doing, when it is doing something.
+    #:
+    #: SumUp's own vocabulary, kept as it comes: turning these into words for
+    #: an operator is the template's job, and inventing a state here that
+    #: SumUp did not send would be worse than showing the raw one.
+    STATE_IDLE = "IDLE"
+    BUSY_STATES = (
+        "SELECTING_TIP",
+        "WAITING_FOR_CARD",
+        "WAITING_FOR_PIN",
+        "WAITING_FOR_SIGNATURE",
+    )
+
+    def reader_status(self, reader_id, *, timeout=(5, 5)):
+        """
+        Whether a reader is reachable, and what it is doing right now.
+
+        Answers ``{"status": "ONLINE"|"OFFLINE", "state": ..., "battery_level":
+        ..., "firmware_version": ..., "last_activity": ...}``, or ``None`` when
+        this reader cannot say. Two reasons it cannot, and neither is a fault:
+        the endpoint needs firmware 3.3.39.0 on a Solo — a reader old enough to
+        take payments but not old enough to be asked about them — and SumUp may
+        simply not answer in time.
+
+        Bounded harder than the rest of the API on purpose. This is called to
+        draw a back-office page, one call per reader, and a reader that has
+        gone quiet must not hold that page for fifteen seconds to tell us so:
+        not knowing, quickly, is the more useful answer.
+        """
+        try:
+            body = self._call(
+                "GET",
+                f"/v0.1/merchants/{self.merchant_code}/readers/{reader_id}/status",
+                timeout=timeout,
+            )
+        except SumUpError as exc:
+            logger.info(
+                "SumUp would not say what reader %s is doing: %s", reader_id, exc.code
+            )
+            return None
+        if not isinstance(body, dict) or not body.get("status"):
+            return None
+        return body
 
     # -- payments ----------------------------------------------------------
 
