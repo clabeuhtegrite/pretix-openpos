@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  clearPairing, clearSnapshot, enqueue, loadCached, loadCashier, loadFailures, loadPairing,
-  loadQueue, loadSnapshot, loadUpdateAttempt, requestPersistence, saveCached, saveCashier,
-  saveFailures, savePairing, saveQueue, saveSnapshot, saveUpdateAttempt,
+  BASKET_KEEPS_FOR_MS, clearBasket, clearPairing, clearSnapshot, enqueue, loadBasket,
+  loadCached, loadCashier, loadFailures, loadPairing, loadQueue, loadSnapshot,
+  loadUpdateAttempt, requestPersistence, saveBasket, saveCached, saveCashier, saveFailures,
+  savePairing, saveQueue, saveSnapshot, saveUpdateAttempt,
 } from "./storage";
 import { fillStorage } from "./test/setup";
-import type { OfflineSnapshot, Pairing, QueuedSale, SyncFailure } from "./types";
+import type { CartLine, OfflineSnapshot, Pairing, QueuedSale, SyncFailure } from "./types";
 
 /**
  * The till's only durable memory. Everything a cashier has taken money for
@@ -248,5 +249,92 @@ describe("requestPersistence", () => {
     vi.stubGlobal("navigator", {});
 
     expect(() => requestPersistence()).not.toThrow();
+  });
+});
+
+
+describe("the basket left on screen", () => {
+  const beer: CartLine = {
+    key: "10:", itemId: 10, variationId: null, label: "Bière",
+    unitPrice: 300, count: 2, available: null,
+  };
+  const credit = { amountCents: 1000, order: "DEMO-1" };
+
+  afterEach(() => {
+    clearBasket();
+    vi.useRealTimers();
+  });
+
+  it("comes back on a till that was interrupted mid-sale", () => {
+    saveBasket("festival", [beer], credit);
+
+    expect(loadBasket("festival")).toEqual({ cart: [beer], credit });
+  });
+
+  it("is nothing at all on a till that was not", () => {
+    expect(loadBasket("festival")).toBeNull();
+  });
+
+  it("belongs to the event it was rung up on", () => {
+    // Switching events empties the basket for a reason: its prices, its
+    // products and its quota all belong to the evening it was built for.
+    saveBasket("festival", [beer], credit);
+
+    expect(loadBasket("autre-soiree")).toBeNull();
+  });
+
+  it("is forgotten once nobody is standing in front of it", () => {
+    // The credit is why this expires at all. Restoring a stale one takes money
+    // off the next customer's total that belongs to somebody who left an hour
+    // ago, which is real money out of the drawer; losing a fresh one costs a
+    // trip back through the history panel.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-22T20:00:00.000Z"));
+    saveBasket("festival", [beer], credit);
+
+    vi.setSystemTime(new Date(Date.now() + BASKET_KEEPS_FOR_MS + 1000));
+
+    expect(loadBasket("festival")).toBeNull();
+  });
+
+  it("does not come back on a second reload once it has expired", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-22T20:00:00.000Z"));
+    saveBasket("festival", [beer], credit);
+    vi.setSystemTime(new Date(Date.now() + BASKET_KEEPS_FOR_MS + 1000));
+
+    loadBasket("festival");
+
+    expect(localStorage.getItem("openpos.basket.v1")).toBeNull();
+  });
+
+  it("is cleared rather than stored once the basket is empty", () => {
+    saveBasket("festival", [beer], credit);
+
+    saveBasket("festival", [], null);
+
+    expect(localStorage.getItem("openpos.basket.v1")).toBeNull();
+  });
+
+  it("keeps a credit that outlives its basket", () => {
+    // The corrected order can be rung up from an empty basket: the customer is
+    // owed the money whether or not they are buying anything back.
+    saveBasket("festival", [], credit);
+
+    expect(loadBasket("festival")).toEqual({ cart: [], credit });
+  });
+
+  it("survives a storage that will not take the write", () => {
+    // A full disk must not throw under an operator mid-sale. The basket is on
+    // screen and they are looking at it; there is nothing to say.
+    fillStorage();
+
+    expect(() => saveBasket("festival", [beer], credit)).not.toThrow();
+  });
+
+  it("reads a corrupted entry as no basket at all", () => {
+    localStorage.setItem("openpos.basket.v1", "{ not json");
+
+    expect(loadBasket("festival")).toBeNull();
   });
 });

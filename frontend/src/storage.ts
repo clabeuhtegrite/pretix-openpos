@@ -1,4 +1,6 @@
-import type { OfflineSnapshot, Pairing, QueueEntry, SyncFailure } from "./types";
+import type {
+  CartLine, Credit, OfflineSnapshot, Pairing, QueueEntry, SyncFailure,
+} from "./types";
 
 const PAIRING_KEY = "openpos.pairing.v1";
 const CASHIER_KEY = "openpos.cashier.v1";
@@ -6,6 +8,7 @@ const QUEUE_KEY = "openpos.queue.v1";
 const FAILURES_KEY = "openpos.failures.v1";
 const SNAPSHOT_KEY = "openpos.snapshot.v1";
 const UPDATE_KEY = "openpos.updateTried.v1";
+const BASKET_KEY = "openpos.basket.v1";
 
 /**
  * Ask the browser to keep this data.
@@ -154,4 +157,73 @@ export function saveUpdateAttempt(version: string): void {
   } catch {
     // Worst case the prompt is offered again after the reload. Harmless.
   }
+}
+
+/**
+ * How long a basket left on screen is still the basket in front of somebody.
+ *
+ * The failure this exists to stop is the tablet reloading under an operator:
+ * an iOS PWA killed in the background, a crash, a tap on refresh. That is
+ * seconds to minutes, so anything older is an evening that has moved on.
+ *
+ * It matters most for the credit. Restoring a stale one would take money off
+ * the next customer's total that belongs to somebody who left an hour ago —
+ * real money out of the drawer. Losing a fresh one costs a trip back through
+ * the history panel, which is annoying and recoverable. The two failures are
+ * not the same size, so the window is short.
+ */
+export const BASKET_KEEPS_FOR_MS = 30 * 60_000;
+
+interface SavedBasket {
+  event: string;
+  at: string;
+  cart: CartLine[];
+  credit: Credit | null;
+}
+
+/**
+ * The basket being rung up, and the credit being spent on it.
+ *
+ * Written on every change rather than at chosen moments: a basket that
+ * survives only the reloads somebody remembered to handle is a basket that
+ * does not survive. The credit is the part that actually matters — it is
+ * money the till is holding for a customer, and it exists nowhere else until
+ * the corrected sale is recorded.
+ */
+export function saveBasket(event: string, cart: CartLine[], credit: Credit | null): void {
+  try {
+    if (cart.length === 0 && credit === null) {
+      localStorage.removeItem(BASKET_KEY);
+      return;
+    }
+    const saved: SavedBasket = { event, at: new Date().toISOString(), cart, credit };
+    localStorage.setItem(BASKET_KEY, JSON.stringify(saved));
+  } catch {
+    // Out of space, or a browser that will not store. The basket is on screen
+    // and the operator is standing in front of it; there is nothing to say.
+  }
+}
+
+/**
+ * What was on screen when this till was last running, if it is still relevant.
+ *
+ * Answers null for another event's basket and for a stale one — see
+ * ``BASKET_KEEPS_FOR_MS`` — and drops what it will not return, so a basket
+ * that has expired cannot come back after a second reload.
+ */
+export function loadBasket(event: string): { cart: CartLine[]; credit: Credit | null } | null {
+  const saved = readJson<SavedBasket | null>(BASKET_KEY, null);
+  if (!saved || saved.event !== event || !Array.isArray(saved.cart)) {
+    return null;
+  }
+  const age = Date.now() - new Date(saved.at).getTime();
+  if (!Number.isFinite(age) || age < 0 || age > BASKET_KEEPS_FOR_MS) {
+    clearBasket();
+    return null;
+  }
+  return { cart: saved.cart, credit: saved.credit ?? null };
+}
+
+export function clearBasket(): void {
+  localStorage.removeItem(BASKET_KEY);
 }

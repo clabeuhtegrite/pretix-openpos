@@ -27,6 +27,8 @@ export const MESSAGES = {
     "sale.total": "Total",
     "sale.charge": "Take payment",
     "sale.clear": "Clear",
+    "sale.clearCredit":
+      "This basket carries the {order} credit. Emptying it drops the credit too, and the customer is owed that money. Empty it anyway?",
     "sale.soldOut": "Sold out",
     "sale.left": "{n} left",
     "custom.tile": "Free amount",
@@ -282,6 +284,8 @@ export const MESSAGES = {
     "sale.total": "Total",
     "sale.charge": "Encaisser",
     "sale.clear": "Vider",
+    "sale.clearCredit":
+      "Ce panier porte l’avoir de {order}. Le vider supprime aussi l’avoir, et cet argent est dû au client. Vider quand même ?",
     "sale.soldOut": "Épuisé",
     "sale.left": "{n} restants",
     "custom.tile": "Montant libre",

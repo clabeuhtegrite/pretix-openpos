@@ -17,15 +17,15 @@ import { t } from "./i18n";
 import { fromCents, toCents } from "./money";
 import { newNonce } from "./nonce";
 import {
-  clearPairing, enqueue, loadCached, loadCashier, loadFailures, loadPairing, loadQueue,
-  loadUpdateAttempt, requestPersistence, saveCached, saveCashier, savePairing,
-  saveUpdateAttempt,
+  clearBasket, clearPairing, enqueue, loadBasket, loadCached, loadCashier, loadFailures,
+  loadPairing, loadQueue, loadUpdateAttempt, requestPersistence, saveBasket, saveCached,
+  saveCashier, savePairing, saveUpdateAttempt,
 } from "./storage";
 import { useConnectivity } from "./connectivity";
 import { drainQueue } from "./sync";
 import { applyTheme, loadTheme, saveTheme, watchDeviceTheme, type Theme } from "./theme";
 import type {
-  Catalog, CartLine, DeviceRole, Pairing, PaymentType, PosConfig, QueuedSale,
+  Catalog, CartLine, Credit, DeviceRole, Pairing, PaymentType, PosConfig, QueuedSale,
   SaleResult, SyncReport,
 } from "./types";
 import { useBackClose } from "./useBackClose";
@@ -117,7 +117,16 @@ export default function App() {
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const [cart, setCart] = useState<CartLine[]>([]);
+  /**
+   * The basket, restored if this till was interrupted mid-sale.
+   *
+   * Read once, from the same storage the effect below writes to, and only for
+   * the event this till is paired to. What comes back is priced as it was
+   * left; the catalogue may have moved since, which is what the reprice below
+   * settles before the operator reads a figure out to anybody.
+   */
+  const restored = useState(() => (pairing ? loadBasket(pairing.event) : null))[0];
+  const [cart, setCart] = useState<CartLine[]>(() => restored?.cart ?? []);
   const [cashier, setCashier] = useState<string>(loadCashier);
   const [theme, setTheme] = useState<Theme>(loadTheme);
   /** Read once at startup: the server version a previous reload already tried. */
@@ -149,7 +158,7 @@ export default function App() {
    * outlive that panel: it is spent at the payment step, against a basket the
    * operator may still be editing.
    */
-  const [credit, setCredit] = useState<{ amountCents: number; order: string } | null>(null);
+  const [credit, setCredit] = useState<Credit | null>(() => restored?.credit ?? null);
 
   const online = useConnectivity();
   const [pending, setPending] = useState(() => loadQueue().length);
@@ -186,6 +195,37 @@ export default function App() {
   // What is queued is money that exists nowhere else yet; ask the browser not
   // to evict it.
   useEffect(requestPersistence, []);
+
+  /**
+   * Keep the basket on disk, so a reload does not lose it.
+   *
+   * An effect rather than a write at each of the dozen places that change the
+   * basket: one of those would be missed, and a basket that survives only the
+   * reloads somebody remembered to handle is a basket that does not survive.
+   * The credit is the part that matters — it is money the till is holding for
+   * a customer, and until the corrected sale is recorded it exists nowhere
+   * else at all.
+   */
+  useEffect(() => {
+    if (!pairing) return;
+    saveBasket(pairing.event, cart, credit);
+  }, [pairing, cart, credit]);
+
+  /**
+   * Price a restored basket against the catalogue that is actually live.
+   *
+   * It was saved with the prices of the session that was interrupted, and the
+   * tariff may have been edited since. The server would refuse the sale and
+   * the panel would recover — that safety net is already there — but the
+   * figure the operator reads out to a customer has to be right the first
+   * time. Once only: after this the ordinary refresh owns the prices.
+   */
+  const repriced = useRef(restored === null);
+  useEffect(() => {
+    if (!catalog || repriced.current) return;
+    repriced.current = true;
+    setCart((lines) => repriceCart(lines, catalog));
+  }, [catalog]);
 
   const { atDoor, opensOnDoor, doorReachable } = screensFor(config);
 
@@ -341,10 +381,12 @@ export default function App() {
 
   function unpair() {
     clearPairing();
+    clearBasket();
     setPairing(null);
     setConfig(null);
     setCatalog(null);
     setCart([]);
+    setCredit(null);
     setSettingsOpen(false);
   }
 
@@ -431,8 +473,20 @@ export default function App() {
     });
   }
 
-  /** Emptying the basket abandons the correction, and the credit with it. */
+  /**
+   * Emptying the basket abandons the correction, and the credit with it.
+   *
+   * Asked about only when there is a credit, because only then is the tap
+   * expensive: a basket of drinks is ten seconds to ring up again, while a
+   * credit is money the till is holding for a customer who is standing
+   * there — gone from the app the moment it is dropped, and recoverable only
+   * by finding the cancellation again in the history. A dialog on every clear
+   * would be a dialog nobody reads by the third one.
+   */
   function clearCart() {
+    if (credit && !window.confirm(t("sale.clearCredit", { order: credit.order }))) {
+      return;
+    }
     setCart([]);
     setCredit(null);
   }
