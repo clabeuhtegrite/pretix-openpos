@@ -48,6 +48,13 @@ import { useWakeLock } from "./useWakeLock";
 const CATALOG_REFRESH_MS = 60_000;
 
 /**
+ * How often a till with something to send tries again while it believes it
+ * is online. Each try is one request when the network is still not taking
+ * writes, and nothing at all once the queue is empty.
+ */
+const DRAIN_RETRY_MS = 15_000;
+
+/**
  * The check-in list this device scans on.
  *
  * The one it was last switched to at the door, as long as the event still has
@@ -308,6 +315,16 @@ export default function App() {
     // interrupting a payment panel to replay a queue would be the worst moment.
     if (!online || pending === 0 || paying !== null) return;
     void sync();
+    // And again every little while, for as long as it stays that way. A drain
+    // that stopped on a failed request is otherwise retried only when the
+    // network is seen to come back, and a failure answered at once by a
+    // request that got through — the door's head count, its guest list — is
+    // never seen as a coming back at all: the till went offline and online
+    // again between two renders. Tried against a real pretix, scans sat on
+    // the phone that way, network back and badge showing, until the app was
+    // opened again.
+    const timer = window.setInterval(() => void sync(), DRAIN_RETRY_MS);
+    return () => window.clearInterval(timer);
   }, [online, pending, paying, sync]);
 
   // Android's back gesture closes what is on top, not the till. The payment
@@ -974,6 +991,9 @@ export default function App() {
           // A scan admitted with no network is money's equivalent at the door:
           // pretix has not heard of it yet, and only this count gets it sent.
           onQueued={() => setPending(loadQueue().length)}
+          // And when the count goes down, a drain has just sent some: the
+          // door's counter asks the server again rather than wait a minute.
+          pending={pending}
           // The door steps out to the grid to sell a ticket; every other device
           // already has the grid underneath and is merely closing an overlay.
           onSell={atDoor ? () => setCheckinOpen(false) : undefined}

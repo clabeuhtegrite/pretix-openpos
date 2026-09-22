@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { api } from "./api";
 import { loadSnapshot, saveSnapshot } from "./storage";
@@ -12,6 +12,18 @@ import type { OfflineSnapshot, Pairing } from "./types";
  * during the evening.
  */
 export const SNAPSHOT_REFRESH_MS = 300_000;
+
+/**
+ * How soon the list may be pulled again when the network comes back.
+ *
+ * It is pulled whenever the network comes back, and "comes back" is also what
+ * one failed request followed by one that got through looks like. On a
+ * network that loses writes but not reads — a scan timing out on a busy
+ * pretix, its head count answering — that alternates as fast as the requests
+ * go. Tried against a real pretix, a door phone pulled the whole guest list
+ * fifty times in two seconds; on the night, each pull is every ticket sold.
+ */
+export const SNAPSHOT_MIN_GAP_MS = 60_000;
 
 /**
  * The guest list this till carries for a network dropout, kept fresh.
@@ -35,11 +47,14 @@ export function useOfflineSnapshot(
   active: boolean,
 ): OfflineSnapshot | null {
   const [snapshot, setSnapshot] = useState<OfflineSnapshot | null>(loadSnapshot);
+  /** When a pull for which list last set off, whatever came of it. */
+  const pulledRef = useRef<{ listId: number; at: number } | null>(null);
 
   useEffect(() => {
     if (!pairing || !listId || !active) return;
     let cancelled = false;
     const pull = () => {
+      pulledRef.current = { listId, at: Date.now() };
       api
         .offlineSnapshot(pairing, listId)
         .then((data) => {
@@ -51,7 +66,8 @@ export function useOfflineSnapshot(
           // A stale snapshot beats none; the previous one stays.
         });
     };
-    pull();
+    const last = pulledRef.current;
+    if (!last || last.listId !== listId || Date.now() - last.at >= SNAPSHOT_MIN_GAP_MS) pull();
     const timer = window.setInterval(pull, SNAPSHOT_REFRESH_MS);
     return () => {
       cancelled = true;
