@@ -35,7 +35,11 @@ it was written for. Read the scope section before deciding it fits.
 - **A live head count** on the scanning screen: how many people are inside right
   now, counted over admission products only and across every door and till.
   Tapping it opens a flow chart of tickets expected → admitted → on site →
-  scanned back out, with the breakdown per product.
+  scanned back out, with the breakdown per product and a table of tonight's
+  scans per device.
+- **A scan counter that survives the phone**: what this device and every door
+  have scanned tonight, counted by the server from pretix' own check-ins rather
+  than by the page, so leaving the app or a reload does not reset it.
 - **A role per device**: a tablet is the bar *till* or the *door*, assigned in
   the back office. A till opens on the product grid; a door opens on the scanner
   and steps out to the grid to sell a ticket on the spot. A device nobody has
@@ -101,7 +105,11 @@ it was written for. Read the scope section before deciding it fits.
   cut off, either: the money is already in the drawer, so a quota that ran out
   or a product pulled from the till in the meantime is recorded as a fact to
   reconcile rather than left stranded in a browser. Those rows are marked
-  `offline` in the journal, which is how you find them afterwards.
+  `offline` in the journal, which is how you find them afterwards. Scans are
+  sent the way pretix expects an offline scan to be, so its check-in history
+  and export mark them as offline scans — refusals given offline included —
+  and a scan whose request fails mid-way is answered from the guest list and
+  kept rather than lost.
 - **Transaction history and cancellation**, scoped to the till in your hands:
   cancelling issues a credit note, records the refund and appends a reversing
   journal entry — the original sale is never touched — and the items go back in

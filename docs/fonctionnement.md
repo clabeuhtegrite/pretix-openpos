@@ -598,9 +598,16 @@ porteur a franchi une porte, et une ligne de merchandising n'a pas de porte.
 Sans ce filtre, la caisse annonçait aussi « faites entrer » après une vente
 purement boutique.
 
-**Le pointage est forcé** (`force=True`, `questions_supported=False`) : le client
-est devant vous et vient de payer, une question obligatoire ne doit pas bloquer
-la porte.
+**Le client entre quoi que dise la liste, mais le pointage n'est forcé que s'il
+le faut.** Il est d'abord tenté normalement (`questions_supported=False` : une
+question obligatoire ne doit pas bloquer la porte), et forcé seulement si pretix
+le refuse — une règle de la liste, un produit qu'elle ne prend pas — ce que la
+ligne dit alors comme le passage forcé qu'il est. pretix lit `force` comme « cet
+appareil était hors ligne » : quand chaque billet vendu en caisse était forcé,
+chacun apparaissait dans l'historique des check-ins et dans l'export comme un
+scan hors ligne, et la seule marque capable de distinguer les vrais ne voulait
+plus rien dire. Une vente encaissée hors ligne, elle, est forcée d'emblée — elle
+l'a bien été — et pointée à **l'heure de la vente**, pas à celle de la reprise.
 
 **Le compteur `seq` est réclamé de façon optimiste.** Deux caisses peuvent
 committer en même temps ; c'est la contrainte unique `(event, seq)` qui arbitre,
@@ -640,7 +647,7 @@ une liste. C'est [CheckinScreen.tsx](../frontend/src/components/CheckinScreen.ts
   Rouge avec le motif quand c'est refusé. Et **bleu « Enregistré · pas une
   entrée »** quand le scan est accepté pour un produit qui ne fait entrer
   personne — ce qu'une liste en `all_products` autorise très bien pour un
-  t-shirt. Le compteur les sépare (« 3 admis · 1 refusé · 1 sans entrée ») et
+  t-shirt. Le compteur les sépare (« 3 admis · 2 refusés · 1 sans entrée ») et
   l'effectif ne bouge pas : les mêmes règles que côté vente, où un panier de
   boissons affiche « Vente enregistrée » et non « Laissez entrer ».
   La liste des produits d'admission vient de `config/` (`admission_items`) et
@@ -710,6 +717,46 @@ part plutôt que passés sous silence.
 Le calcul des présents est celui de pretix (`CheckinList.positions_inside_query`),
 pas une reprise maison : entrée puis sortie puis nouvelle entrée, la personne est
 dedans.
+
+### 5.2 Le compteur du scanneur
+
+Sous les boutons, deux lignes :
+
+- **« Cet appareil : 64 admis · 3 refusés »**, suivi de « 1 sans entrée » pour
+  un t-shirt scanné et de « 2 à envoyer » pour les scans que pretix n'a pas
+  encore reçus ;
+- **« Ce soir, toutes portes : 196 admis »**.
+
+Ce compteur était tenu par l'écran, et repartait à zéro dès que l'app se
+rechargeait — ce qu'iOS fait à une app laissée un moment en arrière-plan : c'est
+le retour des scanneurs de la première soirée. Il vient maintenant de pretix, par
+le bloc `scans` de `attendance/`, compté sur les lignes de check-in de la soirée
+(depuis 6 h, comme le relevé de caisse) :
+
+- un **scan** est un check-in arrivé par l'API de scan avec un code
+  (`raw_source_type` renseigné), de cette app ou de pretixSCAN. Le pointage fait
+  à la vente n'en est pas un, ni un pointage automatique ;
+- entrées seulement, sur toutes les listes de l'événement ;
+- **admis** : accepté pour un produit d'admission ; **refusés** : tous les
+  refus, y compris ceux envoyés après coup ; **sans entrée** : accepté pour un
+  produit qui ne fait entrer personne ; **hors ligne** : parmi les admis, ceux
+  que pretix a reçus après coup — marqués comme tels (`force_sent`), ou arrivés
+  plus de deux minutes après le scan, le seuil de pretix, pour ceux qu'une
+  version plus ancienne envoyait sans marque.
+
+L'app y ajoute ce que le serveur ne peut pas encore savoir : les scans répondus
+depuis la dernière lecture, et ceux qui attendent dans la file. Le dernier
+chiffre reçu est gardé sur l'appareil pour la soirée, et une reprise qui envoie
+des scans l'y reporte : une app rechargée sans réseau rouvre sur le chiffre de la
+soirée, pas sur zéro. Pendant qu'une reprise vide la file, le compteur ne
+redescend pas : les scans envoyés restent comptés jusqu'à ce que le chiffre du
+serveur les compte.
+
+Le détail de l'effectif (bouton 👥) ajoute un tableau **par appareil** : entrés,
+refusés, hors ligne, le plus actif en tête, les scans du back-office sur une
+ligne à part. C'est la lecture qui répond à « a-t-on perdu des scans ? » : un
+téléphone dont la ligne est plus courte que ce que son bénévole se rappelle a
+fait entrer des gens dont pretix n'a jamais entendu parler.
 
 ---
 
@@ -851,6 +898,15 @@ aller vérifier.
 | Redémarrer la caisse | Oui : catalogue et configuration du dernier chargement sont conservés par événement |
 | Historique, annulation, effectif | Non — ils demandent le serveur, et l'écran le dit |
 
+Un scan tenté en ligne qui n'aboutit pas — réseau coupé pendant le scan, pretix
+qui redémarre, pas de réponse en 8 s — est répondu de la même façon, contre la
+liste embarquée, et gardé sous le `nonce` avec lequel il était parti : si la
+requête était bien arrivée, pretix reconnaît le rejeu au lieu de compter la
+personne deux fois. Il finissait sur un message d'erreur au bout de 30 s, sans
+être gardé nulle part, alors que la personne était déjà entrée. Le verdict dit
+« Hors ligne · gardé sur l'appareil » chaque fois que c'est le téléphone qui a
+répondu.
+
 Une vente encaissée pendant la coupure porte **le prix que la caisse avait en
 mémoire**. C'est le seul endroit de tout le plugin où un prix vient du client, et
 c'est assumé : le client a payé cette somme, c'est un fait, pas une proposition.
@@ -875,9 +931,30 @@ seulement si personne n'est en train d'encaisser. Trois règles gouvernent tout 
 3. **Aucun refus n'est avalé.** Une écriture refusée passe dans une liste qui
    survit aux redémarrages et reste affichée jusqu'à ce qu'un humain la traite.
 
-Une écriture qui appartient à **un autre événement** — la caisse a changé
+Un scan part comme pretix attend qu'un scan hors ligne parte : **forcé**, avec
+son heure d'origine. pretix l'enregistre quoi qu'il répondrait maintenant — la
+personne est entrée sur la réponse donnée à ce moment-là — et le **marque comme
+scan hors ligne** : icône de nuage et heure de réception dans l'historique des
+check-ins, colonne dans l'export « Journal d'enregistrement ». Un billet passé
+entre-temps à une autre porte y figure comme un passage forcé, pas comme le refus
+de quelqu'un qui est déjà dans la salle. Un **refus** donné hors ligne part
+aussi, vers `failed_checkins`, l'endpoint de pretix pour ça (celui de
+pretixSCAN) : il apparaît comme « Échec en mode hors connexion », rattaché au
+billet quand le code en désigne un. En ligne, pretix écrit lui-même chaque refus ;
+hors ligne, rien n'en gardait trace.
+
+La reprise part dès que le réseau revient, puis est retentée toutes les 15 s
+tant que quelque chose attend. Une requête qui échoue aussitôt suivie d'une qui
+passe ne se voit pas comme un retour du réseau : vérifié contre un vrai pretix,
+des scans restaient ainsi sur le téléphone, réseau revenu, jusqu'à la
+réouverture de l'app. Pour la même raison, la liste embarquée n'est pas
+rechargée plus d'une fois par minute sur un réseau qui va et vient.
+
+Une vente qui appartient à **un autre événement** — la caisse a changé
 d'événement avec une file non vide — n'est ni envoyée ici ni bloquante : elle est
-enjambée, comptée, et le panneau dit à quel événement elle attend de revenir.
+enjambée, comptée, et le panneau dit à quel événement elle attend de revenir. Un
+scan, lui, part quel que soit l'événement de la caisse : il désigne sa liste, et
+la liste son événement.
 Elle arrêtait la reprise autrefois, ce qui suffisait à figer toute la file
 derrière elle, avec un badge qui comptait et un bouton « Envoyer maintenant » qui
 n'envoyait rien sans expliquer pourquoi.
@@ -891,8 +968,9 @@ qu'il faut lire :
   pas l'apprendre. Personne ne peut corriger ça depuis la caisse ; le taire
   serait pire.
 - **Entrées contestées** — « Untel est entré hors ligne, mais le billet a été
-  refusé à l'envoi : déjà scanné ». La personne est dans la salle de toute façon.
-  C'est le prix d'un scan hors ligne, et l'organisateur doit le savoir.
+  refusé à l'envoi : billet inconnu ». Forcé, un scan n'est plus refusé que pour
+  ce qu'un passage forcé ne franchit pas. La personne est dans la salle de toute
+  façon ; c'est le prix d'un scan hors ligne, et l'organisateur doit le savoir.
 
 ### Ce que ça enregistre côté serveur
 
@@ -900,7 +978,8 @@ Une vente rejouée est une vente normale, à trois détails près : la ligne de
 journal porte `offline = True`, son `datetime` est **l'heure réelle de la vente**
 (pas celle de la reprise), et le paiement de la commande porte cette même heure.
 La commande, elle, est bien créée à la reprise — c'est la vérité, et le journal
-garde l'autre moitié. Un scan rejoué porte lui aussi son horodatage d'origine.
+garde l'autre moitié. Un scan rejoué porte lui aussi son horodatage d'origine,
+et la marque hors ligne de pretix.
 
 **Et elle n'est pas refusée parce que le catalogue a bougé.** L'argent est dans
 le tiroir et le billet dans une main : refuser à ce moment n'annule pas la vente,
@@ -928,8 +1007,8 @@ Un survendu reste un survendu : c'est un fait à réconcilier après la soirée,
   tant qu'il n'a pas parlé.
 - **Le scan hors ligne ne voit que sa liste embarquée.** Un billet vendu en ligne
   pendant la coupure y est absent : il sera refusé à la porte. Un billet déjà
-  scanné à une autre porte pendant la coupure sera accepté ici, et signalé à la
-  reprise. Et la liste embarquée ne répond **que pour sa propre porte** : changer
+  scanné à une autre porte pendant la coupure sera accepté ici, et enregistré par
+  pretix comme un passage forcé. Et la liste embarquée ne répond **que pour sa propre porte** : changer
   de liste pendant la coupure affiche « pas de liste embarquée » plutôt que de
   faire entrer les invités de l'autre porte.
 - **Pas de moteur de règles hors ligne.** Les règles de check-in de pretix
@@ -1795,7 +1874,7 @@ Base : `/api/v1`. Authentification : `Authorization: Device <token>`.
 | `GET` | `…/openpos/catalog/` | Catalogue par catégorie, prix, stock restant |
 | `POST` | `…/openpos/checkout/` | Encaissement |
 | `GET` | `…/openpos/summary/` | Relevé du jour |
-| `GET` | `…/openpos/attendance/?list=<id>` | Présents sur place, sur une liste de contrôle |
+| `GET` | `…/openpos/attendance/?list=<id>` | Présents sur place, sur une liste de contrôle ; scans de la soirée, par appareil (`scans`) |
 | `GET` | `…/openpos/history/` | Journal de l'événement, **de cette caisse seule** (100 dernières, `truncated` si tronqué) |
 | `GET` | `…/openpos/offline/?list=<id>` | Liste embarquée pour scanner sans réseau |
 | `POST` | `…/openpos/cancel/` | Annule une vente de cette caisse (avoir + remboursement + contrepassation) |
@@ -1804,6 +1883,7 @@ Base : `/api/v1`. Authentification : `Authorization: Device <token>`.
 | `POST` | `…/openpos/terminal/cancel/` | Retire le panier du lecteur |
 | `POST` | `/organizers/<org>/checkinrpc/redeem/` | Pointage (endpoint pretix natif) |
 | `GET` | `/organizers/<org>/checkinrpc/search/` | Recherche de participant (natif) |
+| `POST` | `…/checkinlists/<id>/failed_checkins/` | Refus donné hors ligne, envoyé à la reprise (natif) |
 
 Tout appel sur un événement où le plugin n'est pas activé est refusé en 403, quel
 que soit l'accès du device : c'est ce qui empêche une app périmée de vendre sur
@@ -1915,9 +1995,22 @@ terminé au passage.
   "non_admission_entered": 12,
   "items": [
     { "id": 12, "name": "Plein tarif", "inside": 90, "entered": 100, "expected": 150 }
-  ]
+  ],
+  "scans": {
+    "since": "2026-08-16T06:00:00+02:00",
+    "device": { "admitted": 64, "refused": 3, "other": 1, "offline": 12 },
+    "event": { "admitted": 196, "refused": 7, "other": 4, "offline": 12 },
+    "devices": [
+      { "name": "Porte 1", "current": true, "admitted": 64, "refused": 3, "other": 1, "offline": 12 }
+    ]
+  }
 }
 ```
+
+`scans` compte les scans de la soirée sur **toutes** les listes de l'événement,
+pas seulement celle demandée (voir §5.2). `device` vaut `null` pour un appelant
+qui n'est pas un appareil, et `name` vaut `null` sur la ligne des scans faits
+depuis le back-office.
 
 `inside + exited == entered` et `entered + not_arrived == expected`, toujours :
 les quatre chiffres sont tirés de la même population. `list` est facultatif dans
@@ -2019,6 +2112,7 @@ Ce qu'elle couvre, fichier par fichier :
 | `test_summary.py` | La journée de caisse qui commence à 6 h, le mode test à part, une annulation qui se nette |
 | `test_catalog.py` | Ce que la caisse a le droit de vendre et ce qu'on lui dit de l'événement |
 | `test_attendance.py` | Le compteur de présents, produits d'admission seulement |
+| `test_door_scans.py` | Le compteur du scanneur : par appareil et pour la soirée, ce qui est un scan et ce qui n'en est pas, la marque hors ligne de pretix, un refus envoyé après coup, une vente en caisse qui n'est plus marquée hors ligne |
 | `test_device_roles.py` | Le rôle d'un appareil, et ce que le serveur refuse à une caisse qui a un lecteur |
 | `test_terminal.py` | Le paiement sur le lecteur de bout en bout : panier épinglé, double appui, webhook forgé, remboursement à l'annulation |
 | `test_sumup_client.py` | La forme d'un échec SumUp — « refusé », « pas encore », « on n'a pas pu demander » |
