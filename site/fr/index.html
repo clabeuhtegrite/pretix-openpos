@@ -222,9 +222,12 @@
       l'installation sur l'écran d'accueil exigent tous un contexte sécurisé. pretix
       Hosted n'autorise pas les plugins tiers, donc ça ne peut pas y servir.
     </p>
-<pre><code>pip install pretix-openpos
+<pre><code>pip install "pretix-openpos @ git+https://github.com/clabeuhtegrite/pretix-openpos"
 python -m pretix migrate
 python -m pretix rebuild</code></pre>
+    <p class="sub">
+      Pas encore sur PyPI, donc l'installation se fait depuis le dépôt. Épinglez un commit si vous préférez ne pas suivre <code>main</code>.
+    </p>
     <p class="sub">
       Si vous faites tourner pretix dans Docker ou Kubernetes, le
       <code>deploy/Dockerfile</code> du dépôt intègre le plugin à l'image officielle

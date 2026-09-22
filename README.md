@@ -195,8 +195,11 @@ pretix Hosted does not allow custom plugins, so this cannot be used there.
 
 ## Installation
 
+Not on PyPI yet, so it is installed from the repository. Pin a commit if you
+would rather not follow `main`.
+
 ```bash
-pip install pretix-openpos
+pip install "pretix-openpos @ git+https://github.com/clabeuhtegrite/pretix-openpos"
 ```
 
 Then, in your pretix installation:

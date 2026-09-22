@@ -220,9 +220,12 @@
       require a secure context. pretix Hosted does not allow custom plugins, so this
       cannot be used there.
     </p>
-<pre><code>pip install pretix-openpos
+<pre><code>pip install "pretix-openpos @ git+https://github.com/clabeuhtegrite/pretix-openpos"
 python -m pretix migrate
 python -m pretix rebuild</code></pre>
+    <p class="sub">
+      Not on PyPI yet, so it is installed from the repository. Pin a commit if you would rather not follow <code>main</code>.
+    </p>
     <p class="sub">
       If you run pretix in Docker or Kubernetes, the repository's
       <code>deploy/Dockerfile</code> bakes the plugin into the official image and
