@@ -1,6 +1,6 @@
 import csv
 from collections import OrderedDict
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
 from django.contrib import messages
@@ -9,13 +9,15 @@ from django.db.models import Count, Min, Sum
 from django.http import StreamingHttpResponse
 from django.shortcuts import redirect
 from django.urls import reverse
-from django.utils.timezone import now
+from django.utils.functional import cached_property
+from django.utils.timezone import make_aware, now
 from django.utils.translation import gettext_lazy as _
 from django.views.generic import ListView, TemplateView
 from pretix.base.models import Event
 from pretix.control.permissions import EventPermissionRequiredMixin
 from pretix.control.views.event import EventSettingsFormView, EventSettingsViewMixin
 
+from .api.views import BUSINESS_DAY_STARTS_AT
 from .forms import OpenPosSettingsForm
 from .models import PosPrice, PosSale
 
@@ -259,6 +261,65 @@ def unresolved_terminal_payments(event):
     ]
 
 
+def business_day_window(event, start, end):
+    """
+    Turn two dates into the span of nights they name.
+
+    Nights, not calendar days, and that is the whole reason this exists: a till
+    day here begins at six in the morning, because an evening crosses midnight
+    and the figure somebody reconciles the drawer against at half past one has
+    to cover the whole of it. A filter that cut at midnight would split every
+    single event in this system down the middle and hand back two halves that
+    answer nothing.
+
+    So ``from=2026-09-19&to=2026-09-19`` means the night of Saturday the 19th:
+    six in the morning that day, up to six the next. Either end may be left
+    out. Returns ``(start, end, problems)`` with datetimes or ``None``, and a
+    list of what could not be read — shown to the organiser rather than
+    silently ignored, because a filter that quietly does nothing is worse than
+    none at all.
+    """
+    problems = []
+
+    def parse(value, complaint):
+        if not value:
+            return None
+        try:
+            return date.fromisoformat(value.strip())
+        except ValueError:
+            # The whole sentence, rather than one built from a translated word
+            # dropped into a slot: a bare “from” is the kind of msgid a
+            # catalogue renders as the wrong one of the four French words for
+            # it, and there is nothing in the string to tell a translator which.
+            problems.append(complaint.format(value=value[:20]))
+            return None
+
+    first = parse(
+        start,
+        _("“{value}” is not a date. The first evening goes in as YYYY-MM-DD."),
+    )
+    last = parse(
+        end,
+        _("“{value}” is not a date. The last evening goes in as YYYY-MM-DD."),
+    )
+    if first and last and last < first:
+        problems.append(_("The end of the range is before its beginning."))
+        first = last = None
+
+    def at_six(day):
+        return make_aware(
+            datetime.combine(day, BUSINESS_DAY_STARTS_AT), event.timezone
+        )
+
+    return (
+        at_six(first) if first else None,
+        # Up to six the morning AFTER the last night asked for, so that night
+        # is included whole rather than cut short at its own six o'clock.
+        at_six(last + timedelta(days=1)) if last else None,
+        problems,
+    )
+
+
 class SalesView(EventPermissionRequiredMixin, ListView):
     """Journal of till sales, with the takings broken down per device."""
 
@@ -270,11 +331,35 @@ class SalesView(EventPermissionRequiredMixin, ListView):
     def get(self, request, *args, **kwargs):
         if request.GET.get("export") == "csv":
             return self._export_csv()
+        for problem in self.window[2]:
+            messages.error(request, problem)
         return super().get(request, *args, **kwargs)
+
+    @cached_property
+    def window(self):
+        """The nights being looked at, read once per request."""
+        return business_day_window(
+            self.request.event,
+            self.request.GET.get("from"),
+            self.request.GET.get("to"),
+        )
+
+    def in_window(self, qs):
+        start, end, _problems = self.window
+        if start is not None:
+            qs = qs.filter(datetime__gte=start)
+        if end is not None:
+            qs = qs.filter(datetime__lt=end)
+        return qs
 
     def _export_csv(self):
         """
-        The whole journal as one file, for whoever keeps the books.
+        The journal as one file, for whoever keeps the books.
+
+        Carries the same filter as the screen it was downloaded from. An export
+        that silently handed back every event's worth of rows when the page
+        showed one night would be the more expensive of the two mistakes: the
+        person opening it is reconciling something, and has no way to tell.
 
         The journal itself, not the takings: the takings are recomputable from
         it, which is the point of exporting it whole. Streamed row by row in
@@ -296,7 +381,9 @@ class SalesView(EventPermissionRequiredMixin, ListView):
             # The BOM stops Excel guessing at the encoding.
             yield "\ufeff"
             yield writer.writerow(header)
-            journal = PosSale.objects.filter(event=event).order_by("seq").iterator()
+            journal = self.in_window(
+                PosSale.objects.filter(event=event)
+            ).order_by("seq").iterator()
             for sale in journal:
                 positions = " + ".join(
                     "{}× {}{}{}".format(
@@ -329,21 +416,33 @@ class SalesView(EventPermissionRequiredMixin, ListView):
                 ])
 
         response = StreamingHttpResponse(rows(), content_type="text/csv; charset=utf-8")
+        # The range in the filename, so two exports of different nights do not
+        # land in the same downloads folder under the same name.
+        start, end, _problems = self.window
+        span = "".join(
+            part for part in (
+                f"-{start.date().isoformat()}" if start else "",
+                f"-{(end - timedelta(days=1)).date().isoformat()}" if end else "",
+            )
+        )
         response["Content-Disposition"] = (
-            f'attachment; filename="openpos-journal-{event.slug}.csv"'
+            f'attachment; filename="openpos-journal-{event.slug}{span}.csv"'
         )
         return response
 
     def get_queryset(self):
         return (
-            PosSale.objects.filter(event=self.request.event)
+            self.in_window(PosSale.objects.filter(event=self.request.event))
             .select_related("device", "order")
             .order_by("-seq")
         )
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        all_sales = PosSale.objects.filter(event=self.request.event)
+        # The takings follow the filter, or the figures under a filtered journal
+        # would belong to a different set of rows than the ones listed — which
+        # is the way to make a page lie without a single wrong number on it.
+        all_sales = self.in_window(PosSale.objects.filter(event=self.request.event))
 
         def empty():
             return {"cash": Decimal("0.00"), "card": Decimal("0.00"), "count": 0}
@@ -417,9 +516,18 @@ class SalesView(EventPermissionRequiredMixin, ListView):
             testmode_totals if all_sales.filter(testmode=True).exists() else None
         )
         ctx["currency"] = self.request.event.currency
-        # Surfaced so a broken chain is visible rather than silently trusted.
+        # Deliberately NOT filtered, unlike everything above. The chain runs
+        # through the whole journal, so checking a slice of it would let a page
+        # showing one night report a sound journal while an entry outside the
+        # window is the broken one. Same for card payments left in the air:
+        # they are an outstanding job, not a figure about this night.
         # Checked from an anchored checkpoint; `manage.py openpos_verify_journal`
         # is the full audit.
         ctx["tampered_with"] = PosSale.verify_chain_cached(self.request.event)
         ctx["unresolved_card"] = unresolved_terminal_payments(self.request.event)
+        # Echoed back so the form keeps what was asked for, and so the export
+        # link can carry it.
+        ctx["filter_from"] = (self.request.GET.get("from") or "").strip()
+        ctx["filter_to"] = (self.request.GET.get("to") or "").strip()
+        ctx["filtered"] = any(self.window[:2])
         return ctx

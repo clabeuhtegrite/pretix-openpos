@@ -10,13 +10,15 @@
 #
 # Regenerate after changing a translatable string:
 #   django-admin makemessages -l fr -i 'static/*' -i 'migrations/*'
-# run from pretix_openpos/. The compiled catalogue is built into the image
-# rather than committed — see deploy/Dockerfile.
+# run from pretix_openpos/, then recompile the catalogue next to it:
+#   msgfmt -o locale/fr/LC_MESSAGES/django.mo locale/fr/LC_MESSAGES/django.po
+# Both files are committed; a test compares them, so a .po edited on its
+# own fails rather than shipping yesterday's wording.
 msgid ""
 msgstr ""
 "Project-Id-Version: pretix-openpos\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-09-22 09:51+0000\n"
+"POT-Creation-Date: 2026-09-22 10:17+0000\n"
 "PO-Revision-Date: 2026-09-22 09:51+0000\n"
 "Last-Translator: clabeuhtegrite\n"
 "Language-Team: French\n"
@@ -62,7 +64,9 @@ msgstr "Une vente hors ligne ne peut pas porter de total attendu."
 msgid ""
 "Prices are decided by the server, except on a free-amount line, which must "
 "carry both its amount and its reason."
-msgstr "Les prix sont décidés par le serveur, sauf sur une ligne à montant libre, qui doit porter à la fois son montant et son motif."
+msgstr ""
+"Les prix sont décidés par le serveur, sauf sur une ligne à montant libre, "
+"qui doit porter à la fois son montant et son motif."
 
 #: api/serializers.py:189
 msgid "The amount received cannot be negative."
@@ -93,7 +97,8 @@ msgstr "Ce produit n’est pas celui sur lequel les consignes sont prises."
 
 #: api/views.py:272
 msgid "Free amounts can only be sold on the product set aside for them."
-msgstr "Les montants libres ne peuvent être vendus que sur le produit prévu pour eux."
+msgstr ""
+"Les montants libres ne peuvent être vendus que sur le produit prévu pour eux."
 
 #: api/views.py:276
 msgid "A free amount has to be more than nothing."
@@ -112,12 +117,15 @@ msgstr "Sans catégorie"
 msgid ""
 "This till has a card reader assigned, so a card payment has to be validated "
 "by the reader. Take this payment on the reader, or in cash."
-msgstr "Cette caisse a un lecteur attribué : un paiement par carte doit être validé par le lecteur. Encaissez sur le lecteur, ou en espèces."
+msgstr ""
+"Cette caisse a un lecteur attribué : un paiement par carte doit être validé "
+"par le lecteur. Encaissez sur le lecteur, ou en espèces."
 
 #: api/views.py:801
 #, python-brace-format
 msgid "Prices changed: this basket now comes to {total}, not {expected}."
-msgstr "Les prix ont changé : ce panier fait maintenant {total}, et non {expected}."
+msgstr ""
+"Les prix ont changé : ce panier fait maintenant {total}, et non {expected}."
 
 #: api/views.py:818
 msgid "Nothing is due: this transaction pays money out."
@@ -135,7 +143,9 @@ msgstr "Aucun lecteur n’est attribué à cette caisse."
 msgid ""
 "The card reader is taking another payment. Wait for it to finish, or take "
 "this basket in cash."
-msgstr "Le lecteur encaisse un autre paiement. Attendez la fin, ou prenez ce panier en espèces."
+msgstr ""
+"Le lecteur encaisse un autre paiement. Attendez la fin, ou prenez ce panier "
+"en espèces."
 
 #: api/views.py:1109
 #, python-brace-format
@@ -150,31 +160,33 @@ msgstr "Rien n’est dû sur ce panier. Réglez-le en espèces."
 msgid "No card payment was started for this basket."
 msgstr "Aucun paiement par carte n’a été lancé pour ce panier."
 
-#: api/views.py:1269 api/views.py:1650
+#: api/views.py:1269 api/views.py:1713
 msgid "Unknown check-in list."
 msgstr "Liste de contrôle inconnue."
 
-#: api/views.py:1399
+#: api/views.py:1410
 msgid "No such entry in this event's journal."
 msgstr "Cette écriture n’existe pas dans le journal de cet événement."
 
-#: api/views.py:1404
+#: api/views.py:1415
 msgid "This sale was made on another till and can only be corrected there."
-msgstr "Cette vente a été faite sur une autre caisse et ne peut être corrigée que là-bas."
+msgstr ""
+"Cette vente a été faite sur une autre caisse et ne peut être corrigée que là-"
+"bas."
 
-#: api/views.py:1407
+#: api/views.py:1418
 msgid "This journal entry is not a sale."
 msgstr "Cette écriture du journal n’est pas une vente."
 
-#: api/views.py:1409
+#: api/views.py:1420
 msgid "This sale has already been cancelled."
 msgstr "Cette vente a déjà été annulée."
 
-#: api/views.py:1411
+#: api/views.py:1422
 msgid "The order behind this sale no longer exists."
 msgstr "La commande derrière cette vente n’existe plus."
 
-#: api/views.py:1416
+#: api/views.py:1427
 #, python-brace-format
 msgid "pretix will not let this order be cancelled: {status}."
 msgstr "pretix refuse l’annulation de cette commande : {status}."
@@ -189,7 +201,9 @@ msgstr "Open POS"
 msgid ""
 "Open-source point of sale: sell tickets at the door from a tablet or phone "
 "using a progressive web app, with cash and card payments."
-msgstr "Caisse open source : vendez des billets à l’entrée depuis une tablette ou un téléphone avec une application web progressive, en espèces comme en carte."
+msgstr ""
+"Caisse open source : vendez des billets à l’entrée depuis une tablette ou un "
+"téléphone avec une application web progressive, en espèces comme en carte."
 
 #: apps.py:25
 msgid "Settings"
@@ -227,7 +241,9 @@ msgstr "Cet organisateur n’a pas de lecteur « {reader} »."
 msgid ""
 "A card reader can only be given to a till. Set “{device}” to till, or take "
 "its reader away."
-msgstr "Un lecteur ne peut être donné qu’à une caisse. Passez « {device} » en caisse, ou retirez-lui son lecteur."
+msgstr ""
+"Un lecteur ne peut être donné qu’à une caisse. Passez « {device} » en "
+"caisse, ou retirez-lui son lecteur."
 
 #: forms.py:18
 msgid "Merchant code"
@@ -237,7 +253,9 @@ msgstr "Code marchand"
 msgid ""
 "The short code identifying your SumUp account, shown in the SumUp dashboard "
 "— something like MH4H92C7."
-msgstr "Le code court qui identifie votre compte SumUp, visible dans le tableau de bord SumUp — quelque chose comme MH4H92C7."
+msgstr ""
+"Le code court qui identifie votre compte SumUp, visible dans le tableau de "
+"bord SumUp — quelque chose comme MH4H92C7."
 
 #: forms.py:30
 msgid "API key"
@@ -247,7 +265,10 @@ msgstr "Clé d’API"
 msgid ""
 "Created in the SumUp dashboard under Settings → For Developers → API keys. "
 "It is stored on this server and never sent to a till."
-msgstr "Créée dans le tableau de bord SumUp, sous Paramètres → Pour les développeurs → Clés d’API. Elle est stockée sur ce serveur et n’est jamais envoyée à une caisse."
+msgstr ""
+"Créée dans le tableau de bord SumUp, sous Paramètres → Pour les développeurs "
+"→ Clés d’API. Elle est stockée sur ce serveur et n’est jamais envoyée à une "
+"caisse."
 
 #: forms.py:46
 msgid "Give both the merchant code and the API key, or neither."
@@ -262,7 +283,10 @@ msgid ""
 "Tickets sold at the till are checked in on this list straight away, so the "
 "customer can walk in without being handed anything. Leave empty to sell "
 "without checking in."
-msgstr "Les billets vendus à la caisse sont pointés tout de suite sur cette liste, pour que le client entre sans qu’on lui remette quoi que ce soit. Laissez vide pour vendre sans pointer."
+msgstr ""
+"Les billets vendus à la caisse sont pointés tout de suite sur cette liste, "
+"pour que le client entre sans qu’on lui remette quoi que ce soit. Laissez "
+"vide pour vendre sans pointer."
 
 #: forms.py:65
 msgid "Issue invoices for till sales"
@@ -274,7 +298,11 @@ msgid ""
 "credit note for it — which is what makes a corrected order a paper trail "
 "rather than an edit. This covers the Open POS channel only: the webshop "
 "keeps whatever invoicing rules you set for it."
-msgstr "Chaque vente faite à la caisse reçoit une facture ; annuler une vente émet donc un avoir — c’est ce qui fait d’une commande corrigée une trace écrite plutôt qu’une modification. Cela ne concerne que le canal Open POS : la boutique en ligne garde les règles de facturation que vous lui avez données."
+msgstr ""
+"Chaque vente faite à la caisse reçoit une facture ; annuler une vente émet "
+"donc un avoir — c’est ce qui fait d’une commande corrigée une trace écrite "
+"plutôt qu’une modification. Cela ne concerne que le canal Open POS : la "
+"boutique en ligne garde les règles de facturation que vous lui avez données."
 
 #: forms.py:80
 msgid "Product for free-amount sales"
@@ -288,7 +316,14 @@ msgid ""
 "is kept in the till journal and on the order. Leave empty to keep the button "
 "off, which is the default: everywhere else the till sends product ids and "
 "the server decides what they cost."
-msgstr "Ajoute un bouton « montant libre » à la caisse, pour ce qui n’a pas de produit à soi — un verre cassé, un don, une assiette à un stand. La personne en caisse saisit le montant et un motif ; la vente est imputée à ce produit et le motif est conservé dans le journal de caisse et sur la commande. Laissez vide pour garder le bouton désactivé, ce qui est le réglage par défaut : partout ailleurs la caisse envoie des identifiants de produits et c’est le serveur qui décide du prix."
+msgstr ""
+"Ajoute un bouton « montant libre » à la caisse, pour ce qui n’a pas de "
+"produit à soi — un verre cassé, un don, une assiette à un stand. La personne "
+"en caisse saisit le montant et un motif ; la vente est imputée à ce produit "
+"et le motif est conservé dans le journal de caisse et sur la commande. "
+"Laissez vide pour garder le bouton désactivé, ce qui est le réglage par "
+"défaut : partout ailleurs la caisse envoie des identifiants de produits et "
+"c’est le serveur qui décide du prix."
 
 #: forms.py:95
 msgid "Cup deposit product"
@@ -302,7 +337,14 @@ msgid ""
 "nothing, and the end of an evening is people returning cups and buying "
 "nothing — so it is recorded in the till journal, where the takings and the "
 "drawer are reconciled. Leave empty to keep the button off."
-msgstr "Vendez la consigne comme n’importe quel produit, puis laissez la caisse la rendre : le désigner ici ajoute un bouton « rendre la consigne » qui déduit son tarif sur place du panier. Un rendu n’est pas une commande pretix — une commande ne peut pas totaliser moins que rien, et une fin de soirée, ce sont des gens qui rendent des gobelets sans rien acheter — il est donc enregistré dans le journal de caisse, là où la recette et la caisse se rapprochent. Laissez vide pour garder le bouton désactivé."
+msgstr ""
+"Vendez la consigne comme n’importe quel produit, puis laissez la caisse la "
+"rendre : le désigner ici ajoute un bouton « rendre la consigne » qui déduit "
+"son tarif sur place du panier. Un rendu n’est pas une commande pretix — une "
+"commande ne peut pas totaliser moins que rien, et une fin de soirée, ce sont "
+"des gens qui rendent des gobelets sans rien acheter — il est donc enregistré "
+"dans le journal de caisse, là où la recette et la caisse se rapprochent. "
+"Laissez vide pour garder le bouton désactivé."
 
 #: forms.py:110
 msgid "Do not check in automatically"
@@ -360,7 +402,7 @@ msgstr "Non attribué"
 #: models.py:463 templates/pretix_openpos/payment_control.html:14
 #: templates/pretix_openpos/sales.html:24
 #: templates/pretix_openpos/sales.html:100
-#: templates/pretix_openpos/sales.html:149
+#: templates/pretix_openpos/sales.html:176
 #: templates/pretix_openpos/sumup.html:64
 msgid "Till"
 msgstr "Caisse"
@@ -470,7 +512,8 @@ msgstr "SumUp a accepté le paiement sans nommer de transaction."
 
 #: sumup_views.py:147
 msgid "We could not save your changes. See below for details."
-msgstr "Vos modifications n’ont pas pu être enregistrées. Voir le détail ci-dessous."
+msgstr ""
+"Vos modifications n’ont pas pu être enregistrées. Voir le détail ci-dessous."
 
 #: sumup_views.py:156
 msgid "Your changes have been saved."
@@ -492,14 +535,19 @@ msgstr "Le lecteur est appairé."
 msgid ""
 "SumUp has accepted the code. The reader will show as paired once the device "
 "itself confirms — reload in a few seconds."
-msgstr "SumUp a accepté le code. Le lecteur s’affichera comme appairé dès que l’appareil lui-même aura confirmé — rechargez dans quelques secondes."
+msgstr ""
+"SumUp a accepté le code. Le lecteur s’affichera comme appairé dès que "
+"l’appareil lui-même aura confirmé — rechargez dans quelques secondes."
 
 #: sumup_views.py:221
 msgid ""
 "The reader has been asked to clear its screen. If a card had already been "
 "accepted, that payment still stands — check the till sales page before "
 "charging again."
-msgstr "Le lecteur a reçu la demande d’effacer son écran. Si une carte avait déjà été acceptée, ce paiement tient toujours — vérifiez la page des ventes en caisse avant d’encaisser à nouveau."
+msgstr ""
+"Le lecteur a reçu la demande d’effacer son écran. Si une carte avait déjà "
+"été acceptée, ce paiement tient toujours — vérifiez la page des ventes en "
+"caisse avant d’encaisser à nouveau."
 
 #: sumup_views.py:245
 msgid "The reader has been removed."
@@ -511,17 +559,24 @@ msgid ""
 "day — each event counted on its own local clock. Automatic check-ins and "
 "test-mode orders are left out, so this is people actually walking through "
 "the door."
-msgstr "Scans d’entrée réussis sur tous les événements passés de cet organisateur, par heure de la journée — chaque événement compté à son heure locale. Les pointages automatiques et les commandes en mode test sont exclus : ce sont donc des gens qui ont réellement franchi la porte."
+msgstr ""
+"Scans d’entrée réussis sur tous les événements passés de cet organisateur, "
+"par heure de la journée — chaque événement compté à son heure locale. Les "
+"pointages automatiques et les commandes en mode test sont exclus : ce sont "
+"donc des gens qui ont réellement franchi la porte."
 
 #: templates/pretix_openpos/arrivals.html:19
 msgid "There are no past events yet. Come back once the first one is over."
-msgstr "Il n’y a pas encore d’événement passé. Revenez une fois le premier terminé."
+msgstr ""
+"Il n’y a pas encore d’événement passé. Revenez une fois le premier terminé."
 
 #: templates/pretix_openpos/arrivals.html:23
 msgid ""
 "No entry scans have been recorded for any past event, so there is nothing to "
 "chart yet."
-msgstr "Aucun scan d’entrée n’a été enregistré sur un événement passé : il n’y a encore rien à représenter."
+msgstr ""
+"Aucun scan d’entrée n’a été enregistré sur un événement passé : il n’y a "
+"encore rien à représenter."
 
 #: templates/pretix_openpos/arrivals.html:30
 msgid "entry scans"
@@ -580,7 +635,7 @@ msgstr "Événement"
 
 #: templates/pretix_openpos/arrivals.html:124
 #: templates/pretix_openpos/sales.html:99
-#: templates/pretix_openpos/sales.html:147
+#: templates/pretix_openpos/sales.html:174
 msgid "Date"
 msgstr "Date"
 
@@ -594,14 +649,22 @@ msgid ""
 "grid and takes the money; a <strong>door</strong> opens on the scanner and "
 "can still sell a ticket on the spot. A device nobody has assigned keeps "
 "doing both, which is how every device behaved before this screen existed."
-msgstr "À quoi sert chaque appareil appairé. Une <strong>caisse</strong> s’ouvre sur la grille de produits et encaisse ; une <strong>porte</strong> s’ouvre sur le scanner et peut toujours vendre un billet sur place. Un appareil auquel personne n’a donné de rôle continue de faire les deux, comme tous les appareils se comportaient avant l’existence de cet écran."
+msgstr ""
+"À quoi sert chaque appareil appairé. Une <strong>caisse</strong> s’ouvre sur "
+"la grille de produits et encaisse ; une <strong>porte</strong> s’ouvre sur "
+"le scanner et peut toujours vendre un billet sur place. Un appareil auquel "
+"personne n’a donné de rôle continue de faire les deux, comme tous les "
+"appareils se comportaient avant l’existence de cet écran."
 
 #: templates/pretix_openpos/devices.html:17
 msgid ""
 "No device is paired on the <strong>Open POS</strong> security profile yet. "
 "Pair one from the organizer's device settings, then come back here to say "
 "what it is for."
-msgstr "Aucun appareil n’est encore appairé sur le profil de sécurité <strong>Open POS</strong>. Appairez-en un depuis les réglages d’appareils de l’organisateur, puis revenez ici pour dire à quoi il sert."
+msgstr ""
+"Aucun appareil n’est encore appairé sur le profil de sécurité <strong>Open "
+"POS</strong>. Appairez-en un depuis les réglages d’appareils de "
+"l’organisateur, puis revenez ici pour dire à quoi il sert."
 
 #: templates/pretix_openpos/devices.html:26
 #: templates/pretix_openpos/sumup.html:45
@@ -612,7 +675,9 @@ msgstr "SumUp n’a pas pu être interrogé sur les lecteurs que vous possédez.
 msgid ""
 "The roles below can still be changed, and a reader already given to a till "
 "stays where it is."
-msgstr "Les rôles ci-dessous restent modifiables, et un lecteur déjà donné à une caisse reste où il est."
+msgstr ""
+"Les rôles ci-dessous restent modifiables, et un lecteur déjà donné à une "
+"caisse reste où il est."
 
 #: templates/pretix_openpos/devices.html:41
 msgid "Device"
@@ -641,14 +706,24 @@ msgid ""
 "edited app cannot record one. Every other device goes on as before — the "
 "cashier takes the card in the card provider's own app and tells the till it "
 "happened. A reader can only go to a till, never to a door."
-msgstr "Une caisse dotée d’un lecteur encaisse les cartes par lui et par rien d’autre : le serveur refuse une vente carte que le lecteur n’a pas validée, si bien qu’une application périmée ou modifiée ne peut pas en enregistrer une. Tous les autres appareils fonctionnent comme avant — la personne en caisse prend la carte dans l’application du fournisseur et le signale à la caisse. Un lecteur ne peut aller qu’à une caisse, jamais à une porte."
+msgstr ""
+"Une caisse dotée d’un lecteur encaisse les cartes par lui et par rien "
+"d’autre : le serveur refuse une vente carte que le lecteur n’a pas validée, "
+"si bien qu’une application périmée ou modifiée ne peut pas en enregistrer "
+"une. Tous les autres appareils fonctionnent comme avant — la personne en "
+"caisse prend la carte dans l’application du fournisseur et le signale à la "
+"caisse. Un lecteur ne peut aller qu’à une caisse, jamais à une porte."
 
 #: templates/pretix_openpos/devices.html:102
 msgid ""
 "Two tills may share one reader — a bar with two tablets and one machine "
 "between them. They take turns: while one has a basket on the reader the "
 "other is told it is busy and takes that sale in cash."
-msgstr "Deux caisses peuvent partager un lecteur — un bar avec deux tablettes et une seule machine entre elles. Elles se relaient : tant qu’une caisse a un panier sur le lecteur, l’autre est informée qu’il est occupé et prend cette vente en espèces."
+msgstr ""
+"Deux caisses peuvent partager un lecteur — un bar avec deux tablettes et une "
+"seule machine entre elles. Elles se relaient : tant qu’une caisse a un "
+"panier sur le lecteur, l’autre est informée qu’il est occupé et prend cette "
+"vente en espèces."
 
 #: templates/pretix_openpos/devices.html:108
 msgid "Set up the card readers"
@@ -662,7 +737,7 @@ msgid "Save"
 msgstr "Enregistrer"
 
 #: templates/pretix_openpos/payment_control.html:10
-#: templates/pretix_openpos/sales.html:150
+#: templates/pretix_openpos/sales.html:177
 msgid "Cashier"
 msgstr "Personne en caisse"
 
@@ -683,7 +758,10 @@ msgid ""
 "pretix has no notion of a price per sales channel, so the tariff charged at "
 "the till is stored here. Leave a field empty to charge the same price as the "
 "online shop."
-msgstr "pretix n’a pas de notion de prix par canal de vente : le tarif encaissé à la caisse est donc stocké ici. Laissez un champ vide pour encaisser le même prix que la boutique en ligne."
+msgstr ""
+"pretix n’a pas de notion de prix par canal de vente : le tarif encaissé à la "
+"caisse est donc stocké ici. Laissez un champ vide pour encaisser le même "
+"prix que la boutique en ligne."
 
 #: templates/pretix_openpos/prices.html:21
 msgid "Product"
@@ -707,14 +785,17 @@ msgid ""
 "Entry #%(seq)s does not match the hash of the entry before it. Sales are "
 "meant to be append-only, so this means rows were changed or removed directly "
 "in the database."
-msgstr "L’écriture n°%(seq)s ne correspond pas à l’empreinte de celle qui la précède. Les ventes sont censées être ajoutées sans jamais être modifiées : des lignes ont donc été changées ou supprimées directement en base."
+msgstr ""
+"L’écriture n°%(seq)s ne correspond pas à l’empreinte de celle qui la "
+"précède. Les ventes sont censées être ajoutées sans jamais être modifiées : "
+"des lignes ont donc été changées ou supprimées directement en base."
 
 #: templates/pretix_openpos/sales.html:20
 msgid "Takings"
 msgstr "Recette"
 
 #: templates/pretix_openpos/sales.html:28
-#: templates/pretix_openpos/sales.html:152
+#: templates/pretix_openpos/sales.html:179
 msgid "Total"
 msgstr "Total"
 
@@ -741,7 +822,13 @@ msgid ""
 "refund it in SumUp, or ring the sale up again. One still waiting was left "
 "open by a till that stopped polling — check in SumUp whether it went through "
 "before doing either."
-msgstr "Ces paiements ont été posés sur un lecteur sans qu’aucune vente ne soit jamais enregistrée en face. Un paiement « débité » signifie qu’une carte a été débitée et que pretix n’en sait rien : remboursez-le dans SumUp, ou ressaisissez la vente. Un paiement « toujours en attente » a été laissé ouvert par une caisse qui a cessé d’interroger — vérifiez dans SumUp s’il est passé avant de faire l’un ou l’autre."
+msgstr ""
+"Ces paiements ont été posés sur un lecteur sans qu’aucune vente ne soit "
+"jamais enregistrée en face. Un paiement « débité » signifie qu’une carte a "
+"été débitée et que pretix n’en sait rien : remboursez-le dans SumUp, ou "
+"ressaisissez la vente. Un paiement « toujours en attente » a été laissé "
+"ouvert par une caisse qui a cessé d’interroger — vérifiez dans SumUp s’il "
+"est passé avant de faire l’un ou l’autre."
 
 #: templates/pretix_openpos/sales.html:101
 msgid "State"
@@ -763,27 +850,44 @@ msgstr "Débité"
 msgid "Still waiting"
 msgstr "Toujours en attente"
 
-#: templates/pretix_openpos/sales.html:135
+#: templates/pretix_openpos/sales.html:141
+msgid "Evenings from"
+msgstr "Soirées du"
+
+#: templates/pretix_openpos/sales.html:145
+msgctxt "end of a range of evenings"
+msgid "to"
+msgstr "au"
+
+#: templates/pretix_openpos/sales.html:148
+msgid "Show"
+msgstr "Afficher"
+
+#: templates/pretix_openpos/sales.html:150
+msgid "All evenings"
+msgstr "Toutes les soirées"
+
+#: templates/pretix_openpos/sales.html:155
 msgid "Journal"
 msgstr "Journal"
 
-#: templates/pretix_openpos/sales.html:139
+#: templates/pretix_openpos/sales.html:166
 msgid "Export CSV"
 msgstr "Exporter en CSV"
 
-#: templates/pretix_openpos/sales.html:148
+#: templates/pretix_openpos/sales.html:175
 msgid "Order"
 msgstr "Commande"
 
-#: templates/pretix_openpos/sales.html:151
+#: templates/pretix_openpos/sales.html:178
 msgid "Payment"
 msgstr "Paiement"
 
-#: templates/pretix_openpos/sales.html:181
+#: templates/pretix_openpos/sales.html:208
 msgid "test"
 msgstr "test"
 
-#: templates/pretix_openpos/sales.html:189
+#: templates/pretix_openpos/sales.html:216
 msgid "No sales recorded."
 msgstr "Aucune vente enregistrée."
 
@@ -792,14 +896,21 @@ msgid ""
 "Products are not sold at the till until you enable them for the <strong>Open "
 "POS</strong> sales channel on the product itself. This keeps the on-site "
 "catalogue separate from your online shop."
-msgstr "Les produits ne sont pas vendus à la caisse tant que vous ne les avez pas activés pour le canal de vente <strong>Open POS</strong> sur le produit lui-même. Cela garde le catalogue sur place distinct de votre boutique en ligne."
+msgstr ""
+"Les produits ne sont pas vendus à la caisse tant que vous ne les avez pas "
+"activés pour le canal de vente <strong>Open POS</strong> sur le produit lui-"
+"même. Cela garde le catalogue sur place distinct de votre boutique en ligne."
 
 #: templates/pretix_openpos/settings.html:17
 msgid ""
 "Each till is paired as a pretix <strong>device</strong>, under the organizer "
 "settings. Give the device access to this event, choose the <strong>Open POS</"
 "strong> security profile, and scan the pairing QR code from the app."
-msgstr "Chaque caisse est appairée comme un <strong>appareil</strong> pretix, dans les réglages de l’organisateur. Donnez à l’appareil l’accès à cet événement, choisissez le profil de sécurité <strong>Open POS</strong>, et scannez le QR code d’appairage depuis l’application."
+msgstr ""
+"Chaque caisse est appairée comme un <strong>appareil</strong> pretix, dans "
+"les réglages de l’organisateur. Donnez à l’appareil l’accès à cet événement, "
+"choisissez le profil de sécurité <strong>Open POS</strong>, et scannez le QR "
+"code d’appairage depuis l’application."
 
 #: templates/pretix_openpos/settings.html:32
 msgid "Extra buttons at the till"
@@ -810,7 +921,11 @@ msgid ""
 "Both are off until you name a product for them. Each one needs a quota, "
 "unlimited if need be, and availability on the <strong>Open POS</strong> "
 "channel — the same as any other product sold at the door."
-msgstr "Les deux sont désactivés tant que vous ne leur avez pas désigné de produit. Chacun a besoin d’un quota, illimité si besoin, et d’une disponibilité sur le canal <strong>Open POS</strong> — comme n’importe quel autre produit vendu à l’entrée."
+msgstr ""
+"Les deux sont désactivés tant que vous ne leur avez pas désigné de produit. "
+"Chacun a besoin d’un quota, illimité si besoin, et d’une disponibilité sur "
+"le canal <strong>Open POS</strong> — comme n’importe quel autre produit "
+"vendu à l’entrée."
 
 #: templates/pretix_openpos/sumup.html:8
 msgid ""
@@ -818,7 +933,11 @@ msgid ""
 "a payment happened — it watches it happen. Set up the account here and pair "
 "the readers; each one is then given to a till on the <strong>Till devices</"
 "strong> screen."
-msgstr "Un lecteur SumUp prend la carte lui-même : on n’a jamais à dire à la caisse qu’un paiement a eu lieu, elle le voit se produire. Configurez le compte ici et appairez les lecteurs ; chacun est ensuite donné à une caisse depuis l’écran <strong>Appareils de caisse</strong>."
+msgstr ""
+"Un lecteur SumUp prend la carte lui-même : on n’a jamais à dire à la caisse "
+"qu’un paiement a eu lieu, elle le voit se produire. Configurez le compte ici "
+"et appairez les lecteurs ; chacun est ensuite donné à une caisse depuis "
+"l’écran <strong>Appareils de caisse</strong>."
 
 #: templates/pretix_openpos/sumup.html:17
 msgid "SumUp account"
@@ -828,7 +947,9 @@ msgstr "Compte SumUp"
 msgid ""
 "Enter the merchant code and the API key above, and this page will show the "
 "readers on your account."
-msgstr "Saisissez le code marchand et la clé d’API ci-dessus, et cette page affichera les lecteurs de votre compte."
+msgstr ""
+"Saisissez le code marchand et la clé d’API ci-dessus, et cette page "
+"affichera les lecteurs de votre compte."
 
 #: templates/pretix_openpos/sumup.html:41
 msgid "Paired readers"
@@ -838,7 +959,10 @@ msgstr "Lecteurs appairés"
 msgid ""
 "No reader is paired yet. On the reader, open the menu and choose to connect "
 "it to an application: it shows a pairing code, which goes in the form below."
-msgstr "Aucun lecteur n’est encore appairé. Sur le lecteur, ouvrez le menu et choisissez de le connecter à une application : il affiche un code d’appairage, à reporter dans le formulaire ci-dessous."
+msgstr ""
+"Aucun lecteur n’est encore appairé. Sur le lecteur, ouvrez le menu et "
+"choisissez de le connecter à une application : il affiche un code "
+"d’appairage, à reporter dans le formulaire ci-dessous."
 
 #: templates/pretix_openpos/sumup.html:61
 msgid "Reader"
@@ -897,7 +1021,10 @@ msgstr "Retirer"
 msgid ""
 "Removing a reader also takes it off the till it was given to. That till goes "
 "back to card payments typed in by the cashier — it does not stop selling."
-msgstr "Retirer un lecteur le retire aussi de la caisse à laquelle il avait été donné. Cette caisse revient aux paiements par carte saisis à la main — elle ne cesse pas de vendre."
+msgstr ""
+"Retirer un lecteur le retire aussi de la caisse à laquelle il avait été "
+"donné. Cette caisse revient aux paiements par carte saisis à la main — elle "
+"ne cesse pas de vendre."
 
 #: templates/pretix_openpos/sumup.html:163
 msgid ""
@@ -906,14 +1033,22 @@ msgid ""
 "walked away from. Until it is cleared the reader refuses the next payment as "
 "busy. It does not say whether the card was charged: check the till sales "
 "page before ringing the sale up again."
-msgstr "« Effacer son écran » retire un montant abandonné d’un lecteur resté bloqué en attente de carte — une caisse tombée en panne en plein paiement, un panier posé puis laissé là. Tant qu’il n’est pas effacé, le lecteur refuse le paiement suivant comme occupé. Cela ne dit pas si la carte a été débitée : vérifiez la page des ventes en caisse avant de réencaisser."
+msgstr ""
+"« Effacer son écran » retire un montant abandonné d’un lecteur resté bloqué "
+"en attente de carte — une caisse tombée en panne en plein paiement, un "
+"panier posé puis laissé là. Tant qu’il n’est pas effacé, le lecteur refuse "
+"le paiement suivant comme occupé. Cela ne dit pas si la carte a été "
+"débitée : vérifiez la page des ventes en caisse avant de réencaisser."
 
 #: templates/pretix_openpos/sumup.html:176
 msgid ""
 "These tills are pointing at a reader SumUp no longer knows about, so every "
 "card payment on them is refused. Pair the reader again and give it back to "
 "the till, or set the till's reader to none."
-msgstr "Ces caisses pointent vers un lecteur que SumUp ne connaît plus : tout paiement par carte y est refusé. Appairez à nouveau le lecteur et redonnez-le à la caisse, ou mettez le lecteur de la caisse à « aucun »."
+msgstr ""
+"Ces caisses pointent vers un lecteur que SumUp ne connaît plus : tout "
+"paiement par carte y est refusé. Appairez à nouveau le lecteur et redonnez-"
+"le à la caisse, ou mettez le lecteur de la caisse à « aucun »."
 
 #: templates/pretix_openpos/sumup.html:192
 msgid "Pair a reader"
@@ -949,29 +1084,52 @@ msgid ""
 "instead of being waited for. There is nothing to configure in the SumUp "
 "dashboard, and nothing it says is taken on trust: it only makes this server "
 "ask SumUp what happened a second or two earlier than it would have anyway."
-msgstr "La caisse donne cette adresse à SumUp pour qu’un paiement terminé revienne tout de suite au lieu d’être attendu. Il n’y a rien à configurer dans le tableau de bord SumUp, et rien de ce qu’il dit n’est pris pour argent comptant : cela amène seulement ce serveur à demander à SumUp ce qui s’est passé une ou deux secondes plus tôt qu’il ne l’aurait fait de toute façon."
+msgstr ""
+"La caisse donne cette adresse à SumUp pour qu’un paiement terminé revienne "
+"tout de suite au lieu d’être attendu. Il n’y a rien à configurer dans le "
+"tableau de bord SumUp, et rien de ce qu’il dit n’est pris pour argent "
+"comptant : cela amène seulement ce serveur à demander à SumUp ce qui s’est "
+"passé une ou deux secondes plus tôt qu’il ne l’aurait fait de toute façon."
 
 #: templates/pretix_openpos/sumup.html:247
 msgid ""
 "This pretix is not served over HTTPS, so SumUp will not call back and none "
 "is asked for. Payments are settled by asking SumUp on a timer instead, which "
 "takes a second or two longer and is otherwise the same."
-msgstr "Ce pretix n’est pas servi en HTTPS : SumUp ne rappellera pas et aucun rappel n’est demandé. Les paiements sont alors réglés en interrogeant SumUp à intervalle régulier, ce qui prend une ou deux secondes de plus et revient au même."
+msgstr ""
+"Ce pretix n’est pas servi en HTTPS : SumUp ne rappellera pas et aucun rappel "
+"n’est demandé. Les paiements sont alors réglés en interrogeant SumUp à "
+"intervalle régulier, ce qui prend une ou deux secondes de plus et revient au "
+"même."
 
-#: views.py:138
+#: views.py:140
 #, python-brace-format
 msgid "{label}: “{value}” is not a valid price."
 msgstr "{label} : « {value} » n’est pas un prix valide."
 
-#: views.py:143
+#: views.py:145
 #, python-brace-format
 msgid "{label}: the price cannot be negative."
 msgstr "{label} : le prix ne peut pas être négatif."
 
-#: views.py:178
+#: views.py:180
 msgid "The on-site prices have been saved."
 msgstr "Les tarifs sur place ont été enregistrés."
 
-#: views.py:385
+#: views.py:299
+#, python-brace-format
+msgid "“{value}” is not a date. The first evening goes in as YYYY-MM-DD."
+msgstr "« {value} » n'est pas une date. La première soirée s'écrit AAAA-MM-JJ."
+
+#: views.py:303
+#, python-brace-format
+msgid "“{value}” is not a date. The last evening goes in as YYYY-MM-DD."
+msgstr "« {value} » n'est pas une date. La dernière soirée s'écrit AAAA-MM-JJ."
+
+#: views.py:306
+msgid "The end of the range is before its beginning."
+msgstr "La fin de l'intervalle est avant son début."
+
+#: views.py:484
 msgid "unknown till"
 msgstr "caisse inconnue"

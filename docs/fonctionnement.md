@@ -1346,6 +1346,26 @@ ligne mode test séparée, et l'état de la chaîne d'intégrité. Le bouton
 compris — pour la personne qui tient les comptes ; les recettes se recalculent
 depuis ce fichier, c'est le but.
 
+**Une soirée à la fois.** Deux champs de date en haut de la page réduisent le
+journal *et* les recettes à l'intervalle demandé, et le bouton Export CSV
+emporte le même intervalle — un export qui rendrait tout pendant que l'écran
+montre une soirée est le piège coûteux, puisque la personne qui l'ouvre est en
+train de rapprocher une caisse et n'a aucun moyen de s'en apercevoir.
+
+L'unité est la **soirée**, pas la journée civile : elle commence à six heures du
+matin et court jusqu'à six heures le lendemain. `Du 19/09 au 19/09` donne donc
+toute la soirée du samedi 19, petites heures comprises. Découper à minuit
+couperait chaque événement de ce système en deux moitiés qui ne répondent à
+rien. Les deux bornes sont facultatives, et une date illisible ou un intervalle
+à l'envers est dit à l'écran plutôt que silencieusement ignoré : un filtre qui
+ne fait rien sans le dire est pire que pas de filtre.
+
+Deux blocs ne suivent jamais ce filtre, exprès : la vérification d'intégrité et
+les paiements carte sans vente. La chaîne traverse le journal entier, donc en
+contrôler une tranche laisserait une page affichant une soirée déclarer le
+journal sain alors que l'écriture cassée est juste en dehors de la fenêtre ; et
+un débit orphelin a d'autant plus besoin d'être vu qu'il date d'avant.
+
 La page vérifie la chaîne depuis un point de contrôle plutôt que de re-hacher
 tout le journal à chaque affichage ; l'audit intégral, depuis la première
 écriture, se lance avec `python -m pretix openpos_verify_journal` (une ligne

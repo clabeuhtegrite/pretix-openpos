@@ -64,13 +64,21 @@ def test_the_compiled_catalogue_matches_its_source():
         )
 
     source = (catalogue / "django.po").read_text()
+    block = r'(?:"(?:[^"\\]|\\.)*"\n)+'
     pairs = re.findall(
-        r'\nmsgid ((?:"(?:[^"\\]|\\.)*"\n)+)msgstr ((?:"(?:[^"\\]|\\.)*"\n)+)', source
+        rf'\n(?:msgctxt ({block}))?msgid ({block})msgstr ({block})', source
     )
+
+    def key(context, msgid):
+        # How gettext itself stores a contextual message: the two joined by an
+        # EOT. Without this a `{% trans … context %}` string would be looked up
+        # under its bare text, miss, and be reported as stale for ever.
+        return f"{unquote(context)}\x04{unquote(msgid)}" if context else unquote(msgid)
+
     stale = [
-        unquote(msgid)
-        for msgid, msgstr in pairs
-        if unquote(msgid) and compiled.get(unquote(msgid)) != unquote(msgstr)
+        key(context, msgid)
+        for context, msgid, msgstr in pairs
+        if unquote(msgid) and compiled.get(key(context, msgid)) != unquote(msgstr)
     ]
 
     assert stale == [], (
@@ -160,3 +168,8 @@ def test_the_back_office_renders_in_french(backoffice, event, till, ticket):
 
     assert "Recette" in page
     assert "Takings" not in page
+    # The date filter's own label, which is the one contextual string in the
+    # catalogue. A msgctxt that does not match the template's falls back to
+    # English silently, so nothing but rendering the page catches it.
+    assert "Soirées du" in page
+    assert ">au</label>" in page

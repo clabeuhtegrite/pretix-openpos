@@ -433,3 +433,161 @@ def test_a_payment_already_sent_back_is_settled(
     # Somebody dealt with it. Leaving the row up would have the next person
     # refund it a second time.
     assert backoffice.get(sales_url(event)).context["unresolved_card"] == []
+
+
+# -- looking at one evening -------------------------------------------------
+#
+# After a handful of events the journal is a wall of rows and the takings are
+# the sum of every evening this event ever had, which answers nothing about the
+# one somebody is reconciling.
+
+
+def on_night(event, key, day):
+    """Move a journal row to six in the evening on `day`, local time."""
+    from datetime import datetime, time
+
+    from django.utils.timezone import make_aware
+
+    PosSale.objects.filter(event=event, idempotency_key=key).update(
+        datetime=make_aware(datetime.combine(day, time(18, 0)), event.timezone)
+    )
+
+
+@pytest.mark.django_db
+def test_one_evening_can_be_asked_for(backoffice, till, event, ticket, beer):
+    from datetime import date
+
+    sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="samedi-01")
+    sell(till, [{"item": beer.pk, "count": 1}], idempotency_key="vendredi-1")
+    on_night(event, "samedi-01", date(2026, 9, 19))
+    on_night(event, "vendredi-1", date(2026, 9, 12))
+
+    context = backoffice.get(sales_url(event) + "?from=2026-09-19&to=2026-09-19").context
+
+    assert [sale.idempotency_key for sale in context["sales"]] == ["samedi-01"]
+    # And the takings are the takings of that evening, not of every evening:
+    # figures belonging to other rows than the ones listed is how a page lies
+    # without a single wrong number on it.
+    assert context["totals"]["total"] == Decimal("10.00")
+
+
+@pytest.mark.django_db
+def test_an_evening_is_a_night_rather_than_a_calendar_day(
+    backoffice, till, event, ticket
+):
+    """
+    The whole reason this is not a plain date filter. A till day begins at six
+    in the morning because an evening crosses midnight, and the figure somebody
+    reconciles the drawer against at half past one has to cover the whole of
+    it. Cutting at midnight would split every single event in this system.
+    """
+    from datetime import date, datetime, time
+
+    from django.utils.timezone import make_aware
+
+    sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="minuit-01")
+    # Half past one on the Sunday morning — still Saturday's evening.
+    PosSale.objects.filter(event=event, idempotency_key="minuit-01").update(
+        datetime=make_aware(
+            datetime.combine(date(2026, 9, 20), time(1, 30)), event.timezone
+        )
+    )
+
+    context = backoffice.get(sales_url(event) + "?from=2026-09-19&to=2026-09-19").context
+
+    assert [sale.idempotency_key for sale in context["sales"]] == ["minuit-01"]
+
+
+@pytest.mark.django_db
+def test_an_open_ended_range_works_from_either_side(backoffice, till, event, ticket):
+    from datetime import date
+
+    sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="ancienne-1")
+    sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="recente-01")
+    on_night(event, "ancienne-1", date(2026, 9, 12))
+    on_night(event, "recente-01", date(2026, 9, 19))
+
+    since = backoffice.get(sales_url(event) + "?from=2026-09-19").context["sales"]
+    until = backoffice.get(sales_url(event) + "?to=2026-09-12").context["sales"]
+
+    assert [s.idempotency_key for s in since] == ["recente-01"]
+    assert [s.idempotency_key for s in until] == ["ancienne-1"]
+
+
+@pytest.mark.django_db
+def test_the_export_carries_the_same_range_as_the_screen(
+    backoffice, till, event, ticket, beer
+):
+    # The more expensive of the two mistakes: the person opening this file is
+    # reconciling something and has no way to tell it covers every evening.
+    from datetime import date
+
+    sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="samedi-01")
+    sell(till, [{"item": beer.pk, "count": 1}], idempotency_key="vendredi-1")
+    on_night(event, "samedi-01", date(2026, 9, 19))
+    on_night(event, "vendredi-1", date(2026, 9, 12))
+
+    response = backoffice.get(
+        sales_url(event) + "?export=csv&from=2026-09-19&to=2026-09-19"
+    )
+
+    body = b"".join(response.streaming_content).decode("utf-8")
+    assert "Entrée" in body
+    assert "Bière" not in body
+    # And the range is in the filename, so two evenings do not land in the same
+    # downloads folder under one name.
+    assert "2026-09-19" in response["Content-Disposition"]
+
+
+@pytest.mark.django_db
+def test_a_date_that_is_not_a_date_is_said_rather_than_ignored(
+    backoffice, till, event, ticket
+):
+    # A filter that quietly does nothing is worse than no filter: the page
+    # looks answered.
+    sell(till, [{"item": ticket.pk, "count": 1}])
+
+    response = backoffice.get(sales_url(event) + "?from=samedi", follow=True)
+
+    assert response.status_code == 200
+    assert "is not a date" in response.content.decode()
+    # Nothing was filtered out on a guess.
+    assert len(response.context["sales"]) == 1
+
+
+@pytest.mark.django_db
+def test_a_range_that_runs_backwards_is_refused_rather_than_emptied(
+    backoffice, till, event, ticket
+):
+    sell(till, [{"item": ticket.pk, "count": 1}])
+
+    response = backoffice.get(
+        sales_url(event) + "?from=2026-09-19&to=2026-09-12", follow=True
+    )
+
+    assert "before its beginning" in response.content.decode()
+    assert len(response.context["sales"]) == 1
+
+
+@pytest.mark.django_db
+def test_the_integrity_check_still_reads_the_whole_journal(
+    backoffice, till, event, ticket
+):
+    """
+    Not filtered, unlike everything else on the page. The chain runs through
+    the whole journal, so checking a slice would let a page showing one evening
+    report a sound journal while the broken entry sits outside the window.
+    """
+    from datetime import date
+
+    sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="ancienne-1")
+    sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="recente-01")
+    on_night(event, "ancienne-1", date(2026, 9, 12))
+    on_night(event, "recente-01", date(2026, 9, 19))
+    PosSale.objects.filter(event=event, idempotency_key="ancienne-1").update(
+        total=Decimal("1.00")
+    )
+
+    context = backoffice.get(sales_url(event) + "?from=2026-09-19&to=2026-09-19").context
+
+    assert context["tampered_with"] is not None
