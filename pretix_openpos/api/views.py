@@ -3,7 +3,7 @@ from datetime import datetime, time, timedelta
 from decimal import Decimal
 
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Exists, OuterRef, Sum
+from django.db.models import Count, Exists, F, OuterRef, Q, Sum
 from django.utils.timezone import make_aware, now
 from django.utils.translation import gettext_lazy as _
 from django_scopes import scopes_disabled
@@ -11,7 +11,7 @@ from i18nfield.strings import LazyI18nString
 from pretix.api.serializers.order import OrderCreateSerializer
 from pretix.base.models import Checkin, Device, Order, Quota, TeamAPIToken
 from pretix.base.models.orders import OrderPayment, OrderRefund
-from pretix.base.services.checkin import CheckInError, perform_checkin
+from pretix.base.services.checkin import CheckInError, RequiredMediaExchangeError, perform_checkin
 from pretix.base.services.invoices import generate_invoice, invoice_qualified
 from pretix.base.services.orders import OrderError, cancel_order
 from pretix.base.signals import order_paid, order_placed
@@ -173,6 +173,127 @@ def start_of_business_day(event, at=None):
     if local.time() < BUSINESS_DAY_STARTS_AT:
         day -= timedelta(days=1)
     return make_aware(datetime.combine(day, BUSINESS_DAY_STARTS_AT), event.timezone)
+
+
+#: How late a scan may reach the server and still be taken for a live one.
+#:
+#: pretix' own threshold, from ``Checkin.is_late_upload``. It matters for the
+#: scans that were queued with no network before this plugin sent them the way
+#: pretix expects offline scans to be sent: those carry no offline flag, and
+#: the gap between the moment of the scan and the moment it arrived is the only
+#: trace that they waited on a device.
+LATE_UPLOAD = timedelta(minutes=2)
+
+#: A scan made with no network, then sent: flagged by the device that sent it,
+#: or visibly late.
+SENT_AFTER_THE_FACT = Q(force_sent=True) | Q(created__gt=F("datetime") + LATE_UPLOAD)
+
+
+def door_scans(event, device):
+    """
+    What the doors have scanned tonight, per device and in all.
+
+    Read from pretix' own check-in rows rather than counted by the app: a count
+    kept in a browser is gone whenever iOS reloads the page, and that is what a
+    door found out on its first evening — the figure on the scanner went back
+    to zero every time somebody stepped out of the app for a while. The rows
+    are there anyway; counting them is the figure that cannot be lost.
+
+    A scan is a check-in that came through the check-in API with a code in it:
+    a scanning app, this one or pretixSCAN. The check-in written at the till
+    with a sale is not one — nobody scanned anything — and neither is an
+    automatic or a back-office one, which is exactly the set of rows that
+    carries no ``raw_source_type``. Entries only: a door counts people coming
+    in. Tonight means since six this morning, as for the takings, so a night
+    that crosses midnight stays one figure.
+    """
+    since = start_of_business_day(event)
+    admitted = Q(successful=True, position__item__admission=True)
+    with scopes_disabled():
+        rows = list(
+            Checkin.all.filter(
+                list__event=event,
+                type=Checkin.TYPE_ENTRY,
+                raw_source_type__isnull=False,
+                datetime__gte=since,
+            )
+            .order_by()
+            .values("device_id")
+            .annotate(
+                admitted=Count("pk", filter=admitted),
+                # Recorded, but for a product that lets nobody in: the T-shirt
+                # scanned at a list that takes every product.
+                other=Count("pk", filter=Q(successful=True, position__item__admission=False)),
+                refused=Count("pk", filter=Q(successful=False)),
+                offline=Count("pk", filter=admitted & SENT_AFTER_THE_FACT),
+            )
+        )
+        names = dict(
+            Device.objects.filter(
+                pk__in=[row["device_id"] for row in rows if row["device_id"]]
+            ).values_list("pk", "name")
+        )
+
+    fields = ("admitted", "refused", "other", "offline")
+
+    def figures(row):
+        return {field: row[field] if row else 0 for field in fields}
+
+    by_device = {row["device_id"]: row for row in rows}
+    devices = [
+        {
+            # None for scans made from the back office, which have no device.
+            "name": names.get(pk) if pk else None,
+            "current": device is not None and pk == device.pk,
+            **figures(row),
+        }
+        for pk, row in by_device.items()
+    ]
+    devices.sort(key=lambda d: (-d["admitted"], d["name"] is None, d["name"] or ""))
+    return {
+        "since": since.isoformat(),
+        "device": figures(by_device.get(device.pk)) if device else None,
+        "event": {field: sum(row[field] for row in rows) for field in fields},
+        "devices": devices,
+    }
+
+
+def walk_in(position, clist, *, auth, user, offline_at=None):
+    """
+    Check in a ticket the till has just sold, the way pretix would record it.
+
+    The customer is standing right here having paid, so they are let in
+    whatever the list says — but only a check-in that actually needed
+    overriding is recorded as one. pretix reads ``force`` as "this comes from a
+    device that was offline": every forced row is shown as an offline scan in
+    its check-in history and exported as one. A till that forced every sale
+    made each ticket it sold look like a scan that had waited in a phone, and
+    the one mark that could single out a door's real offline scans meant
+    nothing. So a plain check-in first, and force only when pretix refuses —
+    a rule on the list, a product it does not take — which then shows as the
+    override it is.
+
+    A sale rung up with no network is the exception, forced from the start: it
+    did happen offline, and ``offline_at`` puts the entry at the moment the
+    customer walked in rather than when the till found the network again.
+    """
+    common = dict(
+        op=position,
+        clist=clist,
+        given_answers={},
+        # A mandatory question must not hold up a customer who has just paid.
+        questions_supported=False,
+        auth=auth,
+        user=user,
+        type=Checkin.TYPE_ENTRY,
+    )
+    if offline_at is not None:
+        perform_checkin(force=True, datetime=offline_at, **common)
+        return
+    try:
+        perform_checkin(**common)
+    except (CheckInError, RequiredMediaExchangeError):
+        perform_checkin(force=True, **common)
 
 
 def deposit_fee(refund_total, sale_total, item):
@@ -894,7 +1015,10 @@ class OpenPosViewSet(viewsets.ViewSet):
             if replay.kind == PosSale.KIND_SALE and replay.order is not None:
                 self._ensure_invoice(request, replay.order)
                 checked_in, checkin_errors = self._check_in(
-                    request, replay.order, only_missing=True
+                    request,
+                    replay.order,
+                    only_missing=True,
+                    offline_at=replay.datetime if replay.offline else None,
                 )
                 body["checked_in"] = checked_in
                 body["checkin_errors"] = checkin_errors
@@ -1315,7 +1439,9 @@ class OpenPosViewSet(viewsets.ViewSet):
         checked_in, checkin_errors = None, []
         if order is not None:
             self._post_commit(request, order)
-            checked_in, checkin_errors = self._check_in(request, order)
+            checked_in, checkin_errors = self._check_in(
+                request, order, offline_at=recorded_at
+            )
 
         body = self._checkout_payload(event, sale or refund, replayed=False)
         body["checked_in"] = checked_in
@@ -2089,6 +2215,12 @@ class OpenPosViewSet(viewsets.ViewSet):
 
         Entry and exit scans are resolved by pretix itself, so a list that scans
         people back out reports the room rather than the turnstile.
+
+        ``scans`` rides along for the scanner's own counter: what this device
+        and every door have scanned tonight, on every list of the event. It is
+        here rather than behind an endpoint of its own because the door screen
+        already asks for this after every scan and every minute, and the two
+        figures are read side by side.
         """
         event = request.event
         clist = self._requested_checkin_list(request)
@@ -2150,6 +2282,9 @@ class OpenPosViewSet(viewsets.ViewSet):
                 "not_arrived": expected - entered_count,
                 "non_admission_entered": non_admission,
                 "items": items,
+                "scans": door_scans(
+                    event, request.auth if isinstance(request.auth, Device) else None
+                ),
             }
         )
 
@@ -2483,7 +2618,7 @@ class OpenPosViewSet(viewsets.ViewSet):
                     "pretix.event.order.invoice.failed", data={"exception": str(e)}
                 )
 
-    def _check_in(self, request, order, only_missing=False):
+    def _check_in(self, request, order, only_missing=False, offline_at=None):
         """
         Walk the customer straight in.
 
@@ -2495,6 +2630,9 @@ class OpenPosViewSet(viewsets.ViewSet):
         have an entry on the list are left alone. The customer may have walked
         to the door and been scanned there in the meantime, and forcing a second
         entry would count one person twice.
+
+        ``offline_at`` is when a sale rung up with no network happened: the
+        customer walked in then, not when the till found the network again.
         """
         clist = checkin_list_for(request.event)
         if not clist:
@@ -2520,17 +2658,12 @@ class OpenPosViewSet(viewsets.ViewSet):
         errors = []
         for position in positions:
             try:
-                perform_checkin(
-                    op=position,
-                    clist=clist,
-                    given_answers={},
-                    # The customer is standing right here having just paid; a
-                    # mandatory question must not hold up the door.
-                    force=True,
-                    questions_supported=False,
+                walk_in(
+                    position,
+                    clist,
                     auth=request.auth,
                     user=request.user if request.user.is_authenticated else None,
-                    type=Checkin.TYPE_ENTRY,
+                    offline_at=offline_at,
                 )
                 checked_in += 1
             except CheckInError as e:
