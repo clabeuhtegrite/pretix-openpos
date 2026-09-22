@@ -127,10 +127,11 @@ class FakeSumUp:
         """
         End the request on the reader with no card ever presented.
 
-        What SumUp does once the cashier's stop has reached the device, or once
-        the request expires with nobody in front of it. No transaction is
-        created: the Transactions API goes on answering 404, and only the
-        request itself says it is over.
+        What SumUp does once the request expires with nobody in front of it
+        (``cancelled``), or once the cashier's stop has reached the device
+        (``failed``, what the spec says a terminated request reports). No
+        transaction is created: the Transactions API goes on answering 404,
+        and only the request itself says it is over.
         """
         if client_transaction_id is None:
             client_transaction_id = next(iter(self.transactions))

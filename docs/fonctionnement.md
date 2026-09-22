@@ -1162,7 +1162,7 @@ réponse de SumUp au lancement) et, tant qu'il n'existe pas de transaction, il
 demande à SumUp où en est cette demande
 (`GET /v0.1/merchants/{m}/readers/{r}/checkout/{checkout_id}`) :
 
-- **annulée** ou **échouée** — l'interruption a atteint le lecteur, ou la
+- **échouée** ou **annulée** — l'interruption a atteint le lecteur, ou la
   demande a expiré sans personne devant — clôt le paiement tout de suite. La
   caisse peut passer en espèces, et un lecteur partagé se libère pour l'autre
   caisse sans attendre les cinq minutes ;
@@ -1254,7 +1254,7 @@ Deux détails qui comptent :
   qu'un client encore devant la machine : il demande d'abord à SumUp ce qu'est
   devenu ce paiement. C'est exactement l'appel que fait l'autre caisse en
   interrogeant.
-- Un paiement que SumUp dit annulé ou expiré libère le lecteur aussitôt (voir
+- Un paiement que SumUp dit arrêté ou expiré libère le lecteur aussitôt (voir
   *Un paiement que personne ne paie*). Un paiement auquel personne n'a jamais
   répondu, et que SumUp dit encore en attente, cesse de tenir le lecteur au
   bout de **cinq minutes**, et l'écran de la machine est effacé avant d'y

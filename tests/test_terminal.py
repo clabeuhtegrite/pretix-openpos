@@ -409,7 +409,7 @@ def test_stopping_frees_the_till_once_the_reader_has_obeyed(till, ticket, reader
     start(till, [{"item": ticket.pk, "count": 1}])
 
     assert cancel_payment(till).json()["status"] == "pending"
-    sumup.walk_away()
+    sumup.walk_away(status="failed")
 
     assert status(till).json()["status"] == "failed"
 
