@@ -1,0 +1,62 @@
+# The presentation site, at https://clabeuhtegrite.github.io/pretix-openpos/
+#
+# Four hand-written pages and one stylesheet, deployed as they are. No Jekyll
+# and no bundler on purpose: a site that changes about as often as the README
+# does not need a toolchain to rot beside it, and the four translations have to
+# be edited by hand anyway.
+#
+# Needs Pages switched on for the repository with **GitHub Actions** as the
+# source (Settings -> Pages). Until that is done this workflow fails on the
+# deploy step with the site never having been built by anything else.
+name: Site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - ".github/workflows/pages.yml"
+  pull_request:
+    paths:
+      - "site/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  # Runs on pull requests too, where deploying would be wrong: a link that
+  # points at nothing is the one failure a site of static files can have, and
+  # it should not be found by a visitor.
+  check:
+    name: "Every local link points at a file"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 scripts/check_site_links.py
+
+  deploy:
+    name: "Deploy to GitHub Pages"
+    needs: check
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deploy
+        uses: actions/deploy-pages@v4

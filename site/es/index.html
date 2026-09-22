@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pretix-openpos — un TPV libre para pretix</title>
+<meta name="description" content="Cobra entradas y consumiciones en la puerta desde cualquier tableta o móvil. Un punto de venta libre para un pretix autoalojado: un plugin de Django y una aplicación web progresiva.">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f131a" media="(prefers-color-scheme: dark)">
+<link rel="canonical" href="https://clabeuhtegrite.github.io/pretix-openpos/es/">
+<link rel="alternate" hreflang="en" href="https://clabeuhtegrite.github.io/pretix-openpos/">
+<link rel="alternate" hreflang="fr" href="https://clabeuhtegrite.github.io/pretix-openpos/fr/">
+<link rel="alternate" hreflang="es" href="https://clabeuhtegrite.github.io/pretix-openpos/es/">
+<link rel="alternate" hreflang="de" href="https://clabeuhtegrite.github.io/pretix-openpos/de/">
+<link rel="alternate" hreflang="x-default" href="https://clabeuhtegrite.github.io/pretix-openpos/">
+<meta property="og:title" content="pretix-openpos">
+<meta property="og:description" content="Un punto de venta libre para pretix, servido por una aplicación web progresiva.">
+<meta property="og:type" content="website">
+<link rel="stylesheet" href="../assets/openpos.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="wrap">
+    <a class="brand" href="./">pretix<span>-openpos</span></a>
+    <nav class="langs" aria-label="Idioma">
+      <a href="../" lang="en" hreflang="en">EN</a>
+      <a href="../fr/" lang="fr" hreflang="fr">FR</a>
+      <a href="./" aria-current="true" lang="es">ES</a>
+      <a href="../de/" lang="de" hreflang="de">DE</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<div class="wrap hero">
+  <p class="tag">Alfa — en servicio en una barra y una puerta reales desde septiembre de 2026</p>
+  <h1>Un TPV para pretix que funciona en el navegador</h1>
+  <p class="lede">
+    Cobra entradas y consumiciones en la puerta desde cualquier tableta o móvil. Un
+    punto de venta libre para un <a href="https://pretix.eu">pretix</a> autoalojado:
+    un plugin de Django y una aplicación web progresiva, sin app nativa que instalar
+    y sin licencia por dispositivo.
+  </p>
+  <p class="lede">
+    pretix ya tiene un TPV excelente, pretixPOS. Es una app de Android respaldada por
+    un plugin de pretix Enterprise, y para una instalación autoalojada esa licencia
+    es la parte cara. Esto es una alternativa más pequeña y más estrecha, para quien
+    necesita una caja, aloja pretix por su cuenta y preferiría no pagar por ella.
+  </p>
+  <div class="cta">
+    <a class="btn primary" href="https://github.com/clabeuhtegrite/pretix-openpos">Ver en GitHub</a>
+    <a class="btn ghost" href="#install">Cómo instalarlo</a>
+  </div>
+</div>
+
+<div class="wrap">
+  <figure class="shot" style="margin-bottom:16px">
+    <img src="../assets/till-grid.png" alt="La cuadrícula de productos de la caja en una tableta: las categorías arriba, los productos con su precio, y la cesta con su total a la derecha." width="2360" height="1640" loading="lazy" decoding="async">
+    <figcaption>La caja de la barra. Un toque en un producto, un toque en Cobrar.</figcaption>
+  </figure>
+  <div class="shots">
+    <figure class="shot">
+      <img src="../assets/reader.png" alt="El panel de cobro preguntando efectivo o tarjeta, con el importe pendiente y un lector esperando al cliente." width="2360" height="1640" loading="lazy" decoding="async">
+      <figcaption>Efectivo o tarjeta se pregunta antes de poder validar nada. En una caja con lector, elegir tarjeta pone la cesta en él.</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="../assets/till-dark.png" alt="La misma cuadrícula de productos en la paleta oscura." width="2360" height="1640" loading="lazy" decoding="async">
+      <figcaption>Una paleta oscura para una sala con poca luz, una clara para una barra al aire libre a las dos de la tarde.</figcaption>
+    </figure>
+  </div>
+</div>
+
+<section id="what">
+  <div class="wrap">
+    <h2>Qué hace</h2>
+    <p class="sub">
+      Todo lo que sigue está hoy en el software, cubierto por pruebas que se ejecutan
+      en cada envío y usado en un evento real.
+    </p>
+    <div class="grid">
+
+      <div class="card">
+        <h3>En el navegador</h3>
+        <p>Safari o Chrome, instalada en la pantalla de inicio. Sin tienda de
+        aplicaciones, sin gestión de flota, sin licencia por caja. Un dispositivo se
+        empareja escaneando el código QR que pretix muestra para él.</p>
+      </div>
+
+      <div class="card">
+        <h3>Escaneo en la puerta</h3>
+        <p>Escaneo continuo con la cámara y un veredicto legible a un brazo de
+        distancia. Llama al propio endpoint de control de acceso de pretix, así que
+        las reglas y cada motivo de rechazo vienen de pretix y no de una
+        reimplementación.</p>
+      </div>
+
+      <div class="card">
+        <h3>Recuento de asistentes en vivo</h3>
+        <p>Cuánta gente hay dentro ahora mismo, contada sobre los productos de
+        admisión y en todas las puertas y cajas. Un toque abre un diagrama: entradas
+        esperadas, admitidas, dentro y salidas.</p>
+      </div>
+
+      <div class="card">
+        <h3>Un rol por dispositivo</h3>
+        <p>Una tableta es la <em>caja</em> de la barra o la <em>puerta</em>, asignado
+        desde el back office, y cada una vende solo las categorías que le tocan. Un
+        voluntario que sale del escáner para vender una entrada ya no aterriza en
+        todo el catálogo.</p>
+      </div>
+
+      <div class="card">
+        <h3>Un lector que gobierna el servidor</h3>
+        <p>Empareja un SumUp Solo con tu cuenta desde el back office y dáselo a una
+        caja. Elegir tarjeta pone la cesta en el lector y espera al cliente. El
+        servidor pone precio a la cesta cuando pide la tarjeta y crea el pedido desde
+        esa misma cesta, así que el cargo y el pedido no pueden discrepar.</p>
+      </div>
+
+      <div class="card">
+        <h3>Efectivo, cambio y fianzas de vaso</h3>
+        <p>El cambio se calcula solo y los billetes habituales están a un toque. Una
+        fianza es un producto más; su devolución es un botón que le resta el precio a
+        la cesta, así que «dos cervezas y devuelvo tres vasos» es una sola
+        transacción y un solo importe que saldar.</p>
+      </div>
+
+      <div class="card">
+        <h3>Sigue funcionando sin red</h3>
+        <p>Un corte no para la caja: sigue vendiendo desde el catálogo que guardó en
+        caché y sigue escaneando contra una lista de invitados que lleva encima, y
+        luego repite la cola en orden bajo las mismas claves de idempotencia — una
+        repetición nunca vende dos veces — e informa de lo que necesita una persona.</p>
+      </div>
+
+      <div class="card">
+        <h3>Un diario que solo añade</h3>
+        <p>Una fila por venta, nunca modificada ni borrada, cada una con el hash de
+        la anterior: retocar el historial a posteriori se nota. Con exportación a CSV,
+        recaudación por caja y por cajero, y una comprobación de integridad que puedes
+        lanzar desde cron.</p>
+      </div>
+
+      <div class="card">
+        <h3>Los pedidos llegan a pretix</h3>
+        <p>Pedidos pagados normales, en un canal de venta propio, con el reparto
+        entre efectivo y tarjeta visible en los informes de pretix. Las entradas se
+        validan al venderlas, así que el cliente entra directamente.</p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section id="safe">
+  <div class="wrap">
+    <h2>Las dos reglas que hacen esto defendible</h2>
+    <p class="sub">
+      Una caja es un navegador sobre un mostrador. Cualquiera puede abrir sus
+      herramientas de desarrollo. Las dos se imponen en el servidor, y eso es lo que
+      les da sentido.
+    </p>
+    <div class="rules">
+      <div class="rule">
+        <h3>La caja nunca envía un precio</h3>
+        <p>Envía identificadores de producto y cantidades, y el servidor deduce el
+        importe. Una app manipulada, o simplemente desactualizada, no puede vender una
+        entrada de 40 € por 4 €. El botón de importe libre es la única excepción
+        deliberada, y está acotada: solo sobre el producto reservado para ello, solo
+        por encima de cero y solo con un motivo escrito.</p>
+      </div>
+      <div class="rule">
+        <h3>Cada cobro lleva una clave de idempotencia</h3>
+        <p>Se acuña al abrir el panel de pago y se reutiliza en cada reintento, así
+        que un tiempo de espera agotado que en realidad sí se guardó devuelve el
+        pedido original en lugar de vender las mismas entradas dos veces. Es lo que
+        hace que la cola sin red se pueda repetir sin riesgo.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="scope">
+  <div class="wrap">
+    <h2>Lo que deliberadamente no hace</h2>
+    <p class="sub">Decirlo de entrada te ahorrará una evaluación.</p>
+    <ul class="scope">
+      <li><strong>Ninguna certificación fiscal.</strong> El diario está diseñado para
+      que un trabajo de cumplimiento siga siendo posible más adelante, pero no se
+      afirma nada sobre la legislación francesa, alemana o austríaca de cajas
+      registradoras. Si estás sujeto a IVA, habla antes con tu asesor.</li>
+      <li><strong>No imprime tickets</strong> ni entradas.</li>
+      <li><strong>Sin Tap to Pay.</strong> Stripe solo lo expone a través de sus SDK
+      nativos de iOS y Android, así que es imposible desde una app web.</li>
+      <li><strong>Sin devoluciones parciales</strong> desde la caja. Una venta se
+      anula entera y se vuelve a cobrar corregida; devolver dos cervezas de tres es
+      trabajo de back office.</li>
+      <li><strong>Sin devolución libre a tarjeta.</strong> SumUp solo devuelve contra
+      una transacción suya, así que una fianza devuelta sale del cajón. Anular una
+      venta con tarjeta es otra cosa, y es totalmente automática.</li>
+      <li><strong>Sin anulaciones sin red.</strong> Un abono necesita el servidor, así
+      que las correcciones esperan a la conexión. Vender y escanear, no.</li>
+      <li><strong>Sin preguntas en el control de acceso.</strong> Un producto que
+      exige respuestas en la puerta se rechaza con un motivo claro en lugar de quedar
+      medio validado. Para esos, usa pretixSCAN.</li>
+      <li><strong>Solo códigos QR</strong> al escanear. Una entrada impresa con un
+      código de barras Code128 o PDF417 hay que teclearla o leerla con una pistola.</li>
+    </ul>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <h2>Instalarlo</h2>
+    <p class="sub">
+      Necesitas un pretix autoalojado <strong>2024.7.0 o más reciente</strong>, Python
+      3.11+ y HTTPS — los service workers, el bloqueo de suspensión y la instalación
+      en la pantalla de inicio exigen un contexto seguro. pretix Hosted no admite
+      plugins de terceros, así que ahí no se puede usar.
+    </p>
+<pre><code>pip install pretix-openpos
+python -m pretix migrate
+python -m pretix rebuild</code></pre>
+    <p class="sub">
+      Si ejecutas pretix en Docker o Kubernetes, el <code>deploy/Dockerfile</code> del
+      repositorio integra el plugin en la imagen oficial y compila dentro el
+      JavaScript de la caja, de modo que el bundle y el plugin que lo sirve llevan
+      siempre la misma versión.
+    </p>
+    <h3>Después, en pretix</h3>
+    <ol class="steps">
+      <li><strong>Activa el plugin</strong> para el evento.</li>
+      <li><strong>Haz vendibles los productos en la caja</strong> marcando en ellos el
+      canal <em>Open POS</em>. Un producto que existe <em>solo</em> in situ es uno con
+      ese canal y ningún otro.</li>
+      <li><strong>Ponles precio en pretix</strong>, en los productos mismos. La caja no
+      tiene lista de precios propia. Para cobrar más en la puerta que en venta
+      anticipada, haz un producto aparte en el canal Open POS — «Entrada en taquilla»,
+      por ejemplo — para que un nombre valga un precio y la recaudación siga siendo
+      legible.</li>
+      <li><strong>Elige la lista de control de acceso</strong>, para que las entradas
+      se validen al venderlas.</li>
+      <li><strong>Empareja un dispositivo</strong> en los ajustes de dispositivos de
+      pretix y escanea el código QR desde la app.</li>
+    </ol>
+    <p class="sub">
+      El <a href="https://github.com/clabeuhtegrite/pretix-openpos#readme">README</a>
+      detalla cada paso, incluido el lector de tarjetas y los botones opcionales.
+    </p>
+    <p class="note">
+      <strong>Sobre los idiomas.</strong> Esta página está en español, pero la propia
+      caja habla hoy inglés y francés: sigue el idioma de la tableta y recurre al
+      inglés. El back office de pretix, en cambio, está traducido a muchos más. Si
+      quieres la caja en español, las cadenas están en un solo archivo y las
+      contribuciones son bienvenidas.
+    </p>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p class="note">
+      <strong>Alfa.</strong> Todo el recorrido funciona y está cubierto por pruebas
+      que se ejecutan en cada envío — el backend contra un pretix real, el código de
+      la caja desde la aritmética en céntimos hasta lo que un cajero puede pulsar, y
+      un recorrido de extremo a extremo contra una pila viva con varias cajas
+      escribiendo en un mismo diario. Ha sostenido un evento real y está en producción
+      para la asociación para la que se escribió. Todavía no ha sostenido el de nadie
+      más.
+    </p>
+    <p>
+      Con licencia <a href="https://github.com/clabeuhtegrite/pretix-openpos/blob/main/LICENSE">Apache-2.0</a>,
+      que es lo que <a href="https://docs.pretix.eu/trust/licensing/faq/">pretix recomienda para los plugins</a>.
+      pretix es AGPLv3 con un permiso adicional, y un plugin que corre a su lado forma
+      una obra combinada, así que lo que puedes hacer con este código en la práctica
+      se deriva de la licencia de pretix más que de esta.
+    </p>
+    <p>
+      Este proyecto no está afiliado a pretix GmbH ni cuenta con su respaldo.
+      <a href="https://github.com/clabeuhtegrite/pretix-openpos">El código en GitHub</a>.
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

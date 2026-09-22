@@ -4,6 +4,9 @@ An open-source point of sale for [pretix](https://pretix.eu), driven by a
 progressive web app. Sell tickets at the door from any tablet or phone with a
 browser — no native app, no per-device licence.
 
+**[clabeuhtegrite.github.io/pretix-openpos](https://clabeuhtegrite.github.io/pretix-openpos/)**
+— the same introduction with screenshots, in English, French, Spanish and German.
+
 pretix already has an excellent POS product, pretixPOS. It is an Android app
 backed by a pretix Enterprise plugin, and for a self-hosted installation that
 licence is the expensive part. This is a smaller, narrower alternative for
@@ -207,7 +210,7 @@ If you run pretix in Docker or Kubernetes, [`deploy/Dockerfile`](deploy/Dockerfi
 bakes the plugin into the official image:
 
 ```bash
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.14.0 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.15.0 .
 ```
 
 The PWA bundle is built inside the image, from the tree you are building, so the

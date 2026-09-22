@@ -9,7 +9,10 @@ export const pairing = {
 };
 
 export const config = (over: Record<string, unknown> = {}) => ({
-  version: "0.11.0",
+  // The build's own version, so the harness does not permanently offer an
+  // update: the app compares this against __APP_VERSION__ and a hard-coded
+  // number goes stale at the next release.
+  version: __APP_VERSION__,
   event: {
     slug: "soiree-automne",
     organizer: "demo-club",
@@ -94,12 +97,12 @@ export const summary = {
 export const history = {
   truncated: false,
   results: [
-    { seq: 41, order: "POS4K", datetime: "2026-09-22T21:14:00Z", total: "8.50", payment_type: "cash", cashier: "Ad", reason: "", kind: "sale", cancelled: false, can_cancel: true, testmode: false, positions: [
+    { seq: 41, order: "POS4K", datetime: "2026-09-22T21:14:00Z", total: "8.50", payment_type: "cash", cashier: "Alex", reason: "", kind: "sale", cancelled: false, can_cancel: true, testmode: false, positions: [
       { item: 10, item_name: "Bière pression 25cl", variation: null, variation_name: null, count: 2, unit_price: "0.00", line_total: "6.00", description: null },
       { item: 10, item_name: "Soft", variation: null, variation_name: null, count: 1, unit_price: "0.00", line_total: "2.00", description: null },
       { item: 10, item_name: "Écocup", variation: null, variation_name: null, count: 1, unit_price: "0.00", line_total: "0.50", description: null },
     ] },
-    { seq: 40, order: "POS4J", datetime: "2026-09-22T21:11:00Z", total: "-1.00", payment_type: "cash", cashier: "Ad", reason: "", kind: "deposit_refund", cancelled: false, can_cancel: false, testmode: false, positions: [
+    { seq: 40, order: "POS4J", datetime: "2026-09-22T21:11:00Z", total: "-1.00", payment_type: "cash", cashier: "Alex", reason: "", kind: "deposit_refund", cancelled: false, can_cancel: false, testmode: false, positions: [
       { item: 10, item_name: "Écocup", variation: null, variation_name: null, count: 1, unit_price: "0.00", line_total: "-1.00", description: null },
     ] },
     { seq: 39, order: "POS4H", datetime: "2026-09-22T21:09:00Z", total: "16.00", payment_type: "card", cashier: "Lou", reason: "", kind: "sale", cancelled: false, can_cancel: true, testmode: false, positions: [
@@ -108,15 +111,35 @@ export const history = {
     { seq: 38, order: "POS4G", datetime: "2026-09-22T21:02:00Z", total: "-7.00", payment_type: "cash", cashier: "Lou", reason: "", kind: "cancellation", cancels_seq: 36, cancelled: false, can_cancel: false, testmode: false, positions: [
       { item: 10, item_name: "Assiette végé", variation: null, variation_name: null, count: 1, unit_price: "0.00", line_total: "-7.00", description: null },
     ] },
-    { seq: 37, order: "POS4F", datetime: "2026-09-22T20:58:00Z", total: "12.00", payment_type: "card", cashier: "Ad", reason: "", kind: "sale", cancelled: false, can_cancel: true, testmode: false, positions: [
+    { seq: 37, order: "POS4F", datetime: "2026-09-22T20:58:00Z", total: "12.00", payment_type: "card", cashier: "Alex", reason: "", kind: "sale", cancelled: false, can_cancel: true, testmode: false, positions: [
       { item: 10, item_name: "Cocktail maison", variation: null, variation_name: null, count: 2, unit_price: "0.00", line_total: "12.00", description: null },
     ] },
     { seq: 36, order: "POS4E", datetime: "2026-09-22T20:55:00Z", total: "7.00", payment_type: "cash", cashier: "Lou", reason: "", kind: "sale", cancelled: true, can_cancel: false, testmode: false, positions: [
       { item: 10, item_name: "Assiette végé", variation: null, variation_name: null, count: 1, unit_price: "0.00", line_total: "7.00", description: null },
     ] },
-    { seq: 35, order: "POS4D", datetime: "2026-09-22T20:51:00Z", total: "5.00", payment_type: "cash", cashier: "Ad", reason: "", kind: "sale", cancelled: false, can_cancel: true, testmode: false, positions: [
+    { seq: 35, order: "POS4D", datetime: "2026-09-22T20:51:00Z", total: "5.00", payment_type: "cash", cashier: "Alex", reason: "", kind: "sale", cancelled: false, can_cancel: true, testmode: false, positions: [
       { item: 10, item_name: "Divers", variation: null, variation_name: null, count: 1, unit_price: "0.00", line_total: "5.00", description: "Verre cassé" },
     ] },
+  ],
+};
+
+/**
+ * The guest list a door carries when the network goes.
+ *
+ * Shaped exactly like `/openpos/offline/` answers, which is the point: the
+ * harness used to invent `{ list: 7, positions: [] }` here, and `indexSnapshot`
+ * read `snapshot.tickets.length` off `undefined`, so choosing the door role
+ * showed a white screen and the scanner could not be looked at at all.
+ */
+export const offlineSnapshot = {
+  list: { id: 7, name: "Porte" },
+  generated: "2026-09-22T20:30:00Z",
+  truncated: false,
+  tickets: [
+    { secret: "aaaa1111bbbb2222", item: 20, name: "Camille Rey", used: false },
+    { secret: "cccc3333dddd4444", item: 20, name: "Dominique Ferrand", used: true },
+    { secret: "eeee5555ffff6666", item: 21, name: "Sacha Lemoine", used: false },
+    { secret: "gggg7777hhhh8888", item: 21, name: "", used: false },
   ],
 };
 

@@ -18,7 +18,7 @@ const q = new URLSearchParams(location.search);
 
 localStorage.setItem("openpos.allowBrowser.v1", "1");
 localStorage.setItem("openpos.pairing.v1", JSON.stringify(fx.pairing));
-localStorage.setItem("openpos.cashier.v1", "Ad");
+localStorage.setItem("openpos.cashier.v1", "Alex");
 
 if (q.get("queue")) {
   const n = Number(q.get("queue"));
@@ -35,7 +35,7 @@ if (q.get("queue")) {
         paymentType: "cash",
         cashGiven: "5.00",
         cashChange: "2.00",
-        cashier: "Ad",
+        cashier: "Alex",
         admits: false,
         label: "1× Bière pression 25cl",
       })),
@@ -57,7 +57,8 @@ const conf = fx.config({
   ...(q.get("testmode")
     ? { event: { ...fx.config().event, testmode: true } }
     : {}),
-  ...(q.get("update") ? { version: "0.12.0" } : {}),
+  // Unambiguously newer than any build, so ?update=1 keeps working.
+  ...(q.get("update") ? { version: "99.0.0" } : {}),
 });
 
 const json = (body: unknown, status = 200) =>
@@ -84,8 +85,7 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.includes("/openpos/summary/")) return json(fx.summary);
   if (url.includes("/openpos/history/")) return json({ device: fx.pairing.serial, ...fx.history });
   if (url.includes("/openpos/attendance/")) return json(fx.attendance);
-  if (url.includes("/openpos/offline/"))
-    return json({ list: 7, generated_at: new Date().toISOString(), positions: [] });
+  if (url.includes("/openpos/offline/")) return json(fx.offlineSnapshot);
   // ?terminal= pilote le lecteur : waiting (défaut), paid, failed, stalled,
   // reprice (le serveur tarife autrement que la caisse).
   const reader = q.get("terminal") ?? "waiting";
