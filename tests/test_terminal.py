@@ -28,7 +28,7 @@ from django.utils.timezone import now
 from pretix_openpos.models import PosDevice, PosSale, PosTerminalPayment
 
 from .conftest import sell
-from .sumup_stub import FakeResponse
+from .sumup_stub import FakeResponse, reader_busy, reader_offline
 
 KEY = "key-" + "0" * 8
 
@@ -143,6 +143,45 @@ def test_a_refusal_from_sumup_is_still_written_down(till, ticket, reader_till, s
     assert response.status_code == 400
     assert response.json()["code"] == "terminal_unreachable"
     assert PosTerminalPayment.objects.get().status == PosTerminalPayment.STATUS_FAILED
+
+
+@pytest.mark.django_db
+def test_a_reader_that_is_off_is_named_to_the_cashier(till, ticket, reader_till, sumup):
+    """
+    "SumUp refused this request" used to be all a volunteer got, for the most
+    ordinary refusal there is. Nothing reached the reader, so the row closes and
+    the till is free to try again, or to take cash.
+    """
+    sumup.next_response = reader_offline()
+
+    response = start(till, [{"item": ticket.pk, "count": 1}])
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "terminal_unreachable"
+    assert "offline" in response.json()["detail"][0]
+    assert PosTerminalPayment.objects.get().status == PosTerminalPayment.STATUS_FAILED
+
+
+@pytest.mark.django_db
+def test_a_reader_still_holding_the_last_request_is_named_too(till, ticket, reader_till, sumup):
+    # SumUp holds a reader for a minute after every request it accepts: a
+    # payment stopped and restarted at once is refused, and the cashier is
+    # told to give it that minute rather than that the card was declined.
+    sumup.next_response = reader_busy()
+
+    response = start(till, [{"item": ticket.pk, "count": 1}])
+
+    assert response.json()["code"] == "terminal_unreachable"
+    assert "previous request" in response.json()["detail"][0]
+    assert PosTerminalPayment.objects.get().status == PosTerminalPayment.STATUS_FAILED
+
+
+@pytest.mark.django_db
+def test_the_request_put_on_the_reader_is_kept(till, ticket, reader_till, sumup):
+    start(till, [{"item": ticket.pk, "count": 1}])
+
+    payment = PosTerminalPayment.objects.get()
+    assert payment.checkout_id in sumup.checkouts
 
 
 @pytest.mark.django_db
@@ -268,6 +307,78 @@ def test_a_settled_payment_is_not_asked_about_again(till, ticket, reader_till, s
 
 
 @pytest.mark.django_db
+def test_a_customer_who_walks_away_ends_the_wait(till, ticket, reader_till, sumup):
+    """
+    No card was presented, so the Transactions API has nothing and never will.
+    The request on the reader is what says it is over — it expires by itself —
+    and without asking it the till went on waiting for a card that was never
+    coming, card payments held on the reader behind it.
+    """
+    start(till, [{"item": ticket.pk, "count": 1}])
+    sumup.walk_away()
+
+    body = status(till).json()
+
+    assert body["status"] == "failed"
+    # In the Transactions API's own case, which the till turns into a sentence.
+    assert body["failure"] == "CANCELLED"
+
+
+@pytest.mark.django_db
+def test_a_request_the_reader_calls_failed_ends_the_wait_too(till, ticket, reader_till, sumup):
+    start(till, [{"item": ticket.pk, "count": 1}])
+    sumup.walk_away(status="failed")
+
+    assert status(till).json()["failure"] == "FAILED"
+
+
+@pytest.mark.django_db
+def test_the_reader_saying_paid_is_not_enough_to_write_paid(till, ticket, reader_till, sumup):
+    """
+    Only the transaction carries the id a refund will need, so a request the
+    reader calls successful waits for its transaction to show.
+    """
+    start(till, [{"item": ticket.pk, "count": 1}])
+    payment = PosTerminalPayment.objects.get()
+    sumup.checkouts[payment.checkout_id]["status"] = "successful"
+
+    assert status(till).json()["status"] == "pending"
+
+
+@pytest.mark.django_db
+def test_a_card_answered_after_all_wins_over_the_reader_s_request(
+    till, ticket, reader_till, sumup
+):
+    # The transaction is asked first, and it is what the money did.
+    start(till, [{"item": ticket.pk, "count": 1}])
+    sumup.walk_away()
+    sumup.pay()
+
+    assert status(till).json()["status"] == "successful"
+
+
+@pytest.mark.django_db
+def test_a_request_the_reader_cannot_find_changes_nothing(till, ticket, reader_till, sumup):
+    start(till, [{"item": ticket.pk, "count": 1}])
+    sumup.checkouts.clear()
+
+    assert status(till).json()["status"] == "pending"
+
+
+@pytest.mark.django_db
+def test_a_payment_from_before_the_request_was_kept_settles_as_it_always_did(
+    till, ticket, reader_till, sumup
+):
+    """Rows written by an earlier version have no request to ask about."""
+    start(till, [{"item": ticket.pk, "count": 1}])
+    PosTerminalPayment.objects.update(checkout_id="")
+    sumup.walk_away()
+
+    assert status(till).json()["status"] == "pending"
+    assert not [p for p in sumup.call_paths("GET") if "/checkout/" in p]
+
+
+@pytest.mark.django_db
 def test_asking_about_a_basket_nobody_started_is_refused(till, reader_till, sumup):
     response = status(till)
 
@@ -286,6 +397,21 @@ def test_giving_up_takes_the_amount_off_the_reader(till, ticket, reader_till, su
 
     assert response.status_code == 200
     assert any(path.endswith("/terminate") for path in sumup.call_paths("POST"))
+
+
+@pytest.mark.django_db
+def test_stopping_frees_the_till_once_the_reader_has_obeyed(till, ticket, reader_till, sumup):
+    """
+    The cashier presses stop, the customer pays cash. The reader obeys in its
+    own time, so straight after the stop the payment is still waiting — and the
+    next poll finds it over, rather than the till staying stuck on it.
+    """
+    start(till, [{"item": ticket.pk, "count": 1}])
+
+    assert cancel_payment(till).json()["status"] == "pending"
+    sumup.walk_away()
+
+    assert status(till).json()["status"] == "failed"
 
 
 @pytest.mark.django_db
@@ -943,6 +1069,23 @@ def test_a_refused_card_does_not_hold_the_reader_either(
     assert start(
         another_till, [{"item": ticket.pk, "count": 1}], key="seconde-01"
     ).status_code == 201
+
+
+@pytest.mark.django_db
+def test_a_basket_that_ended_unpaid_frees_the_shared_reader_at_once(
+    till, another_till, ticket, shared_reader, sumup
+):
+    """
+    Not five minutes later. The other till asks what became of the payment
+    holding the machine, and the reader's own record says it is over.
+    """
+    start(till, [{"item": ticket.pk, "count": 1}], key="premiere-01")
+    payment = PosTerminalPayment.objects.get(idempotency_key="premiere-01")
+    sumup.walk_away(payment.client_transaction_id)
+
+    response = start(another_till, [{"item": ticket.pk, "count": 1}], key="seconde-01")
+
+    assert response.status_code == 201
 
 
 @pytest.mark.django_db

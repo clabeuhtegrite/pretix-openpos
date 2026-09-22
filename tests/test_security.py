@@ -154,6 +154,21 @@ def test_a_revoked_till_is_locked_out(till, event):
     assert till.get("config").status_code == 401
 
 
+@pytest.mark.django_db
+def test_a_till_being_unpaired_can_end_itself_in_pretix(till, event):
+    """
+    What pretix asks of an app that lets a device be removed, and what the till
+    now does when it is unpaired: the device reads revoked in the back office
+    instead of active, and the token that nobody holds any more stops working.
+    """
+    response = as_device(till.client, till.device, "post", "/api/v1/device/revoke")
+
+    assert response.status_code == 200
+    till.device.refresh_from_db()
+    assert till.device.revoked is True
+    assert till.get("config").status_code == 401
+
+
 def directives(header):
     """A CSP header as ``{name: {source, ...}}``."""
     parsed = {}

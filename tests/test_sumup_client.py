@@ -12,10 +12,11 @@ import pytest
 import requests
 
 from pretix_openpos.sumup import (
-    ERR_BUSY, ERR_NOT_FOUND, ERR_UNAVAILABLE, SumUpAccount, SumUpError, minor_units, still_running, succeeded,
+    ERR_BUSY, ERR_NOT_FOUND, ERR_OFFLINE, ERR_REFUSED, ERR_UNAVAILABLE, SumUpAccount, SumUpError, minor_units,
+    still_running, succeeded,
 )
 
-from .sumup_stub import FakeResponse
+from .sumup_stub import FakeResponse, reader_busy, reader_offline
 
 
 @pytest.fixture
@@ -175,8 +176,41 @@ def test_a_reader_that_cannot_answer_is_not_an_error(account, sumup):
 
 
 @pytest.mark.django_db
-def test_an_answer_with_no_status_in_it_is_no_answer(account, sumup):
-    sumup.next_response = FakeResponse(200, {"battery_level": 50})
+def test_the_status_is_read_where_sumup_puts_it(account, sumup):
+    """
+    Under ``data``, as SumUp documents it. Looked for at the top level, it was
+    never there: every reader on the back office read "unknown", switched on
+    and online or not.
+    """
+    sumup.next_response = FakeResponse(200, {"data": {
+        "battery_level": 10.0,
+        "battery_temperature": 35,
+        "connection_type": "Wi-Fi",
+        "firmware_version": "3.3.3.21",
+        "last_activity": "2025-09-25T15:20:00Z",
+        "state": "IDLE",
+        "status": "ONLINE",
+    }})
+
+    status = account.reader_status("rdr_A")
+
+    assert status["status"] == "ONLINE"
+    assert status["battery_level"] == 10.0
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"data": {"battery_level": 50}},
+        {"battery_level": 50},
+        # The shape this used to expect, which SumUp does not send.
+        {"status": "ONLINE", "state": "IDLE"},
+        {"data": "ONLINE"},
+    ],
+)
+def test_an_answer_with_no_status_in_it_is_no_answer(account, sumup, body):
+    sumup.next_response = FakeResponse(200, body)
 
     assert account.reader_status("rdr_A") is None
 
@@ -190,7 +224,7 @@ def test_asking_a_reader_is_bounded_harder_than_the_rest(account, sumup, monkeyp
 
     def capture(method, url, **kwargs):
         seen.update(kwargs)
-        return FakeResponse(200, {"status": "ONLINE", "state": "IDLE"})
+        return FakeResponse(200, {"data": {"status": "ONLINE", "state": "IDLE"}})
 
     monkeypatch.setattr("pretix_openpos.sumup.requests.request", capture)
     account.reader_status("rdr_A")
@@ -205,11 +239,12 @@ def test_asking_a_reader_is_bounded_harder_than_the_rest(account, sumup, monkeyp
 def test_starting_a_checkout_returns_the_handle_on_it(account, sumup):
     reader_id = sumup.add_reader()
 
-    client_transaction_id = account.start_checkout(
+    client_transaction_id, checkout_id = account.start_checkout(
         reader_id, amount=Decimal("10.00"), currency="EUR", description="Soirée"
     )
 
     assert client_transaction_id in sumup.transactions
+    assert checkout_id in sumup.checkouts
     _method, _path, body = sumup.calls[-1]
     assert body["total_amount"] == {"currency": "EUR", "minor_unit": 2, "value": 1000}
     assert body["description"] == "Soirée"
@@ -251,6 +286,56 @@ def test_a_checkout_sumup_accepts_without_naming_a_transaction_is_an_error(accou
 
 
 @pytest.mark.django_db
+def test_a_checkout_answered_without_its_own_id_still_starts(account, sumup):
+    """
+    SumUp's description makes the transaction's handle required and the
+    request's optional. Without the second there is simply nothing to ask the
+    reader about later, which is how every payment was settled until now.
+    """
+    sumup.add_reader()
+    sumup.next_response = FakeResponse(201, {"data": {"client_transaction_id": "ctx_9"}})
+
+    assert account.start_checkout(
+        "rdr_ONE", amount=Decimal("10.00"), currency="EUR", description=""
+    ) == ("ctx_9", "")
+
+
+@pytest.mark.django_db
+def test_the_request_on_the_reader_says_where_it_has_got_to(account, sumup):
+    reader_id = sumup.add_reader()
+    client_transaction_id, checkout_id = account.start_checkout(
+        reader_id, amount=Decimal("10.00"), currency="EUR", description=""
+    )
+
+    assert account.reader_checkout(reader_id, checkout_id)["status"] == "pending"
+    assert sumup.calls[-1][1] == f"/v0.1/merchants/MERCH1/readers/{reader_id}/checkout/{checkout_id}"
+
+    sumup.walk_away(client_transaction_id)
+
+    assert account.reader_checkout(reader_id, checkout_id)["status"] == "cancelled"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "response",
+    [
+        FakeResponse(404, {"detail": "not found"}),
+        FakeResponse(503, {"message": "down"}),
+        FakeResponse(200, {"data": {"checkout_id": "chk_1"}}),
+        FakeResponse(200, {"status": "cancelled"}),
+    ],
+)
+def test_a_reader_request_that_cannot_be_read_is_no_answer(account, sumup, response):
+    """
+    Asked only to close a payment early. Not knowing must leave the payment
+    exactly as it was, so nothing here raises.
+    """
+    sumup.next_response = response
+
+    assert account.reader_checkout("rdr_ONE", "chk_1") is None
+
+
+@pytest.mark.django_db
 def test_a_transaction_that_does_not_exist_is_not_an_error(account, sumup):
     """
     The reader has been asked and the cardholder has not answered. That is what
@@ -288,7 +373,9 @@ def test_not_yet_is_recognised_by_code_and_never_by_wording(account, sumup, monk
     "status,code,retryable",
     [
         (404, ERR_NOT_FOUND, False),
-        (409, ERR_BUSY, True),
+        # A refund SumUp will not make, or a reader already paired: nothing to
+        # do with a busy reader, which SumUp reports as a 422.
+        (409, ERR_REFUSED, False),
         (503, ERR_UNAVAILABLE, True),
     ],
 )
@@ -307,7 +394,7 @@ def test_every_failure_carries_a_code_a_caller_can_branch_on(
 @pytest.mark.django_db
 def test_a_refund_names_the_transaction_and_no_amount_by_default(account, sumup):
     sumup.add_reader()
-    client_transaction_id = account.start_checkout(
+    client_transaction_id, _checkout_id = account.start_checkout(
         "rdr_ONE", amount=Decimal("10.00"), currency="EUR", description=""
     )
     sumup.pay(client_transaction_id, transaction_id="tx_7")
@@ -318,9 +405,21 @@ def test_a_refund_names_the_transaction_and_no_amount_by_default(account, sumup)
 
 
 @pytest.mark.django_db
+def test_a_refund_sumup_made_is_not_reported_as_refused(account, sumup):
+    """
+    SumUp answers a refund with 201. Treated as a refusal, every card sale
+    cancelled at the till told the operator to refund from the SumUp app a
+    card that had already been paid back — the one way to pay it back twice.
+    """
+    sumup.next_response = FakeResponse(201, {})
+
+    assert account.refund("tx_7") is None
+
+
+@pytest.mark.django_db
 def test_a_partial_refund_names_its_amount(account, sumup):
     sumup.add_reader()
-    client_transaction_id = account.start_checkout(
+    client_transaction_id, _checkout_id = account.start_checkout(
         "rdr_ONE", amount=Decimal("10.00"), currency="EUR", description=""
     )
     sumup.pay(client_transaction_id, transaction_id="tx_7")
@@ -346,13 +445,54 @@ def test_a_rejected_key_says_where_to_fix_it(account, sumup, status):
 
 
 @pytest.mark.django_db
-def test_a_busy_reader_is_worth_trying_again(account, sumup):
-    sumup.next_response = FakeResponse(409, {"message": "busy"})
+def test_a_reader_that_is_off_says_so(account, sumup):
+    """
+    The refusal a counter meets most. It used to read "SumUp refused this
+    request", which tells a volunteer nothing they can act on.
+    """
+    sumup.add_reader()
+    sumup.next_response = reader_offline()
+
+    with pytest.raises(SumUpError) as caught:
+        account.start_checkout("rdr_ONE", amount=Decimal("10.00"), currency="EUR", description="")
+
+    assert caught.value.code == ERR_OFFLINE
+    assert "offline" in str(caught.value.message)
+    # Nothing reached the reader, so the payment has failed rather than become
+    # unknown: retryable here would keep the till waiting on a card forever.
+    assert caught.value.retryable is False
+
+
+@pytest.mark.django_db
+def test_a_reader_still_holding_the_last_request_says_so(account, sumup):
+    sumup.add_reader()
+    sumup.next_response = reader_busy()
+
+    with pytest.raises(SumUpError) as caught:
+        account.start_checkout("rdr_ONE", amount=Decimal("10.00"), currency="EUR", description="")
+
+    assert caught.value.code == ERR_BUSY
+    assert "previous request" in str(caught.value.message)
+    assert caught.value.retryable is False
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"errors": {"total_amount": ["must be greater than 0"]}},
+        {"type": "https://developer.sumup.com/problem/validation-error",
+         "title": "Unprocessable Entity", "status": 422, "detail": "Validation failed"},
+        {"errors": {"type": 7}},
+    ],
+)
+def test_any_other_422_is_a_plain_refusal(account, sumup, body):
+    sumup.next_response = FakeResponse(422, body)
 
     with pytest.raises(SumUpError) as caught:
         account.readers()
 
-    assert caught.value.retryable is True
+    assert caught.value.code == ERR_REFUSED
 
 
 @pytest.mark.django_db
@@ -390,6 +530,19 @@ def test_a_refusal_sumup_explains_keeps_its_wording_out_of_the_screen(account, s
     assert str(caught.value.message) == "SumUp refused this request."
     # SumUp's own words stay in the log, where they are useful.
     assert "amount too small" in caught.value.detail
+
+
+@pytest.mark.django_db
+def test_a_gateway_page_in_place_of_an_error_is_still_sumup_faulting(account, sumup):
+    # A proxy in front of SumUp answers in HTML. There is no error name to read
+    # in that, and nothing in it may be taken for a reader refusing.
+    sumup.next_response = FakeResponse(502, text="<html>Bad gateway</html>")
+
+    with pytest.raises(SumUpError) as caught:
+        account.readers()
+
+    assert caught.value.code == ERR_UNAVAILABLE
+    assert caught.value.retryable is True
 
 
 @pytest.mark.django_db

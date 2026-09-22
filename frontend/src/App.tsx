@@ -20,8 +20,8 @@ import { newNonce } from "./nonce";
 import { play, setSoundEnabled, soundEnabled, unlock } from "./sound";
 import {
   clearBasket, clearPairing, enqueue, loadBasket, loadCached, loadCashier, loadFailures,
-  loadPairing, loadQueue, loadUpdateAttempt, requestPersistence, saveBasket, saveCached,
-  saveCashier, savePairing, saveUpdateAttempt,
+  loadPairing, loadQueue, loadUpdateAttempt, queueRevocation, requestPersistence, saveBasket,
+  saveCached, saveCashier, savePairing, saveUpdateAttempt,
 } from "./storage";
 import { useConnectivity } from "./connectivity";
 import { drainQueue } from "./sync";
@@ -32,6 +32,7 @@ import type {
 } from "./types";
 import { useBackClose } from "./useBackClose";
 import { markDeviceReported, useDeviceReport } from "./useDeviceReport";
+import { useDeviceRevoke } from "./useDeviceRevoke";
 import { useOfflineSnapshot } from "./useOfflineSnapshot";
 import { useTerminal } from "./useTerminal";
 import { useWakeLock } from "./useWakeLock";
@@ -194,6 +195,8 @@ export default function App() {
   // So that pretix' device list shows the build this device runs now, not the
   // one it was paired with.
   useDeviceReport(pairing, online);
+  // So that a till unpaired here reads revoked there, not active.
+  useDeviceRevoke(pairing, online);
 
   // main.tsx has already painted this once before the first render; running it
   // again here is what makes a change in the settings panel take effect, and
@@ -447,6 +450,9 @@ export default function App() {
   }
 
   function unpair() {
+    // Queued, not sent from here: unpairing must work without a network, and
+    // useDeviceRevoke sends it the moment there is one.
+    if (pairing) queueRevocation(pairing.token);
     clearPairing();
     clearBasket();
     setPairing(null);
