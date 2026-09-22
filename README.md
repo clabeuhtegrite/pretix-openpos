@@ -273,8 +273,12 @@ rather than to a rolling minor.
    else — the server refuses a card sale the reader did not validate. Every
    other device goes on as before.
 
-One device can sell for several events: any event with the plugin enabled shows
-up in *Settings → Event*, and switching does not require re-pairing.
+One device can sell for several events: every event it has access to and that
+has the plugin enabled can be picked in *Settings → Event*, whether or not its
+shop is online, and switching does not require re-pairing. An event the device
+reaches without the plugin is named there with the reason rather than left out,
+and a till whose event will not open — Open POS switched off there, a series
+with nothing on tonight — offers its other events on the error screen.
 
 ### Naming the app
 

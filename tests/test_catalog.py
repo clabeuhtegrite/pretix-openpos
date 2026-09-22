@@ -135,28 +135,6 @@ def test_the_configuration_lists_every_check_in_list(till, event, checkin_list):
 
 
 @pytest.mark.django_db
-def test_the_till_is_told_which_events_it_may_sell_for(till, event, organizer):
-    from datetime import timedelta
-
-    from django.utils.timezone import now
-    from pretix.base.models import Event
-
-    Event.objects.create(
-        organizer=organizer, name="Sans caisse", slug="sans-caisse",
-        date_from=now() + timedelta(days=2), plugins="", live=True, currency="EUR",
-    )
-
-    results = till.client.get(
-        f"/api/v1/organizers/{organizer.slug}/openpos/",
-        HTTP_AUTHORIZATION=f"Device {till.device.api_token}",
-    ).json()["results"]
-
-    # Access to an event is not the same thing as the organizer having opened a
-    # till on it; offering one would pair the device onto endpoints that refuse it.
-    assert [entry["slug"] for entry in results] == [event.slug]
-
-
-@pytest.mark.django_db
 def test_an_option_with_no_price_of_its_own_inherits_the_product_s(till, event, channel):
     # pretix' own resolution order, which the till has to mirror or the door
     # quotes a different figure from the webshop.

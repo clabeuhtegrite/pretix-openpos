@@ -9,7 +9,7 @@ from django.utils.translation import gettext_lazy as _
 from django_scopes import scopes_disabled
 from i18nfield.strings import LazyI18nString
 from pretix.api.serializers.order import OrderCreateSerializer
-from pretix.base.models import Checkin, Device, Order, Quota
+from pretix.base.models import Checkin, Device, Order, Quota, TeamAPIToken
 from pretix.base.models.orders import OrderPayment, OrderRefund
 from pretix.base.services.checkin import CheckInError, perform_checkin
 from pretix.base.services.invoices import generate_invoice, invoice_qualified
@@ -562,30 +562,58 @@ class OpenPosOrganizerViewSet(viewsets.ViewSet):
     an organizer can perfectly well run Open POS on one event and not another.
     Listing them server-side keeps the app from offering an event whose
     endpoints would then refuse it.
+
+    Every event the caller may reach is in the answer, one way or the other.
+    ``results`` are the ones the till can switch to; ``unavailable`` are the
+    ones it cannot, each with the reason. Leaving those out altogether is what
+    made a device with access to two events look as if it had only one: the
+    switcher only appears once there is a choice, so the event somebody was
+    looking for was simply absent, and nothing on the till said why.
+
+    Whether the shop is live is not a condition, and used to be. It says
+    whether the public can buy online, which is not the till's business, and
+    none of the till's endpoints ever asked: an event still being prepared, or
+    one that only ever sells at the door and never put its shop online, is
+    exactly the kind of event a till gets taken to.
     """
 
     def list(self, request, **kwargs):
-        device = request.auth if isinstance(request.auth, Device) else None
-        if device is not None:
-            events = device.get_events_with_any_permission()
-        else:
-            events = request.organizer.events.all()
-
         results = []
-        for event in events.filter(live=True).order_by("date_from"):
-            if not plugin_enabled(event):
-                continue
-            results.append(
-                {
-                    "slug": event.slug,
-                    "organizer": event.organizer.slug,
-                    "name": str(event.name),
-                    "currency": event.currency,
-                    "testmode": event.testmode,
-                    "date_from": event.date_from.isoformat() if event.date_from else None,
-                }
-            )
-        return Response({"results": results})
+        unavailable = []
+        for event in reachable_events(request).select_related("organizer").order_by("date_from"):
+            entry = {
+                "slug": event.slug,
+                "organizer": event.organizer.slug,
+                "name": str(event.name),
+                "currency": event.currency,
+                "testmode": event.testmode,
+                "date_from": event.date_from.isoformat() if event.date_from else None,
+            }
+            if plugin_enabled(event):
+                results.append(entry)
+            else:
+                # A code rather than a sentence: the till words it, in its own
+                # language, with the back-office path that fixes it.
+                unavailable.append({**entry, "reason": "plugin_disabled"})
+        # A separate list rather than a flag on each entry, so a till still
+        # running an older build — which offers every result it is given —
+        # never offers one its endpoints would refuse.
+        return Response({"results": results, "unavailable": unavailable})
+
+
+def reachable_events(request):
+    """
+    The events this caller may see at all, decided the way pretix decides it.
+
+    Mirrors pretix' own event list: a device or a team token by its own
+    access, anybody else by their teams. The answer now names events that
+    are not on sale yet, so it must not name one the caller has no access to.
+    """
+    if isinstance(request.auth, (Device, TeamAPIToken)):
+        return request.auth.get_events_with_any_permission()
+    return request.user.get_events_with_any_permission(request).filter(
+        organizer=request.organizer
+    )
 
 
 class OpenPosViewSet(viewsets.ViewSet):

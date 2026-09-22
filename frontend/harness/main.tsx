@@ -5,6 +5,7 @@
  * Query params: ?role=pos|door  ?card=terminal  ?theme=light|dark
  *               ?offline=1  ?queue=3  ?testmode=1  ?update=1  ?photos=1
  *               ?terminal=waiting|paid|failed|stalled|reprice  ?checkout=fail
+ *               ?events=one|blocked|mixed  ?load=refused|series
  */
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
@@ -69,6 +70,31 @@ const json = (body: unknown, status = 200) =>
 
 let terminalPolls = 0;
 
+// ?events= : ce que l'appareil peut atteindre. Par défaut deux événements
+// ouverts ; « one » le seul où il est ; « blocked » un second sans Open POS ;
+// « mixed » les deux ouverts plus un sans Open POS.
+const autumn = { slug: "soiree-automne", organizer: "demo-club", name: "Soirée d'automne", currency: "EUR", testmode: false, date_from: "2026-09-26T18:00:00Z" };
+const winter = { slug: "soiree-hiver", organizer: "demo-club", name: "Soirée d'hiver", currency: "EUR", testmode: false, date_from: "2026-12-12T19:00:00Z" };
+const ball = { slug: "bal-masque", organizer: "demo-club", name: "Bal masqué", currency: "EUR", testmode: false, date_from: "2026-10-31T19:00:00Z" };
+const disabled = (event: typeof autumn) => ({ ...event, reason: "plugin_disabled" });
+const eventList = {
+  one: { results: [autumn], unavailable: [] },
+  blocked: { results: [autumn], unavailable: [disabled(winter)] },
+  mixed: { results: [autumn, winter], unavailable: [disabled(ball)] },
+}[q.get("events") ?? ""] ?? { results: [autumn, winter], unavailable: [] };
+
+// ?load= : l'événement de l'appareil ne s'ouvre pas, les autres oui.
+// « refused » : Open POS désactivé dessus ; « series » : rien ce soir.
+const stuck = (url: string) =>
+  url.includes(`/events/${fx.pairing.event}/`) && q.get("load")
+    ? q.get("load") === "series"
+      ? json({
+          detail: ["Rien n’est programmé ce soir. Cet événement est une série, et la caisse vend la date qui a lieu — ajoutez-en une pour ce soir, ou vérifiez qu’elle est activée."],
+          code: "series_closed",
+        }, 400)
+      : json({ detail: `Open POS n’est pas activé sur l’événement ${fx.pairing.event}.` }, 403)
+    : null;
+
 const real = window.fetch.bind(window);
 window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -78,10 +104,10 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
 
   await new Promise((r) => setTimeout(r, 40));
 
-  if (url.includes("/openpos/config/")) return json(conf);
+  if (url.includes("/openpos/config/")) return stuck(url) ?? json(conf);
   // ?photos=1 met des photos sur un produit sur deux.
   if (url.includes("/openpos/catalog/"))
-    return json(q.get("photos") ? fx.withPhotos(fx.catalog) : fx.catalog);
+    return stuck(url) ?? json(q.get("photos") ? fx.withPhotos(fx.catalog) : fx.catalog);
   if (url.includes("/openpos/summary/")) return json(fx.summary);
   if (url.includes("/openpos/history/")) return json({ device: fx.pairing.serial, ...fx.history });
   if (url.includes("/openpos/attendance/")) return json(fx.attendance);
@@ -133,13 +159,7 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       card_refund: null,
       sale: { order: "POS4K", positions: fx.history.results[0].positions },
     });
-  if (/\/organizers\/[^/]+\/openpos\/(\?|$)/.test(url))
-    return json({
-      results: [
-        { slug: "soiree-automne", organizer: "demo-club", name: "Soirée d'automne", currency: "EUR", testmode: false, date_from: null },
-        { slug: "soiree-hiver", organizer: "demo-club", name: "Soirée d'hiver", currency: "EUR", testmode: false, date_from: null },
-      ],
-    });
+  if (/\/organizers\/[^/]+\/openpos\/(\?|$)/.test(url)) return json(eventList);
   if (url.includes("/checkinrpc/search/"))
     return json({
       results: [
