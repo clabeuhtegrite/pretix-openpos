@@ -307,3 +307,129 @@ def test_a_sale_from_a_till_that_has_since_been_deleted_is_still_counted(
 
     assert context["totals"]["count"] == 1
     assert len(context["by_device"]) == 1
+
+
+# -- card payments that never became a sale ---------------------------------
+#
+# The one thing the journal cannot show by construction: the takings are
+# recomputed from it, so a card charged without a sale behind it is missing
+# from every figure on the page rather than wrong in one of them.
+
+
+def put_on_reader(till, positions, key):
+    return till.post(
+        "terminal/start", {"idempotency_key": key, "positions": positions}
+    )
+
+
+@pytest.mark.django_db
+def test_a_card_charged_with_no_sale_behind_it_is_listed(
+    backoffice, till, event, ticket, reader_till, sumup
+):
+    from pretix_openpos.models import PosTerminalPayment
+
+    put_on_reader(till, [{"item": ticket.pk, "count": 1}], "abandonne-01")
+    payment = PosTerminalPayment.objects.get(idempotency_key="abandonne-01")
+    sumup.pay(payment.client_transaction_id, transaction_id="tx_perdue")
+    # The cardholder paid and the till never came back — dropped tablet, dead
+    # battery, closed browser. Nothing else in pretix will ever mention it.
+    till.get("terminal/status", idempotency_key="abandonne-01")
+
+    context = backoffice.get(sales_url(event)).context
+
+    assert [row["payment"].idempotency_key for row in context["unresolved_card"]] == [
+        "abandonne-01"
+    ]
+    assert context["unresolved_card"][0]["paid"] is True
+    assert context["unresolved_card"][0]["till"] == "Caisse bar"
+    # And the reference a human searches the SumUp dashboard by is on the page.
+    assert "tx_perdue" in backoffice.get(sales_url(event)).content.decode()
+
+
+@pytest.mark.django_db
+def test_a_basket_left_on_a_reader_is_listed_once_nobody_is_coming_back(
+    backoffice, till, event, ticket, reader_till, sumup
+):
+    from django.utils.timezone import now
+
+    from pretix_openpos.models import PosTerminalPayment
+    from pretix_openpos.views import UNRESOLVED_AFTER
+
+    put_on_reader(till, [{"item": ticket.pk, "count": 1}], "en-attente-01")
+
+    # Still within the window: a customer rummaging for their wallet is not an
+    # incident, and a row here on every slow payment is a row nobody reads.
+    assert backoffice.get(sales_url(event)).context["unresolved_card"] == []
+
+    PosTerminalPayment.objects.filter(idempotency_key="en-attente-01").update(
+        created=now() - UNRESOLVED_AFTER * 2
+    )
+
+    context = backoffice.get(sales_url(event)).context
+
+    assert len(context["unresolved_card"]) == 1
+    # Flagged as unknown rather than as charged: whether the money moved is
+    # exactly what nobody here can say.
+    assert context["unresolved_card"][0]["paid"] is False
+
+
+@pytest.mark.django_db
+def test_a_card_payment_that_became_a_sale_is_not_listed(
+    backoffice, till, event, ticket, reader_till, sumup
+):
+    from pretix_openpos.models import PosTerminalPayment
+
+    put_on_reader(till, [{"item": ticket.pk, "count": 1}], "vendue-01")
+    payment = PosTerminalPayment.objects.get(idempotency_key="vendue-01")
+    sumup.pay(payment.client_transaction_id, transaction_id="tx_ok")
+    till.get("terminal/status", idempotency_key="vendue-01")
+    sell(
+        till,
+        [{"item": ticket.pk, "count": 1}],
+        payment_type="card",
+        idempotency_key="vendue-01",
+    )
+
+    # The ordinary card sale. The section exists to be empty on a normal night.
+    assert backoffice.get(sales_url(event)).context["unresolved_card"] == []
+    assert "Card payments with no sale" not in backoffice.get(
+        sales_url(event)
+    ).content.decode()
+
+
+@pytest.mark.django_db
+def test_a_refusal_is_not_something_to_chase(
+    backoffice, till, event, ticket, reader_till, sumup
+):
+    from pretix_openpos.models import PosTerminalPayment
+
+    put_on_reader(till, [{"item": ticket.pk, "count": 1}], "refusee-01")
+    PosTerminalPayment.objects.filter(idempotency_key="refusee-01").update(
+        status=PosTerminalPayment.STATUS_FAILED
+    )
+
+    # A declined card is the system working. Nothing was taken, so there is
+    # nothing to give back and nothing to ring up.
+    assert backoffice.get(sales_url(event)).context["unresolved_card"] == []
+
+
+@pytest.mark.django_db
+def test_a_payment_already_sent_back_is_settled(
+    backoffice, till, event, ticket, reader_till, sumup
+):
+    from django.utils.timezone import now
+
+    from pretix_openpos.models import PosTerminalPayment
+
+    put_on_reader(till, [{"item": ticket.pk, "count": 1}], "rendue-01")
+    payment = PosTerminalPayment.objects.get(idempotency_key="rendue-01")
+    sumup.pay(payment.client_transaction_id, transaction_id="tx_rendue")
+    till.get("terminal/status", idempotency_key="rendue-01")
+
+    assert len(backoffice.get(sales_url(event)).context["unresolved_card"]) == 1
+
+    PosTerminalPayment.objects.filter(pk=payment.pk).update(refunded=now())
+
+    # Somebody dealt with it. Leaving the row up would have the next person
+    # refund it a second time.
+    assert backoffice.get(sales_url(event)).context["unresolved_card"] == []

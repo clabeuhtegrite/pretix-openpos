@@ -1,5 +1,6 @@
 import csv
 from collections import OrderedDict
+from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 
 from django.contrib import messages
@@ -8,6 +9,7 @@ from django.db.models import Count, Min, Sum
 from django.http import StreamingHttpResponse
 from django.shortcuts import redirect
 from django.urls import reverse
+from django.utils.timezone import now
 from django.utils.translation import gettext_lazy as _
 from django.views.generic import ListView, TemplateView
 from pretix.base.models import Event
@@ -192,6 +194,71 @@ class Echo:
         return value
 
 
+#: How long a card payment may sit unanswered before it is worth a human's
+#: attention.
+#:
+#: Generous: a cardholder rummaging for their wallet, a reader that took a
+#: while to wake, a till that polled late. Anything still open after this was
+#: not slow, it was abandoned.
+UNRESOLVED_AFTER = timedelta(minutes=20)
+
+
+def unresolved_terminal_payments(event):
+    """
+    Card payments that never became a sale, for the one screen that can say so.
+
+    Two shapes, and they are the same problem seen at two moments. A payment
+    SumUp says went through, with no journal row carrying its key: the money
+    left the customer's card and pretix has never heard of it. And a payment
+    still waiting long after anyone could be standing at the counter: the till
+    was closed, or lost, or its battery went, while a reader had a basket on
+    it — nobody will ever poll it again, and it may or may not have been paid.
+
+    Neither is visible anywhere else. The takings are built from the journal,
+    so they cannot show a charge that never reached it; the only other record
+    is SumUp's own dashboard, read line by line against a statement days
+    later. This is the whole reason the screen has a section for it.
+
+    Read-only, and deliberately so: what to do about one of these is a
+    decision — refund it, or ring the sale up again — and not something a page
+    load should make.
+    """
+    from .models import PosTerminalPayment
+
+    payments = (
+        PosTerminalPayment.objects.filter(event=event, refunded__isnull=True)
+        .exclude(status=PosTerminalPayment.STATUS_FAILED)
+        .select_related("device")
+    )
+    stale = now() - UNRESOLVED_AFTER
+    candidates = [
+        payment
+        for payment in payments.order_by("-created")[:500]
+        if payment.status == PosTerminalPayment.STATUS_SUCCESSFUL
+        or payment.created < stale
+    ]
+    if not candidates:
+        return []
+
+    # One query for the journal side rather than one per row.
+    booked = set(
+        PosSale.objects.filter(
+            event=event,
+            idempotency_key__in=[payment.idempotency_key for payment in candidates],
+        ).values_list("idempotency_key", flat=True)
+    )
+    return [
+        {
+            "payment": payment,
+            "till": payment.device.name if payment.device else payment.device_serial,
+            # What a human has to decide about, said in the row itself.
+            "paid": payment.status == PosTerminalPayment.STATUS_SUCCESSFUL,
+        }
+        for payment in candidates
+        if payment.idempotency_key not in booked
+    ]
+
+
 class SalesView(EventPermissionRequiredMixin, ListView):
     """Journal of till sales, with the takings broken down per device."""
 
@@ -354,4 +421,5 @@ class SalesView(EventPermissionRequiredMixin, ListView):
         # Checked from an anchored checkpoint; `manage.py openpos_verify_journal`
         # is the full audit.
         ctx["tampered_with"] = PosSale.verify_chain_cached(self.request.event)
+        ctx["unresolved_card"] = unresolved_terminal_payments(self.request.event)
         return ctx

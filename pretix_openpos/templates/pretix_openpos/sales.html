@@ -73,6 +73,62 @@
         </div>
     </div>
 
+    {% comment %}
+        Card payments with no sale behind them. Nowhere else in pretix can show
+        these: the takings are built from the journal, and a charge that never
+        reached the journal is invisible there by construction. Left out on the
+        ordinary evening, so its presence means something.
+    {% endcomment %}
+    {% if unresolved_card %}
+        <div class="row">
+            <div class="col-md-12">
+                <h3>{% trans "Card payments with no sale" %}</h3>
+                <div class="alert alert-warning">
+                    {% blocktrans trimmed %}
+                        These payments were put on a reader and no sale was ever recorded against
+                        them. A paid one means a card was charged and pretix knows nothing about
+                        it: refund it in SumUp, or ring the sale up again. One still waiting was
+                        left open by a till that stopped polling — check in SumUp whether it went
+                        through before doing either.
+                    {% endblocktrans %}
+                </div>
+                <table class="table table-condensed">
+                    <thead>
+                    <tr>
+                        <th>{% trans "Date" %}</th>
+                        <th>{% trans "Till" %}</th>
+                        <th>{% trans "State" %}</th>
+                        <th>{% trans "SumUp reference" %}</th>
+                        <th class="text-right">{% trans "Amount" %}</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    {% for row in unresolved_card %}
+                        <tr>
+                            <td>{{ row.payment.created|date:"SHORT_DATETIME_FORMAT" }}</td>
+                            <td>{{ row.till|default:"—" }}</td>
+                            <td>
+                                {% if row.paid %}
+                                    <span class="label label-danger">{% trans "Charged" %}</span>
+                                {% else %}
+                                    <span class="label label-warning">{% trans "Still waiting" %}</span>
+                                {% endif %}
+                            </td>
+                            {% comment %}
+                                The transaction id is what the SumUp dashboard is searched by;
+                                before the cardholder answers there is none, and the checkout's
+                                own id is the only handle that exists.
+                            {% endcomment %}
+                            <td><code>{{ row.payment.transaction_id|default:row.payment.client_transaction_id|default:"—" }}</code></td>
+                            <td class="text-right">{{ row.payment.amount|money:currency }}</td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    {% endif %}
+
     <h3>
         {% trans "Journal" %}
         {# The whole journal, not the page: the takings recompute from this file. #}
