@@ -13,6 +13,8 @@ it comes back out as a sentence. They go through the real screens rather than
 calling ``log_action`` directly — a payload nobody writes is not worth
 rendering, and the pairing of the two is the thing that breaks.
 """
+from decimal import Decimal
+
 import pytest
 
 from pretix_openpos.models import PosDevice
@@ -218,4 +220,183 @@ def test_an_ordinary_sale_writes_no_off_tariff_entry(till, ticket, event):
     order = Order.objects.get(code=body["order"]["code"])
     assert not order.all_logentries().filter(
         action_type="pretix_openpos.order.off_tariff"
+    ).exists()
+
+
+# -- the upgrade that took the price list away ----------------------------
+#
+# Migration 0008 drops the table, and nothing can bring those rows back. What
+# it writes on the way out is the only copy, and it goes into the event's own
+# history rather than the container's startup log, because that is where the
+# person who wants it can actually reach it.
+#
+# The migration is driven directly here, with a stand-in for the table it
+# reads. It has to be: the unit suite builds its schema from the models, and
+# PosPrice is not a model any more — which is the whole point of the migration
+# and the reason this cannot be done by creating rows.
+
+class FakeRow:
+    """One row of the table as the migration sees it, through ``select_related``."""
+
+    def __init__(self, event, item, price, variation=None):
+        self.event = event
+        self.item = item
+        self.item_id = item.pk
+        self.variation = variation
+        self.variation_id = variation.pk if variation else None
+        self.price = price
+
+
+class FakeRows(list):
+    def select_related(self, *args):
+        return self
+
+    def order_by(self, *args):
+        return self
+
+
+class FakeApps:
+    """
+    ``apps`` as a ``RunPython`` gets it, with one model replaced.
+
+    Everything but PosPrice resolves to the real model, so the LogEntry this
+    writes is a real LogEntry, looked up afterwards through the same call the
+    control panel uses.
+    """
+
+    def __init__(self, rows):
+        self._rows = FakeRows(rows)
+
+    def get_model(self, app_label, model_name):
+        if (app_label, model_name) == ("pretix_openpos", "PosPrice"):
+            return type("PosPrice", (), {"objects": self._rows})
+        from django.apps import apps as installed
+
+        return installed.get_model(app_label, model_name)
+
+
+def drop_prices(rows):
+    """Run the migration's own function over ``rows``, as ``RunPython`` would."""
+    import importlib
+
+    # By name through importlib: "0008_..." is not an identifier, so there is
+    # no import statement that reaches this module.
+    migration = importlib.import_module(
+        "pretix_openpos.migrations.0008_remove_on_site_prices"
+    )
+    migration.say_what_is_being_dropped(FakeApps(rows), None)
+
+
+def removal(event):
+    return latest(event, "pretix_openpos.prices.removed")
+
+
+@pytest.mark.django_db
+def test_a_price_that_moves_is_named_with_both_figures(event, beer):
+    # Beer was 2.50 at the bar and is 3.00 in pretix, so the till's figure
+    # changes the moment this migration runs. That is the one thing the entry
+    # exists to say.
+    drop_prices([FakeRow(event, beer, Decimal("2.50"))])
+
+    shown = removal(event).display()
+
+    assert "Bière" in shown
+    assert "2.50" in shown and "3.00" in shown
+    assert "1" in shown
+
+
+@pytest.mark.django_db
+def test_a_price_that_does_not_move_is_counted_not_listed(event, beer, ticket):
+    # One product moves, one was already worth its pretix price. A list of
+    # products that stayed put is a haystack, so only the mover is named.
+    drop_prices([
+        FakeRow(event, beer, Decimal("2.50")),
+        FakeRow(event, ticket, Decimal("10.00")),
+    ])
+
+    shown = removal(event).display()
+
+    assert "Bière" in shown
+    assert "Entrée" not in shown
+
+
+@pytest.mark.django_db
+def test_nothing_moving_says_so_rather_than_listing_nothing(event, beer):
+    drop_prices([FakeRow(event, beer, Decimal("3.00"))])
+
+    shown = removal(event).display()
+
+    assert "None of them changed price" in shown
+
+
+@pytest.mark.django_db
+def test_a_variation_is_named_by_its_own_value(event, shirt):
+    # The variation carries its own default price (18), so naming the item's
+    # (15) would report the wrong replacement as well as the wrong name.
+    item, _small, large = shirt
+    drop_prices([FakeRow(event, item, Decimal("16.00"), variation=large)])
+
+    shown = removal(event).display()
+
+    assert "T-shirt" in shown and "L" in shown
+    assert "16.00" in shown and "18.00" in shown
+
+
+@pytest.mark.django_db
+def test_each_event_gets_its_own_entry(event, organizer, beer):
+    from pretix.base.models import Event, Item
+
+    other = Event.objects.create(
+        organizer=organizer, name="Autre", slug="autre",
+        date_from=event.date_from, plugins="pretix_openpos", currency="EUR",
+    )
+    other_beer = Item.objects.create(event=other, name="Bière", default_price=4)
+
+    drop_prices([
+        FakeRow(event, beer, Decimal("2.50")),
+        FakeRow(other, other_beer, Decimal("2.50")),
+    ])
+
+    # Two entries, each on its own event, each carrying only its own rows.
+    assert "3.00" in removal(event).display()
+    assert "4.00" in removal(other).display()
+
+
+@pytest.mark.django_db
+def test_an_empty_table_writes_no_entry_at_all(event):
+    drop_prices([])
+
+    assert not event.all_logentries().filter(
+        action_type="pretix_openpos.prices.removed"
+    ).exists()
+
+
+@pytest.mark.django_db
+def test_a_history_that_cannot_be_written_does_not_fail_the_upgrade(
+    event, beer, monkeypatch
+):
+    """
+    The entry is worth having. It is not worth a deployment.
+
+    An upgrade that dies here leaves the ticketing down for as long as it takes
+    somebody to work out why, and the list is already in the migration's own
+    output by the time this runs.
+    """
+    import importlib
+
+    migration = importlib.import_module(
+        "pretix_openpos.migrations.0008_remove_on_site_prices"
+    )
+
+    def explode(*args, **kwargs):
+        raise RuntimeError("this pretix keeps its history somewhere else")
+
+    monkeypatch.setattr(migration, "_write_history", explode)
+
+    migration.say_what_is_being_dropped(
+        FakeApps([FakeRow(event, beer, Decimal("2.50"))]), None
+    )
+
+    assert not event.all_logentries().filter(
+        action_type="pretix_openpos.prices.removed"
     ).exists()
