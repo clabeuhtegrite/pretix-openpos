@@ -16,6 +16,7 @@ import { describeError } from "./errors";
 import { t } from "./i18n";
 import { fromCents, toCents } from "./money";
 import { newNonce } from "./nonce";
+import { play, setSoundEnabled, soundEnabled, unlock } from "./sound";
 import {
   clearBasket, clearPairing, enqueue, loadBasket, loadCached, loadCashier, loadFailures,
   loadPairing, loadQueue, loadUpdateAttempt, requestPersistence, saveBasket, saveCached,
@@ -115,7 +116,13 @@ export default function App() {
   const [pairing, setPairing] = useState<Pairing | null>(loadPairing);
   const [config, setConfig] = useState<PosConfig | null>(null);
   const [catalog, setCatalog] = useState<Catalog | null>(null);
-  const [loadError, setLoadError] = useState<string | null>(null);
+  /**
+   * Why the till could not open, when it could not.
+   *
+   * `refused` is the server turning this device away — the only case where
+   * unpairing is the answer, and the only case that offers it.
+   */
+  const [loadError, setLoadError] = useState<{ text: string; refused: boolean } | null>(null);
 
   /**
    * The basket, restored if this till was interrupted mid-sale.
@@ -129,6 +136,7 @@ export default function App() {
   const [cart, setCart] = useState<CartLine[]>(() => restored?.cart ?? []);
   const [cashier, setCashier] = useState<string>(loadCashier);
   const [theme, setTheme] = useState<Theme>(loadTheme);
+  const [sound, setSound] = useState(soundEnabled);
   /** Read once at startup: the server version a previous reload already tried. */
   const [updateTried] = useState<string | null>(loadUpdateAttempt);
 
@@ -195,6 +203,23 @@ export default function App() {
   // What is queued is money that exists nowhere else yet; ask the browser not
   // to evict it.
   useEffect(requestPersistence, []);
+
+  /**
+   * Start the audio on the first tap, whatever that tap was.
+   *
+   * No browser will start an audio context outside a gesture, and the sound
+   * that matters most — a refused ticket at the door — arrives on a camera
+   * frame rather than a tap. So it is claimed at the first opportunity,
+   * whichever screen the operator happens to be on.
+   */
+  useEffect(() => {
+    const once = () => {
+      unlock();
+      window.removeEventListener("pointerdown", once);
+    };
+    window.addEventListener("pointerdown", once);
+    return () => window.removeEventListener("pointerdown", once);
+  }, []);
 
   /**
    * Keep the basket on disk, so a reload does not lose it.
@@ -308,7 +333,7 @@ export default function App() {
       // cache below: a revoked device selling from a stale catalogue would
       // only be refused again at the first sale, in front of a customer.
       if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
-        setLoadError(t("error.refused", { detail: err.message }));
+        setLoadError({ text: t("error.refused", { detail: err.message }), refused: true });
         return;
       }
 
@@ -319,7 +344,7 @@ export default function App() {
       // whole shape of the bug this replaced. It is also the one thing here
       // that somebody can fix in a minute from the back office.
       if (errorCode(err) === "series_closed") {
-        setLoadError(describeError(err));
+        setLoadError({ text: describeError(err), refused: false });
         return;
       }
 
@@ -334,7 +359,7 @@ export default function App() {
         setCatalog(cachedCatalog);
         return;
       }
-      setLoadError(describeError(err));
+      setLoadError({ text: describeError(err), refused: false });
     }
   }, []);
 
@@ -402,6 +427,9 @@ export default function App() {
   }
 
   function addProduct(product: Sellable) {
+    // Before the state update, not after: the point of the click is that the
+    // tap registered, whichever way the basket then goes.
+    play("add");
     setCart((current) => {
       const existing = current.find((line) => line.key === product.key);
       if (!existing) {
@@ -720,19 +748,26 @@ export default function App() {
       <div className="centered">
         <div className="panel">
           <h2>{t("error.title")}</h2>
-          <div className="error-banner">{loadError}</div>
+          <div className="error-banner">{loadError.text}</div>
           <button className="btn primary" onClick={() => void load(pairing)}>
             {t("error.retry")}
           </button>
-          <button
-            className="btn ghost"
-            style={{ marginTop: 10 }}
-            onClick={() => {
-              if (confirm(t("settings.unpairConfirm"))) unpair();
-            }}
-          >
-            {t("settings.unpair")}
-          </button>
+          {/* Only when the server has turned this device away. A till that
+              has merely lost the network is one retry from working, and
+              unpairing it costs a new code typed at the back office by
+              somebody who is not in the room — which is not a button to leave
+              under a volunteer's thumb at one in the morning. */}
+          {loadError.refused && (
+            <button
+              className="btn ghost"
+              style={{ marginTop: 10 }}
+              onClick={() => {
+                if (confirm(t("settings.unpairConfirm"))) unpair();
+              }}
+            >
+              {t("settings.unpair")}
+            </button>
+          )}
         </div>
       </div>
     );
@@ -952,6 +987,14 @@ export default function App() {
           onCashierChange={(name) => {
             setCashier(name);
             saveCashier(name);
+          }}
+          sound={sound}
+          onSoundChange={(on) => {
+            setSound(on);
+            setSoundEnabled(on);
+            // So the choice is heard the moment it is made, rather than at the
+            // next sale.
+            if (on) play("ok");
           }}
           onRefresh={() => {
             void load(pairing);

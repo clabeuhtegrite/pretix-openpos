@@ -2,11 +2,12 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { redeem, attendance, offlineSnapshot, searchAttendees, scanner } = vi.hoisted(() => ({
+const { redeem, attendance, offlineSnapshot, searchAttendees, scanner, play } = vi.hoisted(() => ({
   redeem: vi.fn(),
   attendance: vi.fn(),
   offlineSnapshot: vi.fn(),
   searchAttendees: vi.fn(),
+  play: vi.fn(),
   /** Handles on the scanner's props, so a test can put a code in front of it. */
   scanner: { decode: (_secret: string) => {}, close: () => {}, paused: false },
 }));
@@ -18,6 +19,8 @@ vi.mock("../api", async (importOriginal) => {
     api: { ...actual.api, redeem, attendance, offlineSnapshot, searchAttendees },
   };
 });
+
+vi.mock("../sound", () => ({ play }));
 
 // The camera has its own tests. Here it is a thing that hands over a decoded
 // string, reports whether it was told to hold, and renders what it is given.
@@ -427,6 +430,30 @@ describe("a refusal", () => {
 
     expect(vibrate).toHaveBeenCalled();
     Reflect.deleteProperty(navigator, "vibrate");
+  });
+
+  it("says no out loud, which is the only channel an iPhone has", async () => {
+    // The vibration above does nothing on iOS, and the door is all iPhones.
+    play.mockClear();
+    redeem.mockResolvedValue({ status: "error", reason: "invalid" });
+    show();
+
+    await scan();
+
+    expect(play).toHaveBeenCalledWith("refused");
+  });
+
+  it("says yes quietly too, so silence is not the answer to everything", async () => {
+    // With no sound at all on a good scan, the operator cannot tell a ticket
+    // that went through from one the camera never read, and the ticket gets
+    // presented twice.
+    play.mockClear();
+    show();
+
+    await scan();
+
+    expect(play).toHaveBeenCalledWith("ok");
+    expect(play).not.toHaveBeenCalledWith("refused");
   });
 
   it("does not buzz for somebody being let in", async () => {

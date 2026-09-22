@@ -2,7 +2,8 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { apiMock } = vi.hoisted(() => ({
+const { apiMock, sound } = vi.hoisted(() => ({
+  sound: { play: vi.fn(), unlock: vi.fn(), setSoundEnabled: vi.fn(), soundEnabled: vi.fn(() => true) },
   apiMock: {
     config: vi.fn(),
     catalog: vi.fn(),
@@ -26,6 +27,10 @@ vi.mock("./api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./api")>();
   return { ...actual, api: apiMock };
 });
+
+// The sounds have their own tests, and jsdom has no Web Audio anyway. Here it
+// is a thing that records what the till asked to be heard.
+vi.mock("./sound", () => sound);
 
 // No camera in jsdom, and the door has its own tests. What is kept is the
 // way out, so a test can close the door again.
@@ -139,14 +144,25 @@ function show() {
   return { user: userEvent.setup() };
 }
 
+/**
+ * A product button in the grid.
+ *
+ * Scoped there on purpose: a basket line's count button carries the product's
+ * name too — it has to, or a screen reader announces a bare number — so a
+ * search by name alone finds two buttons as soon as anything is in the basket.
+ */
+function tile(name: RegExp | string) {
+  return within(document.querySelector(".grid") as HTMLElement).getByRole("button", { name });
+}
+
 /** Wait until the catalogue is on screen. */
 async function ready() {
-  await screen.findByRole("button", { name: /Bière/ });
+  await waitFor(() => expect(document.querySelector(".grid .product")).not.toBeNull());
 }
 
 /** Ring up one beer and open the payment panel. */
 async function ringUp(user: ReturnType<typeof userEvent.setup>, product = /Bière/) {
-  await user.click(screen.getByRole("button", { name: product }));
+  await user.click(tile(product));
   await user.click(screen.getByRole("button", { name: t("sale.charge") }));
 }
 
@@ -326,6 +342,20 @@ describe("getting to the till", () => {
     declined.mockRestore();
   });
 
+  it("does not offer to unpair a till that has only lost the network", async () => {
+    // A till one retry from working, and a button whose price is a new code
+    // typed at the back office by somebody who is not in the room. This is a
+    // till that has never loaded, so there is no cache to fall back on.
+    apiMock.config.mockRejectedValue(new ApiError(0, "offline", true));
+    apiMock.catalog.mockRejectedValue(new ApiError(0, "offline", true));
+    show();
+
+    await screen.findByText(t("error.offline"));
+
+    expect(screen.queryByRole("button", { name: t("settings.unpair") })).toBeNull();
+    expect(screen.getByRole("button", { name: t("error.retry") })).toBeDefined();
+  });
+
   it("opens on what it was last told when the server is unreachable", async () => {
     // A till that had been here before must not become a brick mid-evening.
     const { user } = show();
@@ -351,12 +381,67 @@ describe("getting to the till", () => {
   });
 });
 
+describe("hearing the till", () => {
+  it("clicks when a product goes in the basket", async () => {
+    // A cashier ringing up a round is looking at the customer, not at the
+    // screen. The click is how they know the tap took.
+    sound.play.mockClear();
+    const { user } = show();
+    await ready();
+
+    await user.click(tile(/Bière/));
+
+    expect(sound.play).toHaveBeenCalledWith("add");
+  });
+
+  it("starts the audio on the first tap, whatever that tap was", async () => {
+    // No browser will open an audio context outside a gesture, and a refused
+    // ticket at the door arrives on a camera frame rather than a tap.
+    sound.unlock.mockClear();
+    const { user } = show();
+    await ready();
+
+    await user.click(screen.getByRole("tab", { name: "Bar" }));
+
+    expect(sound.unlock).toHaveBeenCalled();
+  });
+
+  it("remembers being told to keep quiet", async () => {
+    const { user } = show();
+    await ready();
+    await user.click(screen.getByRole("button", { name: "settings" }));
+
+    await user.click(await screen.findByRole("button", { name: t("settings.soundOff") }));
+
+    expect(sound.setSoundEnabled).toHaveBeenCalledWith(false);
+  });
+
+  it("says something the moment sound is switched back on", async () => {
+    // Otherwise the operator has to ring a sale up to find out whether the
+    // switch did anything.
+    apiMock.summary.mockResolvedValue({
+      since: "2026-08-16T04:00:00Z", device: null,
+      event: { count: 0, cancellations: 0, cash: "0.00", card: "0.00", total: "0.00" },
+    });
+    const { user } = show();
+    await ready();
+    await user.click(screen.getByRole("button", { name: "settings" }));
+    await user.click(await screen.findByRole("button", { name: t("settings.soundOff") }));
+    sound.play.mockClear();
+
+    await user.click(screen.getByRole("button", { name: t("settings.soundOn") }));
+
+    expect(sound.setSoundEnabled).toHaveBeenLastCalledWith(true);
+    expect(sound.play).toHaveBeenCalledWith("ok");
+  });
+});
+
 describe("the basket", () => {
   it("takes a product on a tap", async () => {
     const { user } = show();
     await ready();
 
-    await user.click(screen.getByRole("button", { name: /Bière/ }));
+    await user.click(tile(/Bière/));
 
     expect(screen.getByRole("button", { name: t("sale.charge") })).toHaveProperty(
       "disabled", false,
@@ -367,8 +452,8 @@ describe("the basket", () => {
     const { user } = show();
     await ready();
 
-    await user.click(screen.getByRole("button", { name: /Bière/ }));
-    await user.click(screen.getByRole("button", { name: /Bière/ }));
+    await user.click(tile(/Bière/));
+    await user.click(tile(/Bière/));
 
     expect(screen.getByText("2")).toBeDefined();
   });
@@ -379,9 +464,9 @@ describe("the basket", () => {
     const { user } = show();
     await ready();
 
-    await user.click(screen.getByRole("button", { name: /Vin/ }));
-    await user.click(screen.getByRole("button", { name: /Vin/ }));
-    await user.click(screen.getByRole("button", { name: /Vin/ }));
+    await user.click(tile(/Vin/));
+    await user.click(tile(/Vin/));
+    await user.click(tile(/Vin/));
 
     expect(screen.getByText("2")).toBeDefined();
   });
@@ -389,7 +474,7 @@ describe("the basket", () => {
   it("drops a line taken down to nothing", async () => {
     const { user } = show();
     await ready();
-    await user.click(screen.getByRole("button", { name: /Bière/ }));
+    await user.click(tile(/Bière/));
 
     await user.click(screen.getByRole("button", { name: "−" }));
 
@@ -399,7 +484,7 @@ describe("the basket", () => {
   it("empties on the clear button", async () => {
     const { user } = show();
     await ready();
-    await user.click(screen.getByRole("button", { name: /Bière/ }));
+    await user.click(tile(/Bière/));
 
     await user.click(screen.getByRole("button", { name: t("sale.clear") }));
 
@@ -568,8 +653,10 @@ describe("the two buttons that are not products", () => {
       deposit: { enabled: true, item: 31, name: "Consigne", price: "1.00" },
     });
 
-  const tile = (key: "custom.tile" | "deposit.tile") =>
-    screen.getByRole("button", { name: new RegExp(t(key)) });
+  const extraTile = (key: "custom.tile" | "deposit.tile") =>
+    within(document.querySelector(".grid") as HTMLElement).getByRole("button", {
+      name: new RegExp(t(key)),
+    });
 
   it("shows neither until the organiser has set one up", async () => {
     show();
@@ -584,7 +671,7 @@ describe("the two buttons that are not products", () => {
     const { user } = show();
     await ready();
 
-    await user.click(tile("custom.tile"));
+    await user.click(extraTile("custom.tile"));
     for (const digit of "1250") {
       await user.click(screen.getByRole("button", { name: digit }));
     }
@@ -611,7 +698,7 @@ describe("the two buttons that are not products", () => {
     const { user } = show();
     await ready();
 
-    await user.click(tile("custom.tile"));
+    await user.click(extraTile("custom.tile"));
     await user.click(screen.getByRole("button", { name: "5" }));
     await user.click(screen.getByRole("button", { name: "00" }));
     await user.type(screen.getByLabelText(t("custom.reason")), "Don");
@@ -628,9 +715,9 @@ describe("the two buttons that are not products", () => {
     await ready();
 
     // Two beers at 3 €, three cups back at 1 €.
-    await user.click(screen.getByRole("button", { name: /Bière/ }));
-    await user.click(screen.getByRole("button", { name: /Bière/ }));
-    for (let i = 0; i < 3; i += 1) await user.click(tile("deposit.tile"));
+    await user.click(tile(/Bière/));
+    await user.click(tile(/Bière/));
+    for (let i = 0; i < 3; i += 1) await user.click(extraTile("deposit.tile"));
     await user.click(screen.getByRole("button", { name: t("sale.charge") }));
     await confirm(user);
 
@@ -662,8 +749,8 @@ describe("the two buttons that are not products", () => {
     const { user } = show();
     await ready();
 
-    await user.click(tile("deposit.tile"));
-    await user.click(tile("deposit.tile"));
+    await user.click(extraTile("deposit.tile"));
+    await user.click(extraTile("deposit.tile"));
     await user.click(screen.getByRole("button", { name: t("sale.charge") }));
 
     // Nothing to take, so nothing to type: the panel says what to count out.
@@ -687,8 +774,8 @@ describe("the two buttons that are not products", () => {
     const { user } = show();
     await ready();
 
-    await user.click(screen.getByRole("button", { name: /Bière/ }));
-    await user.click(tile("deposit.tile"));
+    await user.click(tile(/Bière/));
+    await user.click(extraTile("deposit.tile"));
     await user.click(screen.getByRole("button", { name: t("sale.charge") }));
     await confirm(user);
 
@@ -956,7 +1043,7 @@ describe("a new build on the server", () => {
     const { user } = show();
     await ready();
 
-    await user.click(screen.getByRole("button", { name: /Bière/ }));
+    await user.click(tile(/Bière/));
 
     expect(screen.queryByRole("button", { name: t("update.reload") })).toBeNull();
   });
@@ -1024,7 +1111,7 @@ describe("keeping the tariff current", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const { user } = show();
     await ready();
-    await user.click(screen.getByRole("button", { name: /Bière/ }));
+    await user.click(tile(/Bière/));
     apiMock.catalog.mockClear();
 
     await act(async () => {
@@ -1098,7 +1185,7 @@ describe("correcting a sale", () => {
     await user.click(await screen.findByRole("button", { name: t("history.correct") }));
 
     await user.click(screen.getByRole("button", { name: t("sale.clear") }));
-    await user.click(screen.getByRole("button", { name: /Bière/ }));
+    await user.click(tile(/Bière/));
     await user.click(screen.getByRole("button", { name: t("sale.charge") }));
 
     expect(screen.queryByText(new RegExp(t("payment.stillDue")))).toBeNull();
@@ -1140,7 +1227,7 @@ describe("the settings", () => {
     });
     const { user } = show();
     await ready();
-    await user.click(screen.getByRole("button", { name: /Bière/ }));
+    await user.click(tile(/Bière/));
 
     await user.click(screen.getByRole("button", { name: "settings" }));
     await user.selectOptions(await screen.findByLabelText(t("settings.event")), "gala");
@@ -1400,7 +1487,7 @@ describe("what a device is for", () => {
     await user.click(await screen.findByRole("button", { name: t("done.next") }));
 
     expect(screen.queryByRole("heading", { name: t("checkin.title") })).toBeNull();
-    expect(screen.getByRole("button", { name: /Bière/ })).toBeDefined();
+    expect(tile(/Bière/)).toBeDefined();
   });
 
   it("does not offer a door that only the scanner button knows about", async () => {
@@ -1598,7 +1685,7 @@ describe("a till that was interrupted mid-sale", () => {
     const { user } = show();
     await ready();
 
-    await user.click(screen.getByRole("button", { name: /Bière/ }));
+    await user.click(tile(/Bière/));
 
     await waitFor(() => expect(loadBasket("festival")?.cart).toHaveLength(1));
   });
@@ -1662,7 +1749,7 @@ describe("emptying the basket", () => {
     const { user } = show();
     await ready();
 
-    await user.click(screen.getByRole("button", { name: /Bière/ }));
+    await user.click(tile(/Bière/));
     await user.click(screen.getByRole("button", { name: t("sale.clear") }));
 
     expect(confirmSpy).not.toHaveBeenCalled();

@@ -48,6 +48,7 @@ function show(props: Partial<Parameters<typeof SettingsPanel>[0]> = {}) {
   const handlers = {
     onCashierChange: vi.fn(),
     onThemeChange: vi.fn(),
+    onSoundChange: vi.fn(),
     onRefresh: vi.fn(),
     onUnpair: vi.fn(),
     onClose: vi.fn(),
@@ -59,6 +60,7 @@ function show(props: Partial<Parameters<typeof SettingsPanel>[0]> = {}) {
       currency="EUR"
       cashier="Ana"
       theme="system"
+      sound
       {...handlers}
       {...props}
     />,
@@ -110,6 +112,39 @@ describe("the appearance", () => {
     for (const label of ["settings.themeSystem", "settings.themeLight", "settings.themeDark"] as const) {
       expect(screen.getByRole("button", { name: t(label) })).toBeDefined();
     }
+  });
+});
+
+describe("the sound", () => {
+  it("shows whether the till is making any", () => {
+    show({ sound: false });
+
+    expect(screen.getByRole("button", { name: t("settings.soundOff"), pressed: true })).toBeDefined();
+    expect(screen.getByRole("button", { name: t("settings.soundOn"), pressed: false })).toBeDefined();
+  });
+
+  it("turns it off", async () => {
+    const { user, onSoundChange } = show({ sound: true });
+
+    await user.click(screen.getByRole("button", { name: t("settings.soundOff") }));
+
+    expect(onSoundChange).toHaveBeenCalledWith(false);
+  });
+
+  it("turns it back on", async () => {
+    const { user, onSoundChange } = show({ sound: false });
+
+    await user.click(screen.getByRole("button", { name: t("settings.soundOn") }));
+
+    expect(onSoundChange).toHaveBeenCalledWith(true);
+  });
+
+  it("says why a door would want it", async () => {
+    // An iPhone cannot vibrate in a browser; this is the whole reason the
+    // setting exists, and the one thing the operator cannot work out alone.
+    show();
+
+    expect(screen.getByText(t("settings.soundHelp"))).toBeDefined();
   });
 });
 

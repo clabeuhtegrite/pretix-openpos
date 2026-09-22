@@ -600,6 +600,20 @@ describe("on a till with a card reader of its own", () => {
     expect(screen.getByText(t("payment.readerPrompt"))).toBeDefined();
   });
 
+  it("does not say the same figure twice when the reader agrees with the basket", async () => {
+    // Which is every ordinary sale. "Due 12,34 €" directly above "On the
+    // reader 12,34 €" is one number wearing two labels, on the row the cashier
+    // reads out — and a row that is always there is a row nobody reads when it
+    // finally says something different.
+    const { user } = show({ cardMode: "terminal", terminal: waiting }, null);
+
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+
+    expect(screen.getAllByText(formatMoney(1234, "EUR"))).toHaveLength(1);
+    expect(screen.queryByText(t("payment.readerAsking"))).toBeNull();
+    expect(screen.getByText(t("payment.readerPrompt"))).toBeDefined();
+  });
+
   it("says the payment carries on when it loses the server", async () => {
     // The one thing that must never be shown here is a refusal for a card
     // that is in fact being charged.

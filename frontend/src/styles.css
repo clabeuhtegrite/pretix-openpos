@@ -27,18 +27,21 @@
   --border: #2f3849;
   --text: #eef2f8;
   --text-dim: #9aa7bd;
-  --accent: #3b82f6;
-  --accent-strong: #2563eb;
+  --accent: #2563eb;
+  --accent-strong: #1d4ed8;
   --success: #22c55e;
   --success-strong: #16a34a;
   --danger: #ef4444;
   --warning: #f59e0b;
 
-  /* Ink versions of the three above. On a dark surface the fill already reads
-     as text, so these are the same colour. */
+  /* Ink versions of the fills above. On a dark surface the green, the amber
+     and the red already read as text, so those three are the same colour; the
+     blue is not, because it had to be darkened until white lettering could sit
+     on it, and a blue that dark is unreadable as ink on a dark screen. */
+  --accent-text: #60a5fa;
   --success-text: #22c55e;
   --warning-text: #f59e0b;
-  --danger-text: #ef4444;
+  --danger-text: #f87171;
   /* Ink on the red wash rather than on the page: the wash is already red. */
   --danger-on-tint: #fecaca;
 
@@ -86,6 +89,7 @@
     --danger: #ef4444;
     --warning: #f59e0b;
 
+    --accent-text: #1d4ed8;
     --success-text: #15803d;
     --warning-text: #a4600a;
     --danger-text: #b42318;
@@ -116,6 +120,7 @@
   --danger: #ef4444;
   --warning: #f59e0b;
 
+  --accent-text: #1d4ed8;
   --success-text: #15803d;
   --warning-text: #a4600a;
   --danger-text: #b42318;
@@ -335,6 +340,9 @@ button {
   border: 1px solid var(--border);
   text-align: left;
   transition: transform 0.06s ease;
+  /* Both for the picture below, which is laid over the tile and clipped by it. */
+  position: relative;
+  overflow: hidden;
 }
 
 .product:active {
@@ -344,6 +352,39 @@ button {
 
 .product:disabled {
   opacity: 0.4;
+}
+
+/*
+ * The photograph the organiser has already uploaded to pretix.
+ *
+ * A name is read; a bottle is recognised, and recognising is faster than
+ * reading when there is a queue.
+ *
+ * It comes in from the right-hand edge and fades out before it reaches the
+ * text, rather than sitting above it as a band. That is what keeps the tile
+ * the height it has always been: a grid that grows a third taller to carry
+ * photographs is a grid the cashier now has to scroll, which costs more on a
+ * busy evening than the photographs are worth. The name and the price keep a
+ * clean background to be read on, which is the other half of the same choice.
+ *
+ * A background rather than an <img> on purpose: see the comment in
+ * SaleScreen.tsx. When it cannot load, nothing shows and nothing moves.
+ */
+.product .thumb {
+  position: absolute;
+  inset: 0 0 0 45%;
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 60%);
+  mask-image: linear-gradient(to right, transparent, #000 60%);
+}
+
+/* Above the picture, whatever the order in the markup. */
+.product .name,
+.product .price,
+.product .stock {
+  position: relative;
 }
 
 .product .name {
@@ -380,7 +421,7 @@ button {
 }
 
 .product.is-action .price {
-  color: var(--accent);
+  color: var(--accent-text);
 }
 
 /* Money going the other way, and the amber the till uses everywhere else for
@@ -407,8 +448,19 @@ button {
 
 /* ---------- cart ---------- */
 
+/*
+ * A share of the screen rather than a fixed strip.
+ *
+ * 340px was written against one tablet. On the iPads actually behind the bar
+ * it is between a quarter and a third of the width, and on the widest of them
+ * that strip stays the same while the grid gets everything — so the basket
+ * ends up with a product name broken over three lines beside an acre of empty
+ * column. The clamp keeps it readable at both ends: never so narrow that a
+ * price and a stepper cannot sit side by side, never so wide that it is taking
+ * room from the thing being tapped.
+ */
 .cart {
-  flex: 0 0 340px;
+  flex: 0 0 clamp(320px, 30%, 420px);
   display: flex;
   flex-direction: column;
   background: var(--surface);
@@ -437,10 +489,27 @@ button {
   color: var(--text-dim);
 }
 
+/*
+ * Two rows beside the grid, one row underneath it.
+ *
+ * Beside the grid the basket is a column of about 340px, and a product name
+ * competing with a stepper and a price on the same line had 130px to do it in:
+ * "Bière pression 25cl" came out over three lines, at which point neither the
+ * name nor the quantity could be read at a glance. Giving the name the whole
+ * width and putting the controls under it costs about 30px of height per line
+ * and buys back the thing the operator is checking before they take the money.
+ *
+ * Stacked under the grid — a phone — the basket is as wide as the screen and
+ * the single row was never the problem, so the rule below puts it back.
+ */
 .line {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  grid-template-areas:
+    "label   label"
+    "stepper amount";
   align-items: center;
-  gap: 10px;
+  gap: 4px 10px;
   padding: 8px;
   border-radius: 10px;
 }
@@ -450,9 +519,17 @@ button {
 }
 
 .line .label {
-  flex: 1;
+  grid-area: label;
   min-width: 0;
   line-height: 1.25;
+}
+
+.line .stepper {
+  grid-area: stepper;
+}
+
+.line .amount {
+  grid-area: amount;
 }
 
 .line .label small {
@@ -474,20 +551,80 @@ button {
   gap: 2px;
 }
 
+/* 40px was under the 44 this app asks of everything else, on the one control
+   that exists to correct a mis-tap — so the button for fixing a mistake was
+   the easiest one on screen to get wrong. The name above no longer competes
+   for the width, so there is room to make it the size it should have been. */
 .stepper button {
-  width: 40px;
-  height: 40px;
+  width: 48px;
+  height: 48px;
   border-radius: 8px;
   background: var(--surface-2);
   font-size: 20px;
   font-weight: 700;
 }
 
+/* The count is a button now: tapping it asks how many, which is one gesture
+   instead of five for a round of six. Outlined rather than filled, so it reads
+   as the value it is and not as a third arrow between the two. */
 .stepper .count {
-  min-width: 32px;
+  width: auto;
+  min-width: 56px;
+  height: 48px;
+  padding: 0 10px;
+  background: transparent;
+  border: 1px solid var(--border);
   text-align: center;
+  font-size: 18px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
+}
+
+/*
+ * How many, asked once.
+ *
+ * The numbers a bar actually rings up, each of them a single tap that sets the
+ * line and closes: no confirm step, because the number IS the answer and a
+ * wrong one is one more tap away from being right. Bigger targets than the
+ * keypad's, since this is the screen an operator uses mid-service with a
+ * queue in front of them.
+ */
+/* Two class names, so this wins over .panel's own width rather than depending
+   on which of the two comes last in the file. */
+.panel.quantity-panel {
+  width: min(420px, 100%);
+}
+
+.quantity-label {
+  margin: -8px 0 16px;
+  color: var(--text-dim);
+}
+
+.quantity-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.quantity-grid button {
+  min-height: 64px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: 22px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.quantity-grid button.is-current {
+  background: var(--accent-strong);
+  color: var(--on-fill);
+}
+
+/* Past what the quota allows. Dimmed rather than gone, so the row of numbers
+   keeps its shape and the operator can see where the stock stops. */
+.quantity-grid button:disabled {
+  opacity: 0.35;
 }
 
 .cart-footer {
@@ -657,15 +794,27 @@ button {
   color: var(--danger-text);
 }
 
+/*
+ * Four rows of three, sized between a comfortable key and the smallest one a
+ * thumb can still be trusted with.
+ *
+ * Both numbers live here because the panel below sizes itself from them: the
+ * keypad is the one part of an encaissement that can give height back, so a
+ * screen that is sixty points short takes it out of the keys rather than out
+ * of the row that says what to hand back.
+ */
 .keypad {
+  --key: 64px;
+  --key-min: 44px;
+  --key-gap: 10px;
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
+  gap: var(--key-gap);
   margin: 14px 0;
 }
 
 .keypad button {
-  min-height: 64px;
+  min-height: var(--key);
   border-radius: var(--radius);
   background: var(--surface-2);
   font-size: 24px;
@@ -718,6 +867,37 @@ button {
   min-height: 0;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+  display: flex;
+  flex-direction: column;
+}
+
+/*
+ * The keypad takes whatever height is left, and nothing else gives any up.
+ *
+ * With every row at a fixed 64px the panel had one height, and screens do not:
+ * an iPad mini in landscape is 744 points tall, about sixty short, so the last
+ * row — 00, 0, and the key that clears a wrong amount — sat under the pinned
+ * Back/Confirm bar and had to be scrolled to, one-handed, with a customer
+ * holding out a note. Letting the keypad flex fits it on the short screens and
+ * makes the keys bigger than they were on the tall ones. 44px is the floor,
+ * not the size: below that the body scrolls, which is honest, rather than
+ * shrinking a digit to something nobody can hit.
+ */
+.pay-panel .pay-body > * {
+  flex: none;
+}
+
+.pay-panel .pay-body > .keypad {
+  /* Preferred height first, floor second: the keys are 64px wherever the
+     screen allows it, and only a screen that cannot hold that takes them
+     down towards 44. Below the floor the body scrolls, as before. */
+  flex: 0 1 calc(4 * var(--key) + 3 * var(--key-gap));
+  min-height: calc(4 * var(--key-min) + 3 * var(--key-gap));
+  grid-template-rows: repeat(4, minmax(var(--key-min), 1fr));
+}
+
+.pay-panel .keypad button {
+  min-height: var(--key-min);
 }
 
 /* Negative margins so the rule sits edge to edge across the panel rather than
@@ -734,9 +914,115 @@ button {
   padding-top: 0;
 }
 
-.pay-panel .pay-buttons {
+/* A row of buttons at the foot of a panel. Named after the payment panel it
+   started in; the quantity pad uses the same row. */
+.pay-buttons {
   display: flex;
   gap: 10px;
+}
+
+/*
+ * ---------- the card reader's half of the panel ----------
+ *
+ * These three class names have been in the markup since the reader was wired
+ * up and had no rules at all behind them: the whole card flow rendered as
+ * default paragraphs. It did not look broken, which is why it lasted — the
+ * amount came from .amount-display and the refusal from .error-banner, so the
+ * only unstyled parts were the two that matter most and are read at a glance
+ * rather than word by word: the moment the money arrives, and the warning that
+ * the till has lost the server mid-payment.
+ */
+.pay-reader {
+  margin: 6px 0 0;
+  padding: 16px 18px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  line-height: 1.4;
+}
+
+.pay-reader .amount-display {
+  padding-top: 0;
+}
+
+.pay-reader-prompt {
+  margin: 0;
+  font-size: 18px;
+}
+
+/*
+ * Something is happening at the other end of a cable nobody can see.
+ *
+ * A bar of light rather than a spinner: it reads from across the counter, and
+ * it is the one place in this app where a wait is somebody else's — the
+ * customer's hand, the reader, the network — so the screen has to look alive
+ * for as long as it lasts, or the cashier starts pressing things.
+ */
+.pay-reader.is-waiting::before {
+  content: "";
+  display: block;
+  height: 4px;
+  margin-bottom: 14px;
+  border-radius: 999px;
+  background:
+    linear-gradient(90deg, transparent 0 25%, var(--accent-text) 25% 75%, transparent 75% 100%)
+    0 0 / 250% 100% no-repeat,
+    var(--border);
+  animation: reader-wait 1.6s linear infinite;
+}
+
+@keyframes reader-wait {
+  from {
+    background-position: -150% 0;
+  }
+  to {
+    background-position: 150% 0;
+  }
+}
+
+/* Somebody has told their phone that motion makes them ill; a till is not the
+   place to argue. The bar stays, it simply stops moving. */
+@media (prefers-reduced-motion: reduce) {
+  .pay-reader.is-waiting::before {
+    animation: none;
+    background: var(--accent-text);
+  }
+}
+
+/*
+ * The money is in. Loud, because everything after it is the cashier's job
+ * again — hand the card back, hand the drinks over — and because a line of
+ * body text saying "Paiement accepté." was indistinguishable from the line
+ * that had been asking for the card a second earlier.
+ */
+.pay-reader.paid::before {
+  /* A statement, not a button: the confirm button below it is also green, and
+     at a glance two green blocks look like two things to press. */
+  content: "✓ ";
+}
+
+.pay-reader.paid {
+  margin-top: 6px;
+  background: var(--tint-success);
+  border-color: var(--success-text);
+  color: var(--success-text);
+  font-size: 22px;
+  font-weight: 800;
+  text-align: center;
+}
+
+/* The till has lost the server while the reader still has the customer's card.
+   Amber and boxed, like every other "this is not over" in the app: what it is
+   really saying is do not take this money twice. */
+.pay-reader-note {
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--tint-warning);
+  border: 1px solid var(--warning-text);
+  color: var(--warning-text);
+  font-size: 15px;
+  font-weight: 700;
 }
 
 /* ---------- done screen ---------- */
@@ -850,7 +1136,7 @@ button {
 }
 
 .field input:focus {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--accent-text);
   outline-offset: -1px;
 }
 
@@ -1461,6 +1747,25 @@ table.takings thead th {
   color: var(--warning-text);
 }
 
+/*
+ * A sale that has since been reversed.
+ *
+ * It used to say so in the meta line, in thirteen-point grey, while its amount
+ * stayed in the same white as every sale that did happen. The column then read
+ * as takings that were never taken — and the person most likely to total that
+ * column is the volunteer counting the drawer at two in the morning. Struck
+ * through, it reads as reversed before any figure is compared.
+ */
+.history-row.is-cancelled .history-row-order,
+.history-row.is-cancelled .history-row-total {
+  text-decoration: line-through;
+}
+
+.history-row.is-cancelled .history-row-total {
+  color: var(--text-dim);
+  font-weight: 600;
+}
+
 .history-detail-head {
   margin-bottom: 12px;
 }
@@ -1685,12 +1990,9 @@ table.takings thead th {
   }
 
   .pay-panel .keypad {
-    gap: 8px;
+    --key: 56px;
+    --key-gap: 8px;
     margin: 10px 0 0;
-  }
-
-  .pay-panel .keypad button {
-    min-height: 56px;
   }
 
   .pay-panel .quick-tender {
@@ -1708,10 +2010,27 @@ table.takings thead th {
   }
 }
 
-/* Portrait phones: the basket moves below the grid rather than squeezing it. */
-@media (max-width: 720px) {
+/*
+ * Held upright: the basket moves below the grid rather than squeezing it.
+ *
+ * The width test alone stranded every tablet. An iPad in portrait is 744 to
+ * 1024 points wide, so it kept the side-by-side layout and gave the grid two
+ * columns next to a basket column a thousand pixels tall and empty — the worst
+ * of both, on a screen that has height to spare and wants the width. Asking
+ * the orientation instead catches them, and leaves a phone in landscape where
+ * it was, beside the grid.
+ */
+@media (max-width: 720px), (orientation: portrait) {
   .workspace {
     flex-direction: column;
+  }
+
+  /* As wide as the screen: the name never had to fight the stepper here, and
+     one row per line fits three more of them above the fold. */
+  .line {
+    grid-template-columns: 1fr auto auto;
+    grid-template-areas: "label stepper amount";
+    gap: 10px;
   }
 
   .cart {
@@ -1790,5 +2109,80 @@ table.takings thead th {
   .product {
     min-height: 84px;
     padding: 12px;
+  }
+}
+
+/*
+ * Short and wide: a phone held in landscape, or a tablet in a stand.
+ *
+ * About 340px of panel for a title, a question, two amounts, a keypad and a
+ * pinned Back/Confirm bar. The keypad already gives up what height it can — it
+ * is down to its 44px floor here — so the rest of the panel gives up the
+ * padding instead: the frame around the panel, the title over it, and the bar
+ * under it. That is the difference between a keypad with a row and a half on
+ * screen and one with three.
+ *
+ * Deliberately every panel and not only this one: a settings screen or a
+ * journal on a screen this short is in exactly the same bind.
+ */
+@media (max-height: 560px) and (min-width: 481px) {
+  .overlay,
+  .centered {
+    padding: calc(8px + env(safe-area-inset-top)) calc(12px + env(safe-area-inset-right))
+      calc(8px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left));
+  }
+
+  .panel {
+    padding: 16px 20px;
+  }
+
+  .panel h2 {
+    font-size: 18px;
+    margin-bottom: 10px;
+  }
+
+  .pay-panel {
+    padding: 16px 20px 0;
+  }
+
+  .pay-panel .pay-toggle {
+    margin-bottom: 10px;
+  }
+
+  .pay-panel .amount-display {
+    padding: 6px 0;
+  }
+
+  .pay-panel .keypad {
+    --key-gap: 8px;
+    margin: 8px 0 0;
+  }
+
+  .pay-panel .quick-tender {
+    margin-bottom: 8px;
+  }
+
+  .pay-panel .quick-tender button {
+    min-height: 48px;
+  }
+
+  .pay-panel .pay-actions {
+    margin: 0 -20px;
+    padding: 8px 20px 12px;
+  }
+
+  /* Still the two things that must never be a scroll away, so they keep a
+     target a thumb can find; everything above them is what gave way. */
+  .pay-panel .pay-actions .btn {
+    min-height: 52px;
+  }
+
+  .quantity-grid {
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  .quantity-grid button {
+    min-height: 48px;
   }
 }

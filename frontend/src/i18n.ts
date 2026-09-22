@@ -31,6 +31,10 @@ export const MESSAGES = {
       "This basket carries the {order} credit. Emptying it drops the credit too, and the customer is owed that money. Empty it anyway?",
     "sale.soldOut": "Sold out",
     "sale.left": "{n} left",
+    "sale.all": "All",
+    "sale.quantity": "How many?",
+    "sale.quantityOf": "{label}, currently {n}",
+    "sale.remove": "Remove",
     "custom.tile": "Free amount",
     "custom.title": "Free amount",
     "custom.reason": "What for?",
@@ -102,6 +106,11 @@ export const MESSAGES = {
     "settings.themeDark": "Dark",
     "settings.themeHelp":
       "Dark does not glare in a dim room; light stays readable in daylight. “System” follows the tablet.",
+    "settings.sound": "Sound",
+    "settings.soundOn": "On",
+    "settings.soundOff": "Off",
+    "settings.soundHelp":
+      "A short click on each product, and two low notes when a ticket is refused at the door. iPhones cannot vibrate in a browser, so sound is the only way to hear a refusal without looking up. It plays even with the ringer switch off.",
     "update.reload": "New version — reload",
     "error.offline": "No connection to the server.",
     "error.refused":
@@ -290,6 +299,10 @@ export const MESSAGES = {
       "Ce panier porte l’avoir de {order}. Le vider supprime aussi l’avoir, et cet argent est dû au client. Vider quand même ?",
     "sale.soldOut": "Épuisé",
     "sale.left": "{n} restants",
+    "sale.all": "Tout",
+    "sale.quantity": "Combien ?",
+    "sale.quantityOf": "{label}, actuellement {n}",
+    "sale.remove": "Retirer",
     "custom.tile": "Montant libre",
     "custom.title": "Montant libre",
     "custom.reason": "À quel titre ?",
@@ -362,6 +375,11 @@ export const MESSAGES = {
     "settings.themeDark": "Sombre",
     "settings.themeHelp":
       "Le sombre n’éblouit pas dans une salle peu éclairée ; le clair reste lisible en plein jour. « Système » suit la tablette.",
+    "settings.sound": "Son",
+    "settings.soundOn": "Activé",
+    "settings.soundOff": "Coupé",
+    "settings.soundHelp":
+      "Un clic court à chaque produit, et deux notes graves quand un billet est refusé à la porte. Les iPhone ne peuvent pas vibrer dans un navigateur : le son est le seul moyen d’entendre un refus sans lever les yeux. Il sonne même si le téléphone est en silencieux.",
     "update.reload": "Nouvelle version — recharger",
     "error.offline": "Pas de connexion au serveur.",
     "error.refused":

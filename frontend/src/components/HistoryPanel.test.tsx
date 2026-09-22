@@ -123,13 +123,27 @@ describe("the list", () => {
   });
 
   it("marks a sale that has since been reversed", async () => {
-    show();
+    // Not only in the meta line: the amount itself has to read as money that
+    // was never taken, or the column totals up as takings at two in the
+    // morning.
     history.mockResolvedValue({
       device: "TILL1", results: [saleLine({ cancelled: true, can_cancel: false })], truncated: false,
     });
+    show();
 
     const row = await screen.findByRole("button", { name: /POS01/ });
-    await waitFor(() => expect(within(row).queryByText(/#12/)).toBeDefined());
+    expect(within(row).getByText(new RegExp(t("history.badgeCancelled")))).toBeDefined();
+    expect(row.className).toContain("is-cancelled");
+  });
+
+  it("leaves a sale that still stands alone", async () => {
+    history.mockResolvedValue({
+      device: "TILL1", results: [saleLine()], truncated: false,
+    });
+    show();
+
+    const row = await screen.findByRole("button", { name: /POS01/ });
+    expect(row.className).not.toContain("is-cancelled");
   });
 
   it("marks the reversal itself, and says what it reverses", async () => {

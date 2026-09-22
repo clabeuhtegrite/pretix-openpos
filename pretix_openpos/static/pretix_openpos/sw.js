@@ -10,8 +10,16 @@
  *
  * It never caches anything under /api/. A cached catalogue would show stale
  * prices, and a cached sale would be a disaster.
+ *
+ * Product pictures are the one exception, and they get their own cache. They
+ * are not the shell, they are large, and their names carry a uuid, so they
+ * never go stale and they must not be thrown away every time the app is
+ * rebuilt. Only /media/pub/ is touched, which is where pretix puts the files
+ * it serves to anyone; everything else under /media/ belongs to somebody and
+ * has no business sitting in a shared tablet's cache.
  */
 const CACHE = "openpos-shell-v2";
+const PICTURES = "openpos-pictures-v1";
 
 self.addEventListener("install", (event) => {
   // A new build should take over the next time the app is opened, not three
@@ -23,7 +31,10 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(
     (async () => {
       const names = await caches.keys();
-      await Promise.all(names.filter((name) => name !== CACHE).map((name) => caches.delete(name)));
+      const keep = [CACHE, PICTURES];
+      await Promise.all(
+        names.filter((name) => !keep.includes(name)).map((name) => caches.delete(name)),
+      );
       await self.clients.claim();
     })(),
   );
@@ -38,6 +49,28 @@ self.addEventListener("fetch", (event) => {
 
   // Anything that talks to pretix goes straight to the network, always.
   if (url.pathname.startsWith("/api/")) return;
+
+  // A product picture: kept the first time it is seen and served from there
+  // afterwards, never refreshed. The bar loses the network regularly, and a
+  // grid whose photographs disappear exactly when the evening gets busy is
+  // worse than a grid that never had any.
+  if (url.pathname.startsWith("/media/pub/")) {
+    event.respondWith(
+      (async () => {
+        const cache = await caches.open(PICTURES);
+        const cached = await cache.match(request);
+        if (cached) return cached;
+        try {
+          const response = await fetch(request);
+          if (response.ok) await cache.put(request, response.clone());
+          return response;
+        } catch {
+          return Response.error();
+        }
+      })(),
+    );
+    return;
+  }
 
   // Navigations: try the network so a new build is picked up, fall back to the
   // cached shell so a dropout does not produce a blank screen.
