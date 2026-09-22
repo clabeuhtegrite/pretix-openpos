@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, ApiError, type PositionPayload } from "./api";
+import { api, ApiError, errorCode, type PositionPayload } from "./api";
 import { basketFromJournal, customKey, refundKey, repriceCart } from "./basket";
 import CheckinScreen from "./components/CheckinScreen";
 import CustomSalePanel from "./components/CustomSalePanel";
@@ -309,6 +309,17 @@ export default function App() {
       // only be refused again at the first sale, in front of a customer.
       if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
         setLoadError(t("error.refused", { detail: err.message }));
+        return;
+      }
+
+      // The event is a series and no date is on tonight. Said rather than
+      // papered over with the cache below, because the cache would hand back
+      // last week's catalogue and the till would sell against a date that is
+      // over — the queue would only find out at the payment, which is the
+      // whole shape of the bug this replaced. It is also the one thing here
+      // that somebody can fix in a minute from the back office.
+      if (errorCode(err) === "series_closed") {
+        setLoadError(describeError(err));
         return;
       }
 

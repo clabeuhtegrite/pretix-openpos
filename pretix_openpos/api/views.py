@@ -72,22 +72,46 @@ def pos_price_overrides(event):
     }
 
 
-def resolve_price(overrides, item, variation=None) -> Decimal:
+def resolve_price(overrides, item, variation=None, subevent=None) -> Decimal:
     """
     On-site price for a product, falling back to the webshop price.
 
-    Mirrors pretix' own resolution order (variation price, then item price) and
-    layers the till tariff on top of it.
+    Mirrors pretix' own resolution order — the date's own price, then the
+    variation price, then the item price — and layers the till tariff on top of
+    it. The tariff has no notion of a date, deliberately: a door sells at the
+    door price whichever evening of a series it is, and giving it one would
+    mean an organiser maintaining a price list per date to change one beer.
     """
     if variation is not None:
         if (item.pk, variation.pk) in overrides:
             return overrides[(item.pk, variation.pk)]
+        if subevent is not None:
+            per_date = subevent.var_price_overrides.get(variation.pk)
+            if per_date is not None:
+                return per_date
         if variation.default_price is not None:
             return variation.default_price
         return item.default_price
     if (item.pk, None) in overrides:
         return overrides[(item.pk, None)]
+    if subevent is not None:
+        per_date = subevent.item_price_overrides.get(item.pk)
+        if per_date is not None:
+            return per_date
     return item.default_price
+
+
+def for_date(quotas, subevent):
+    """
+    The quotas that apply on the date being sold.
+
+    A series keeps one set of quotas per date, so counting them all together
+    would report the whole season's remaining places at a door selling one
+    evening. ``None`` means the event is not a series and every quota applies.
+    """
+    if subevent is None:
+        return quotas
+    return [quota for quota in quotas if quota.subevent_id == subevent.pk]
 
 
 def quota_availability(quotas, cache):
@@ -142,13 +166,103 @@ OFFLINE_SNAPSHOT_LIMIT = 20000
 BUSINESS_DAY_STARTS_AT = time(6, 0)
 
 
-def start_of_business_day(event):
-    """The moment the takings count from: 6 am on the day the current night began."""
-    local = now().astimezone(event.timezone)
+def start_of_business_day(event, at=None):
+    """
+    The moment the takings count from: 6 am on the day that night began.
+
+    ``at`` is the moment being asked about, defaulting to this one. A sale
+    replayed the next morning has to be placed in the night it was rung up in,
+    not the one it arrives in.
+    """
+    local = (at or now()).astimezone(event.timezone)
     day = local.date()
     if local.time() < BUSINESS_DAY_STARTS_AT:
         day -= timedelta(days=1)
     return make_aware(datetime.combine(day, BUSINESS_DAY_STARTS_AT), event.timezone)
+
+
+def selling_subevent(event, at=None, *, settled=False):
+    """
+    Which date of a series the till is selling for, or ``None`` for a plain event.
+
+    A door till sells for tonight and nothing else. Whoever is standing at it
+    has one queue in front of them and no business picking a date off a list
+    between customers, so the server picks it — the same way it picks every
+    price. The app has never sent either, and this does not change that.
+
+    "Tonight" is the business day the rest of this system runs on: six in the
+    morning to six the next. A door still selling at one o'clock is selling
+    for the evening that is still going on, not for the next one. Within that
+    window the date that has already started wins over one still to come, and
+    a date that runs past the window — a festival day with no end time, or one
+    ending in the small hours — still counts while it is on.
+
+    ``at`` is the moment the money moved, so a sale replayed the next morning
+    is booked against the night it was rung up in rather than the one it
+    arrives in. ``settled`` says that money has already changed hands: nothing
+    is refused then, because refusing does not give it back, it only strands
+    the sale outside pretix. The nearest date is used instead.
+
+    Otherwise this raises, and the refusal belongs at the catalogue, where a
+    volunteer meets it while setting up. pretix used to raise it at the payment
+    instead, in front of a customer, in the form "the product is not assigned
+    to a quota" — which names the wrong cause entirely.
+    """
+    if not event.has_subevents:
+        return None
+
+    moment = at or now()
+    opened = start_of_business_day(event, moment)
+    closes = opened + timedelta(days=1)
+    # Bounded because a season can hold hundreds of dates and only the ones
+    # around this evening can win. Ordered so the last to have started is the
+    # first considered.
+    candidates = list(
+        event.subevents.filter(active=True, date_from__lt=closes)
+        .order_by("-date_from")[:20]
+    )
+
+    def ends(subevent):
+        # A date with no end time runs to the end of its own night, not to the
+        # instant it started. Most organisers never fill the end in, and
+        # treating the date as over the moment the doors open would send every
+        # sale after that to the next evening in the series.
+        if subevent.date_to:
+            return subevent.date_to
+        return start_of_business_day(event, subevent.date_from) + timedelta(days=1)
+
+    # Started already and not over: the one the queue outside is for. The most
+    # recently started, so two dates overlapping resolve to the later.
+    for subevent in candidates:
+        if subevent.date_from <= moment and ends(subevent) >= moment:
+            return subevent
+    # Otherwise the next one tonight — a door sells before it opens.
+    upcoming = [s for s in candidates if s.date_from > moment and s.date_from >= opened]
+    if upcoming:
+        return upcoming[-1]
+
+    if settled:
+        # Whatever is closest to when the money moved. A guess, and said to be
+        # one — but a sale that cannot be booked at all is worse than one
+        # booked against the neighbouring date, which somebody can move.
+        nearest = min(
+            event.subevents.filter(active=True),
+            key=lambda s: abs(s.date_from - moment),
+            default=None,
+        )
+        if nearest is not None:
+            return nearest
+
+    raise ValidationError(
+        {
+            "detail": [
+                _("Nothing is on tonight. This event is a series, and the till "
+                  "sells for the date that is on — add one for tonight, or "
+                  "check that it is switched on.")
+            ],
+            "code": "series_closed",
+        }
+    )
 
 
 def checkin_list_for(event):
@@ -211,7 +325,7 @@ class ResolvedLine:
         self.refund = refund
 
 
-def resolve_line(line, *, sellable, overrides, custom_item, deposit, settled):
+def resolve_line(line, *, sellable, overrides, custom_item, deposit, settled, subevent=None):
     """
     Price one line of a basket, and refuse the ones that may not be sold.
 
@@ -256,7 +370,7 @@ def resolve_line(line, *, sellable, overrides, custom_item, deposit, settled):
         # one place a line's price is decided — rather than at each caller.
         sent_price = Decimal(str(sent_price))
 
-    tariff = resolve_price(overrides, item, variation)
+    tariff = resolve_price(overrides, item, variation, subevent)
     if is_refund:
         # A deposit handed back is worth exactly what the deposit costs,
         # negated here rather than sent: the till names the product, the server
@@ -531,6 +645,9 @@ class OpenPosViewSet(viewsets.ViewSet):
     def catalog(self, request, **kwargs):
         event = request.event
         channel = get_pos_channel(event.organizer)
+        # Raises for a series with nothing on, which is a 400 here rather than
+        # a refusal at the payment: the volunteer meets it while setting up.
+        subevent = selling_subevent(event)
         overrides = pos_price_overrides(event)
         quota_cache = {}
         custom = custom_sale_item(event)
@@ -573,17 +690,21 @@ class OpenPosViewSet(viewsets.ViewSet):
                         {
                             "id": variation.pk,
                             "name": str(variation.value),
-                            "price": str(resolve_price(overrides, item, variation)),
+                            "price": str(
+                                resolve_price(overrides, item, variation, subevent)
+                            ),
                             "available": quota_availability(
-                                variation.quotas.all(), quota_cache
+                                for_date(variation.quotas.all(), subevent), quota_cache
                             ),
                         }
                     )
                 if not entry["variations"]:
                     continue
             else:
-                entry["price"] = str(resolve_price(overrides, item))
-                entry["available"] = quota_availability(item.quotas.all(), quota_cache)
+                entry["price"] = str(resolve_price(overrides, item, None, subevent))
+                entry["available"] = quota_availability(
+                    for_date(item.quotas.all(), subevent), quota_cache
+                )
 
             category_id = item.category_id or 0
             if category_id not in categories:
@@ -691,6 +812,16 @@ class OpenPosViewSet(viewsets.ViewSet):
             data["positions"] = terminal.positions
         custom_item = custom_sale_item(event)
         deposit = deposit_item(event)
+        # A series sells for the date that is on. For a sale already paid for,
+        # that is the date it was on when the money moved — a replay arriving
+        # the next morning belongs to the night it was rung up in, which is
+        # precisely when replays arrive — and nothing is refused, because
+        # refusing does not give the money back.
+        subevent = selling_subevent(
+            event,
+            offline["recorded_at"] if offline else None,
+            settled=settled,
+        )
 
         sellable = sellable_items(event, channel, settled=settled)
 
@@ -713,6 +844,7 @@ class OpenPosViewSet(viewsets.ViewSet):
                 custom_item=custom_item,
                 deposit=deposit,
                 settled=settled,
+                subevent=subevent,
             )
             item = resolved.item
             variation = resolved.variation
@@ -754,6 +886,13 @@ class OpenPosViewSet(viewsets.ViewSet):
                 "unit_price": str(price),
                 "line_total": str(price * count),
             }
+            if subevent is not None:
+                # Which date of a series this was sold for, named as it was
+                # called at the time. The journal outlives the order and the
+                # date alike, and a row that says only "Entrée × 2" answers
+                # nothing about a season that ran twelve evenings.
+                journal_line["subevent"] = subevent.pk
+                journal_line["subevent_name"] = str(subevent.name or subevent)
             if description:
                 # What the money was actually for. In the journal because that
                 # is the record that outlives the order, and on the order too,
@@ -775,15 +914,21 @@ class OpenPosViewSet(viewsets.ViewSet):
             sale_total += price * count
             journal_positions.append(journal_line)
             for _n in range(count):
-                api_positions.append(
-                    {
-                        "item": item.pk,
-                        "variation": variation.pk if variation else None,
-                        "price": str(price),
-                        "attendee_name_parts": {},
-                        "answers": [],
-                    }
-                )
+                position = {
+                    "item": item.pk,
+                    "variation": variation.pk if variation else None,
+                    "price": str(price),
+                    "attendee_name_parts": {},
+                    "answers": [],
+                }
+                if subevent is not None:
+                    # Required on every position of a series, and the reason a
+                    # till used to sell from a catalogue that loaded cleanly and
+                    # then fail at the payment: pretix refused the order with
+                    # "the product is not assigned to a quota", which is true
+                    # of no date in particular and names the wrong cause.
+                    position["subevent"] = subevent.pk
+                api_positions.append(position)
 
         # What actually changes hands: the order, less the deposits given back
         # with it. Every figure the customer is quoted is this one.
@@ -1097,6 +1242,7 @@ class OpenPosViewSet(viewsets.ViewSet):
         overrides = pos_price_overrides(event)
         custom_item = custom_sale_item(event)
         deposit = deposit_item(event)
+        subevent = selling_subevent(event)
         sellable = sellable_items(event, channel, settled=False)
 
         priced = []
@@ -1110,6 +1256,7 @@ class OpenPosViewSet(viewsets.ViewSet):
                 custom_item=custom_item,
                 deposit=deposit,
                 settled=False,
+                subevent=subevent,
             )
             total += resolved.price * resolved.count
             if not resolved.refund:
@@ -1118,10 +1265,11 @@ class OpenPosViewSet(viewsets.ViewSet):
                 # — the order is created a moment later, and is forced through
                 # by then because refusing a paid card would be worse — but it
                 # is what stops a sold-out product reaching a cardholder.
-                quotas = (
+                quotas = for_date(
                     resolved.variation.quotas.all()
                     if resolved.variation
-                    else resolved.item.quotas.all()
+                    else resolved.item.quotas.all(),
+                    subevent,
                 )
                 available = quota_availability(quotas, quota_cache)
                 if available is not None and available < resolved.count:

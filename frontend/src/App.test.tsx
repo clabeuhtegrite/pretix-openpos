@@ -266,6 +266,27 @@ describe("getting to the till", () => {
     expect(screen.queryByRole("button", { name: /Bière/ })).toBeNull();
   });
 
+  it("says nothing is on tonight, rather than selling from the cache", async () => {
+    // A series with no date on. The cached catalogue would hand back last
+    // week's evening and the till would sell against a date that is over,
+    // which the queue only finds out at the payment — the exact shape of the
+    // bug this replaced. It is also the one failure here that somebody can
+    // fix in a minute from the back office.
+    const { user } = show();
+    await ready();
+    const closed = new ApiError(400, "Nothing is on tonight.", {
+      code: "series_closed",
+    });
+    apiMock.config.mockRejectedValue(closed);
+    apiMock.catalog.mockRejectedValue(closed);
+
+    await user.click(screen.getByRole("button", { name: "settings" }));
+    await user.click(await screen.findByRole("button", { name: t("settings.refresh") }));
+
+    expect(await screen.findByText("Nothing is on tonight.")).toBeDefined();
+    expect(screen.queryByRole("button", { name: /Bière/ })).toBeNull();
+  });
+
   it("lets a refused till try again", async () => {
     apiMock.config.mockRejectedValueOnce(new ApiError(403, "Unknown device."));
     apiMock.catalog.mockRejectedValueOnce(new ApiError(403, "Unknown device."));

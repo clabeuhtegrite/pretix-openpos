@@ -1138,6 +1138,49 @@ paiement en cours, pas d'écran de fin ni de scan). Recharger les prix sous un
 panier qu'on est en train de lire à un client, c'est exactement comme ça qu'on
 annonce un montant et qu'on en encaisse un autre.
 
+### 6.2bis Les séries : la caisse vend la date du soir
+
+Un événement pretix peut être une **série** : une même configuration, plusieurs
+dates, chacune avec son quota et éventuellement son prix. pretix refuse toute
+ligne de commande qui ne nomme pas une date — et la caisse n'en envoyait aucune.
+Le catalogue se chargeait proprement, en affichant cent places restantes, et la
+première vente revenait en « Le produit “Entrée” n'est pas rattaché à un
+quota », au moment du paiement, devant le client. Le message désigne la mauvaise
+cause : le produit est bien rattaché à un quota, mais pas à une date.
+
+La caisse n'envoie toujours pas de date. Elle n'envoie pas de prix non plus, et
+pour la même raison : la personne qui tient la caisse a une file devant elle et
+n'a pas à choisir l'un ou l'autre dans une liste entre deux clients. Le serveur
+décide, à l'horloge :
+
+- La date **déjà commencée et pas terminée** l'emporte — c'est celle pour
+  laquelle la file est là. Si deux se chevauchent, la plus récemment commencée.
+- Sinon la **prochaine de la soirée** : une porte vend avant d'ouvrir.
+- « La soirée » est la journée de caisse habituelle, six heures du matin à six
+  heures le lendemain. Une porte qui vend encore à une heure vend pour la
+  soirée en cours, pas pour la suivante. Une date sans heure de fin — le cas le
+  plus courant — court jusqu'à la fin de sa propre nuit, pas jusqu'à l'instant
+  où elle commence.
+- **Rien de programmé** : la caisse le dit au catalogue, à l'installation, et
+  refuse de s'ouvrir sur son cache. Vendre depuis le catalogue de la semaine
+  dernière ramènerait exactement le bug d'origine, découvert au paiement.
+
+Deux exceptions, toutes deux du côté de l'argent déjà encaissé. Une vente
+**rejouée** est rattachée à la soirée où elle a été encaissée, pas à celle où
+elle arrive : une caisse coupée rend ses ventes quand elle retrouve le réseau,
+ce qui peut être le lendemain matin. Et une vente déjà payée n'est **jamais**
+refusée faute de date : refuser ne rend pas l'argent, ça ne fait qu'échouer la
+vente hors de pretix. La date la plus proche est utilisée — c'est une
+approximation, et une approximation qu'on peut corriger vaut mieux qu'une vente
+introuvable.
+
+Le tarif sur place, lui, ignore les dates, délibérément : une porte vend au prix
+de la porte quelle que soit la soirée de la série, et lui donner une date
+obligerait à tenir un tarif par date pour changer le prix d'une bière. L'ordre
+de résolution est donc : tarif sur place, puis prix de la date, puis prix de la
+variante, puis prix du produit. La date vendue est écrite sur chaque ligne du
+journal, avec son nom du moment.
+
 ### 6.3 L'idempotence
 
 La clé est frappée à l'ouverture du panneau de paiement et réutilisée pour chaque
