@@ -17,6 +17,7 @@ The flow, once, so the tests below read as steps rather than as HTTP:
    server finds the payment, books the order from the *pinned* basket, and only
    then is anything in the journal.
 """
+from decimal import Decimal
 from unittest.mock import patch
 
 import pytest
@@ -1027,3 +1028,76 @@ def test_a_payment_on_a_different_reader_does_not_block_this_one(
     assert start(
         another_till, [{"item": ticket.pk, "count": 1}], key="entree-01"
     ).status_code == 201
+
+
+# -- a card basket with deposits handed back --------------------------------
+
+@pytest.mark.django_db
+def test_a_card_basket_with_deposits_books_what_the_card_paid(
+    till, event, beer, deposit, reader_till, sumup
+):
+    """
+    The one the review ranked first, and the one that could not be checked
+    until the reader existed. Four beers at twelve, three cups back at three:
+    the reader takes nine, and pretix has to agree with SumUp about that, or
+    the card takings never reconcile against the transfer.
+    """
+    from pretix.base.models import Order
+
+    basket = [
+        {"item": beer.pk, "count": 4},
+        {"item": deposit.pk, "count": 3, "refund": True},
+    ]
+    assert start(till, basket).json()["amount"] == "9.00"
+    sumup.pay()
+    status(till)
+
+    body = sell(till, basket, payment_type="card", idempotency_key=KEY).json()
+
+    order = Order.objects.get(event=event, code=body["order"]["code"])
+    # Nine on the card, nine on the order, nine on the payment. It used to be
+    # nine on the card and twelve on both of the others.
+    assert order.total == Decimal("9.00")
+    assert [(p.provider, p.amount) for p in order.payments.all()] == [
+        ("openpos_card", Decimal("9.00"))
+    ]
+    # The beer is still twelve euros of beer; the deposit is a line beside it.
+    assert sum(p.price for p in order.positions.all()) == Decimal("12.00")
+    assert [f.value for f in order.fees.all()] == [Decimal("-3.00")]
+
+
+@pytest.mark.django_db
+def test_cancelling_such_a_sale_gives_back_what_the_card_took(
+    till, event, beer, deposit, reader_till, sumup
+):
+    """
+    The second half of the same fault. pretix used to record a refund of
+    twelve; SumUp can only refund its own transaction, which was nine. The
+    till then said "already refunded, nothing to hand over" and the customer
+    left three euros short of their cups.
+    """
+    from pretix.base.models import Order
+
+    basket = [
+        {"item": beer.pk, "count": 4},
+        {"item": deposit.pk, "count": 3, "refund": True},
+    ]
+    start(till, basket)
+    sumup.pay()
+    status(till)
+    body = sell(till, basket, payment_type="card", idempotency_key=KEY).json()
+
+    response = till.post(
+        "cancel",
+        {"seq": body["journal_seq"], "idempotency_key": "annule-01", "reason": "erreur"},
+    )
+
+    assert response.status_code == 201
+    order = Order.objects.get(event=event, code=body["order"]["code"])
+    assert [(r.amount, r.state) for r in order.refunds.all()] == [
+        (Decimal("9.00"), "done")
+    ]
+    # And SumUp gave back its own transaction, which is the same nine. No
+    # amount is named on purpose: the transaction's figure is the authority on
+    # what the card was charged, and it is not what the beer came to.
+    assert sumup.refunds == [("tx_1", None)]

@@ -18,7 +18,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: pretix-openpos\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-09-22 10:38+0000\n"
+"POT-Creation-Date: 2026-09-22 10:50+0000\n"
 "PO-Revision-Date: 2026-09-22 09:51+0000\n"
 "Last-Translator: clabeuhtegrite\n"
 "Language-Team: French\n"
@@ -76,7 +76,7 @@ msgstr "Le montant reçu ne peut pas être négatif."
 msgid "The amount received only applies to cash payments."
 msgstr "Le montant reçu ne s’applique qu’aux paiements en espèces."
 
-#: api/views.py:259
+#: api/views.py:290
 msgid ""
 "Nothing is on tonight. This event is a series, and the till sells for the "
 "date that is on — add one for tonight, or check that it is switched on."
@@ -85,44 +85,44 @@ msgstr ""
 "la date qui a lieu — ajoutez-en une pour ce soir, ou vérifiez qu’elle est "
 "activée."
 
-#: api/views.py:347
+#: api/views.py:378
 #, python-brace-format
 msgid "Product {id} is not on sale at the till."
 msgstr "Le produit {id} n’est pas en vente à la caisse."
 
-#: api/views.py:356
+#: api/views.py:387
 #, python-brace-format
 msgid "Unknown option for product {name}."
 msgstr "Déclinaison inconnue pour le produit {name}."
 
-#: api/views.py:360
+#: api/views.py:391
 #, python-brace-format
 msgid "Product {name} requires an option to be chosen."
 msgstr "Le produit {name} demande de choisir une déclinaison."
 
-#: api/views.py:381
+#: api/views.py:412
 msgid "This product is not the one deposits are taken on."
 msgstr "Ce produit n’est pas celui sur lequel les consignes sont prises."
 
-#: api/views.py:386
+#: api/views.py:417
 msgid "Free amounts can only be sold on the product set aside for them."
 msgstr ""
 "Les montants libres ne peuvent être vendus que sur le produit prévu pour eux."
 
-#: api/views.py:390
+#: api/views.py:421
 msgid "A free amount has to be more than nothing."
 msgstr "Un montant libre doit être supérieur à zéro."
 
-#: api/views.py:544
+#: api/views.py:575
 #, python-brace-format
 msgid "Open POS is not enabled for the event {slug}."
 msgstr "Open POS n’est pas activé sur l’événement {slug}."
 
-#: api/views.py:713
+#: api/views.py:744
 msgid "Uncategorised"
 msgstr "Sans catégorie"
 
-#: api/views.py:791
+#: api/views.py:822
 msgid ""
 "This till has a card reader assigned, so a card payment has to be validated "
 "by the reader. Take this payment on the reader, or in cash."
@@ -130,25 +130,25 @@ msgstr ""
 "Cette caisse a un lecteur attribué : un paiement par carte doit être validé "
 "par le lecteur. Encaissez sur le lecteur, ou en espèces."
 
-#: api/views.py:950
+#: api/views.py:981
 #, python-brace-format
 msgid "Prices changed: this basket now comes to {total}, not {expected}."
 msgstr ""
 "Les prix ont changé : ce panier fait maintenant {total}, et non {expected}."
 
-#: api/views.py:967
+#: api/views.py:998
 msgid "Nothing is due: this transaction pays money out."
 msgstr "Rien n’est dû : cette opération sort de l’argent."
 
-#: api/views.py:971
+#: api/views.py:1002
 msgid "The amount received is less than the total due."
 msgstr "Le montant reçu est inférieur au total dû."
 
-#: api/views.py:1134
+#: api/views.py:1177
 msgid "No card reader is assigned to this till."
 msgstr "Aucun lecteur n’est attribué à cette caisse."
 
-#: api/views.py:1190
+#: api/views.py:1233
 msgid ""
 "The card reader is taking another payment. Wait for it to finish, or take "
 "this basket in cash."
@@ -156,46 +156,46 @@ msgstr ""
 "Le lecteur encaisse un autre paiement. Attendez la fin, ou prenez ce panier "
 "en espèces."
 
-#: api/views.py:1278
+#: api/views.py:1321
 #, python-brace-format
 msgid "{name} is sold out."
 msgstr "{name} est épuisé."
 
-#: api/views.py:1301
+#: api/views.py:1344
 msgid "Nothing is due on this basket. Settle it in cash."
 msgstr "Rien n’est dû sur ce panier. Réglez-le en espèces."
 
-#: api/views.py:1381 api/views.py:1404
+#: api/views.py:1424 api/views.py:1447
 msgid "No card payment was started for this basket."
 msgstr "Aucun paiement par carte n’a été lancé pour ce panier."
 
-#: api/views.py:1438 api/views.py:1882
+#: api/views.py:1481 api/views.py:1925
 msgid "Unknown check-in list."
 msgstr "Liste de contrôle inconnue."
 
-#: api/views.py:1579
+#: api/views.py:1622
 msgid "No such entry in this event's journal."
 msgstr "Cette écriture n’existe pas dans le journal de cet événement."
 
-#: api/views.py:1584
+#: api/views.py:1627
 msgid "This sale was made on another till and can only be corrected there."
 msgstr ""
 "Cette vente a été faite sur une autre caisse et ne peut être corrigée que là-"
 "bas."
 
-#: api/views.py:1587
+#: api/views.py:1630
 msgid "This journal entry is not a sale."
 msgstr "Cette écriture du journal n’est pas une vente."
 
-#: api/views.py:1589
+#: api/views.py:1632
 msgid "This sale has already been cancelled."
 msgstr "Cette vente a déjà été annulée."
 
-#: api/views.py:1591
+#: api/views.py:1634
 msgid "The order behind this sale no longer exists."
 msgstr "La commande derrière cette vente n’existe plus."
 
-#: api/views.py:1596
+#: api/views.py:1639
 #, python-brace-format
 msgid "pretix will not let this order be cancelled: {status}."
 msgstr "pretix refuse l’annulation de cette commande : {status}."

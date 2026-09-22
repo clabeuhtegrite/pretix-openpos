@@ -88,15 +88,29 @@ def test_a_sale_and_a_return_are_two_rows_and_one_customer(till, event, beer, de
 
     sale = PosSale.objects.get(event=event, kind=PosSale.KIND_SALE)
     refund = PosSale.objects.get(event=event, kind=PosSale.KIND_DEPOSIT_REFUND)
-    # pretix is told about the beer and only the beer: four beers were sold,
-    # and three euros were paid out for cups. Two economic events, and
-    # netting them into the order would understate the bar's takings.
+    # Two economic events, and the journal keeps them apart: four beers sold,
+    # three euros paid out for cups.
     assert sale.total == Decimal("12.00")
-    assert Order.objects.get(event=event, code=body["order"]["code"]).total == Decimal("12.00")
     assert refund.total == Decimal("-3.00")
     # What the customer actually put on the counter.
     assert body["net_total"] == "9.00"
     assert drawer(event) == Decimal("9.00")
+
+    order = Order.objects.get(event=event, code=body["order"]["code"])
+    # And the order is worth that same nine euros, because that is what was
+    # paid for it. It used to be worth twelve, which is what the beer came to
+    # — inflating pretix' own takings against the drawer, and against SumUp on
+    # a card basket, by every deposit ever handed back. Cancelling then gave
+    # back the inflated figure, which a card refund cannot honour: SumUp only
+    # refunds its own transaction, and the customer left short of their cups.
+    assert order.total == Decimal("9.00")
+    assert [p.amount for p in order.payments.all()] == [Decimal("9.00")]
+    # The bar's takings are not understated by this: the twelve euros of beer
+    # are still twelve euros of order positions. The deposit is a line beside
+    # them, which is what it is — a deposit taken on some earlier order, being
+    # settled — and the shape pretix itself uses for a redeemed gift card.
+    assert sum(p.price for p in order.positions.all()) == Decimal("12.00")
+    assert [f.value for f in order.fees.all()] == [Decimal("-3.00")]
 
 
 @pytest.mark.django_db
@@ -142,8 +156,18 @@ def test_a_basket_that_nets_negative_still_sells_what_was_sold(till, event, beer
     body = sell(till, [{"item": beer.pk, "count": 1}, give_back(deposit, count=4)]).json()
 
     assert body["net_total"] == "-1.00"
-    assert Order.objects.get(event=event, code=body["order"]["code"]).status == Order.STATUS_PAID
+    order = Order.objects.get(event=event, code=body["order"]["code"])
+    assert order.status == Order.STATUS_PAID
     assert drawer(event) == Decimal("-1.00")
+    # The deposit line on the order stops at the sale: pretix cannot hold an
+    # order worth less than nothing. The euro that goes past it stays where a
+    # return with no sale at all already lives, a journal row outside any
+    # order — the only place it can go.
+    assert order.total == Decimal("0.00")
+    assert [f.value for f in order.fees.all()] == [Decimal("-3.00")]
+    assert PosSale.objects.get(
+        event=event, kind=PosSale.KIND_DEPOSIT_REFUND
+    ).total == Decimal("-4.00")
 
 
 @pytest.mark.django_db

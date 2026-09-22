@@ -181,6 +181,37 @@ def start_of_business_day(event, at=None):
     return make_aware(datetime.combine(day, BUSINESS_DAY_STARTS_AT), event.timezone)
 
 
+def deposit_fee(refund_total, sale_total, item):
+    """
+    The deposits handed back with a sale, as a line on the order.
+
+    ``refund_total`` is negative — money leaving — and ``sale_total`` is what
+    the products came to. The order then totals what the customer actually
+    paid, which is the figure the card was charged, the figure the drawer took
+    and the figure a cancellation has to give back. It used to total the
+    products alone, so every deposit returned inflated pretix' takings against
+    both SumUp and the drawer at once.
+
+    Capped at the sale, never below zero: pretix cannot hold a negative order
+    and a basket that nets out that way is money leaving the drawer with
+    nothing sold. The remainder stays where a return with no sale at all
+    already lives — a journal row of its own, outside any order, which is the
+    only place it can go. That case is cash by definition; the till refuses a
+    card basket at or below zero because SumUp can only refund against one of
+    its own transactions.
+    """
+    given_back = -refund_total
+    if given_back <= 0 or item is None:
+        return []
+    return [
+        {
+            "fee_type": "other",
+            "value": str(-min(given_back, sale_total)),
+            "description": str(item.name),
+        }
+    ]
+
+
 def selling_subevent(event, at=None, *, settled=False):
     """
     Which date of a series the till is selling for, or ``None`` for a plain event.
@@ -1005,7 +1036,19 @@ class OpenPosViewSet(viewsets.ViewSet):
             "sales_channel": channel.identifier,
             "locale": event.settings.locale,
             "positions": api_positions,
-            "fees": [],
+            # Deposits handed back, as a negative fee, so the order is worth
+            # what the customer actually paid for it. Without this the order
+            # said 12.00 while 9.00 reached the card, every deposit returned
+            # inflated pretix' own takings against SumUp and against the
+            # drawer, and cancelling gave back the inflated figure — which the
+            # card cannot honour, so the customer left short of their cups.
+            #
+            # A fee rather than a position, because a returned cup is not a
+            # thing being sold: it settles a deposit taken on some earlier
+            # order, and pretix has no position that can carry a negative
+            # price. It is the shape pretix uses for a redeemed gift card, for
+            # the same reason.
+            "fees": deposit_fee(refund_total, sale_total, deposit),
         }
         if notes:
             # So a free amount is readable in the back office as well as in the
@@ -2130,10 +2173,21 @@ class OpenPosViewSet(viewsets.ViewSet):
         # have the till announce a sale worth minus three euros; the figures
         # that describe the transaction are added by _checkout_payload.
         orderless = sale.kind == PosSale.KIND_DEPOSIT_REFUND
+        # The order's own total, not the journal row's, whenever there is an
+        # order to read it from. The two part company on a basket with a
+        # deposit handed back: the row is what the beer came to, the order is
+        # what was paid for it. This line sits next to the order code on the
+        # till's last screen, so somebody who opens that order has to find the
+        # same figure there.
+        total = (
+            str(sale.order.total) if sale.order is not None
+            else "0.00" if orderless
+            else str(sale.total)
+        )
         return {
             "order": {
                 "code": sale.order_code,
-                "total": "0.00" if orderless else str(sale.total),
+                "total": total,
                 "url": (
                     f"/{sale.event.organizer.slug}/{sale.event.slug}/order/"
                     f"{sale.order_code}/{sale.order.secret}/"

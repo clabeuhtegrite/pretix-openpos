@@ -845,28 +845,42 @@ La consigne **se vend comme n'importe quel produit** : créez « Consigne
 gobelet » à 1 €, canal Open POS, un quota, et elle est dans la grille. Rien de
 particulier là-dedans.
 
-Le retour, lui, ne peut pas être une commande pretix : **le total d'une commande
-ne peut pas passer sous zéro**, et la file de fin de soirée, ce sont des gens qui
-rendent leurs gobelets sans rien acheter. Il est donc enregistré comme une
-écriture de journal à part, de type `deposit_refund`, montant négatif, **sans
-commande**. C'est la seule chose de la caisse qui existe dans le journal et pas
-dans pretix.
+Le retour, lui, ne peut pas être une ligne de commande pretix : **le total d'une
+commande ne peut pas passer sous zéro**, et la file de fin de soirée, ce sont des
+gens qui rendent leurs gobelets sans rien acheter. Il est donc enregistré comme
+une écriture de journal à part, de type `deposit_refund`, montant négatif,
+**sans commande**.
 
-Ce que ça donne pour « deux bières et je rends trois gobelets » :
+Ce que ça donne pour « quatre bières et je rends trois gobelets » :
 
 | # | Type | Commande | Montant |
 |---|---|---|---|
-| 41 | `sale` | CMD8K | 6,00 € |
+| 41 | `sale` | CMD8K | 12,00 € |
 | 42 | `deposit_refund` | — | −3,00 € |
 
-Le client pose 3 €. pretix voit une commande de deux bières à 6 €, ce qui est
-exact : deux bières ont bien été vendues, et 3 € sont sortis du tiroir pour des
-gobelets rendus. Ce sont deux événements économiques distincts, et les fondre en
-une commande à 3 € minorerait la recette du bar.
+Le client pose 9 €. Le journal garde les deux événements séparés : quatre bières
+vendues à 12 €, et 3 € sortis pour des gobelets rendus. Le tiroir reste la somme
+pure de la colonne `total` — 12 − 3 = 9 — comme il l'est déjà avec les
+annulations. C'est l'invariant sur lequel tout le reste tient.
 
-Le tiroir, lui, reste la somme pure de la colonne `total` du journal — 6 − 3 = 3
-— comme il l'est déjà avec les annulations. C'est l'invariant sur lequel tout le
-reste tient.
+**La commande pretix, elle, vaut 9 €**, parce que c'est ce qui a été payé pour
+elle : les quatre bières restent quatre bières de lignes de commande, à 12 €, et
+la consigne rendue est une ligne de frais négative de −3 € à côté — la forme que
+pretix utilise lui-même pour une carte cadeau utilisée. La recette du bar n'est
+donc pas minorée : les 12 € sont toujours là, en lignes de commande.
+
+C'est un changement par rapport aux versions ≤ 0.11.0, où la commande valait les
+12 € des bières. Le compte de pretix était alors gonflé de chaque consigne rendue
+— contre le tiroir, et contre SumUp sur un panier carte, puisque le lecteur ne
+prélève que le net. Et l'annulation rendait ces 12 € : SumUp ne rembourse que sa
+propre transaction, soit 9 €, et la caisse annonçait « déjà remboursé » — le
+client repartait avec 3 € de moins que ses gobelets. Maintenant les quatre
+chiffres concordent : le lecteur, la commande, l'encaissement et le
+remboursement.
+
+Si le panier passe sous zéro, la ligne de frais s'arrête à la vente : une
+commande pretix ne peut pas valoir moins que rien. Le reste demeure où vit déjà
+un retour sans vente, dans l'écriture de journal, hors de toute commande.
 
 Trois conséquences à connaître :
 
@@ -895,10 +909,13 @@ Deux limites assumées :
 
 - **Rendre une consigne ne remet pas de stock.** Le quota du produit de consigne
   est consommé à la vente et n'est pas rendu au retour : mettez-le en illimité.
-- **Annuler une vente mixte n'annule pas le retour qui l'accompagnait.**
-  L'annulation avoirie la commande — les deux bières — et laisse l'écriture de
-  décaissement telle quelle, ce qui est correct puisqu'elle n'en faisait pas
-  partie. Les gobelets, eux, sont chez le client.
+- **Annuler une vente mixte contre-passe les deux moitiés.** Le client a posé le
+  net sur le comptoir : lui rendre la vente sans reprendre la consigne laisserait
+  le tiroir court du montant de la consigne pour le reste de la soirée, un écart
+  que personne ne peut expliquer à 1 h 30. L'écriture de contre-passage de la
+  consigne dérive sa clé de celle de l'annulation, donc une annulation rejouée ne
+  la repasse pas deux fois. Ce que la caisse ne fait pas à votre place : reprendre
+  les gobelets, qui sont chez le client.
 
 ---
 
