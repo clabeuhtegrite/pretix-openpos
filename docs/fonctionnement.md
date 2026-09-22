@@ -1649,6 +1649,16 @@ précisément la raison pour laquelle l'écran des réglages SumUp n'utilise pas
 celui de pretix — ce dernier écrit la *valeur* de chaque champ modifié dans
 l'historique.
 
+Les entrées écrites sur l'organisateur — rôles des appareils, compte SumUp,
+lecteurs appairés, libérés ou retirés — ne passent pas par le même chemin que
+celles d'un événement ([logdisplay.py](../pretix_openpos/logdisplay.py) dit
+pourquoi). De la 0.12.0 à la 0.15.1, elles passaient par le même, et la page
+*Journaux de l'organisateur* (*Voir le journal complet*, sous l'historique des
+modifications de l'organisateur) répondait par une erreur 500 dès que l'une
+d'elles s'y trouvait, c'est-à-dire dès qu'on avait enregistré l'écran des
+appareils ou réglé un lecteur. Rien n'était perdu : les entrées étaient en base,
+et la 0.15.2 les affiche.
+
 **Remboursements carte refusés par SumUp.** Une annulation de vente carte demande
 le remboursement par API, et le réseau peut répondre non : transaction déjà
 remboursée, plafond, lecteur disparu depuis. La caisse le dit en rouge, une fois,

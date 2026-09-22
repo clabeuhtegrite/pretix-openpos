@@ -7,9 +7,24 @@ carries not shown at all. That is legible to whoever wrote it and to nobody
 else, which is the wrong way round: the history is read by the person asking
 who moved the beer to four euros, at ten past midnight, with the drawer open.
 
-So every action this plugin writes is registered here, and each one says what
-actually changed rather than that something did. The registry is pretix'
-current mechanism; the ``logentry_display`` signal next to it is deprecated.
+So every action this plugin writes is described here, and each one says what
+actually changed rather than that something did.
+
+They reach pretix by one of two roads, and which one is decided by where the
+entry is written rather than by taste:
+
+- **On an event or an order**, through ``log_entry_types``, pretix' current
+  registry.
+- **On the organizer** — the till roles and the SumUp account, which belong to
+  the association rather than to one evening — through the ``logentry_display``
+  signal, which pretix documents as deprecated for new types. The registry
+  cannot take these. For every entry it knows, the organizer's history page asks
+  whether the plugin that registered it is active *on that organizer*, and an
+  event-level plugin like this one cannot be asked that: pretix raises
+  ``ImproperlyConfigured`` and the whole page is a 500 for as long as one such
+  entry is on it. That is what 0.12.0 to 0.15.1 did to the history of every
+  organizer that had saved the till devices screen or set up a card reader. See
+  ``describe_organizer_entry`` at the bottom for why the signal gets past that.
 
 One rule holds throughout: a log entry is read years after it was written, by
 which time the item may be renamed and the device gone. Whatever is needed to
@@ -19,11 +34,13 @@ what something is called today.
 """
 from decimal import Decimal, InvalidOperation
 
+from django.dispatch import receiver
 from django.utils.html import escape, format_html, format_html_join
 from django.utils.translation import gettext_lazy as _
 from pretix.base.logentrytypes import (
     EventLogEntryType, LogEntryType, NoOpShredderMixin, OrderLogEntryType, log_entry_types,
 )
+from pretix.base.signals import logentry_display
 from pretix.base.templatetags.money import money_filter
 
 from .models import PosCategory, PosDevice
@@ -47,11 +64,41 @@ def _named(line):
     return f"{name} – {variation}" if variation else str(name)
 
 
-class OpenPosLogEntryType(NoOpShredderMixin, LogEntryType):
+class OrganizerEntryTypes(dict):
     """
-    Nothing this plugin logs is personal data.
+    The organizer-level entries, by action type: a registry of the plugin's own.
 
-    The entries carry product names, prices, device names and reader ids. The
+    Kept out of pretix' for the reason given at the top of this module, and
+    given the same two decorators, so that each class below reads as it would
+    if it were registered there — and so that moving one back, the day pretix
+    can take it, is a one-word change.
+    """
+
+    def new(self):
+        def register(cls):
+            entry_type = cls()
+            self[entry_type.action_type] = entry_type
+            return cls
+
+        return register
+
+    def new_from_dict(self, data):
+        def register(cls):
+            for action_type, plain in data.items():
+                self[action_type] = cls(action_type=action_type, plain=plain)
+            return cls
+
+        return register
+
+
+organizer_entry_types = OrganizerEntryTypes()
+
+
+class OrganizerLogEntryType(NoOpShredderMixin, LogEntryType):
+    """
+    An entry written on the organizer, and none of it personal data.
+
+    The entries carry device names, reader ids and the names of settings. The
     one field that names a person — the cashier — is on the journal, which is
     append-only by design and deliberately not a log entry.
     """
@@ -211,8 +258,8 @@ class CategoriesChanged(NoOpShredderMixin, EventLogEntryType):
         )
 
 
-@log_entry_types.new()
-class DevicesChanged(OpenPosLogEntryType):
+@organizer_entry_types.new()
+class DevicesChanged(OrganizerLogEntryType):
     """Which tablet is a till, which is a door, and which reader it drives."""
 
     action_type = "pretix_openpos.devices.changed"
@@ -270,7 +317,7 @@ class DevicesChanged(OpenPosLogEntryType):
         )
 
 
-@log_entry_types.new_from_dict({
+@organizer_entry_types.new_from_dict({
     "pretix_openpos.sumup.reader.paired": _("A card reader was paired: {reader}"),
     "pretix_openpos.sumup.reader.forgotten": _("A card reader was removed: {reader}"),
     "pretix_openpos.sumup.reader.freed": _(
@@ -278,12 +325,12 @@ class DevicesChanged(OpenPosLogEntryType):
         "already been charged is not known from this — only SumUp knows that."
     ),
 })
-class ReaderLogEntryType(OpenPosLogEntryType):
+class ReaderLogEntryType(OrganizerLogEntryType):
     pass
 
 
-@log_entry_types.new()
-class SumUpSettingsChanged(OpenPosLogEntryType):
+@organizer_entry_types.new()
+class SumUpSettingsChanged(OrganizerLogEntryType):
     """
     The account, never its key.
 
@@ -397,3 +444,29 @@ class SoldOutsideRole(NoOpShredderMixin, OrderLogEntryType):
                 ),
             ),
         )
+
+
+@receiver(logentry_display, dispatch_uid="openpos_organizer_logentry_display")
+def describe_organizer_entry(sender, logentry, **kwargs):
+    """
+    The organizer-level entries above, in words, by the deprecated road.
+
+    pretix sends this signal for an entry its registry does not know, with the
+    entry's event as the sender — and an entry written on the organizer has
+    none. A plugin signal sent with no sender goes to every receiver without
+    asking whether its plugin is active anywhere, so nothing is checked against
+    the organizer and nothing raises. The page's other question, which object
+    the entry is about, takes the same detour: an unregistered entry falls
+    through to its ``content_object`` and the ``logentry_object_link`` signal,
+    which this plugin does not answer, and pretix leaves that column empty
+    rather than failing.
+
+    Deprecated is not gone. pretix 2026.7 still sends it, from
+    ``LogEntry.display``, for exactly this case. Should it ever stop, these
+    entries would read as their raw action type again — ugly rather than
+    broken — and the classes above could move to ``log_entry_types`` as soon as
+    pretix can check this plugin against an organizer.
+    """
+    entry_type = organizer_entry_types.get(logentry.action_type)
+    if entry_type is not None:
+        return entry_type.display(logentry, logentry.parsed_data)
