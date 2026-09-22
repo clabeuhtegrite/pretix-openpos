@@ -192,7 +192,10 @@ function DeviceTable({ scans }: { scans: DoorScans }) {
               <td>
                 {device.name ?? t("attendance.backOffice")}
                 {device.current && (
-                  <span className="attendance-this"> · {t("attendance.thisDevice")}</span>
+                  <>
+                    {" "}
+                    <span className="attendance-this">· {t("attendance.thisDevice")}</span>
+                  </>
                 )}
               </td>
               <td>

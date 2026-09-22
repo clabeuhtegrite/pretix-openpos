@@ -1587,9 +1587,12 @@ table.takings thead th {
   letter-spacing: 0.02em;
 }
 
+/* Goes to the next line whole: an iPhone's column split « celui-ci » at its
+   hyphen. The space before it stays outside, so the line can break there. */
 .attendance-this {
   color: var(--text-dim);
   font-size: 13px;
+  white-space: nowrap;
 }
 
 /* The flow chart. Sizes are in viewBox units, so every label scales with the
