@@ -608,6 +608,31 @@ describe("with no network", () => {
     ]);
   });
 
+  it("tells the app it has queued something, so the badge and the drain know", async () => {
+    // A door that only ever scans queues entries the app never hears about:
+    // the badge reads zero after a whole evening, and when the network comes
+    // back the automatic drain bails out because as far as it knows there is
+    // nothing to send. The entries then sit in the browser until somebody
+    // happens to relaunch the app, and pretix never learns who came in.
+    const onQueued = vi.fn();
+    show({ onQueued });
+    act(() => markUnreachable());
+
+    await scan("alice");
+
+    expect(onQueued).toHaveBeenCalled();
+  });
+
+  it("does not announce a queued entry when the scan was refused", async () => {
+    const onQueued = vi.fn();
+    show({ onQueued });
+    act(() => markUnreachable());
+
+    await scan("nobody-we-know");
+
+    expect(onQueued).not.toHaveBeenCalled();
+  });
+
   it("refuses a ticket the guest list has never heard of", async () => {
     // The alternative is admitting anything presented to a camera.
     show();

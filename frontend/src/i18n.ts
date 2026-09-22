@@ -27,6 +27,8 @@ export const MESSAGES = {
     "sale.total": "Total",
     "sale.charge": "Take payment",
     "sale.clear": "Clear",
+    "sale.clearCredit":
+      "This basket carries the {order} credit. Emptying it drops the credit too, and the customer is owed that money. Empty it anyway?",
     "sale.soldOut": "Sold out",
     "sale.left": "{n} left",
     "custom.tile": "Free amount",
@@ -63,6 +65,8 @@ export const MESSAGES = {
     "payment.readerRefused": "The card was refused.",
     "payment.readerCancelled": "The payment was cancelled.",
     "payment.readerTimeout": "The reader waited too long for the card.",
+    "payment.readerTaken":
+      "The reader is taking a payment on the other till. Wait for it to finish, or take this sale in cash.",
     "payment.readerRetry": "Try again",
     "payment.readerStop": "Cancel the payment",
     "payment.readerCredit":
@@ -168,6 +172,12 @@ export const MESSAGES = {
     "offline.offline": "No connection. Sales and scans are being kept on this till.",
     "offline.badgeOffline": "Offline · {n}",
     "offline.badgePending": "{n} to send",
+    "offline.badgeFailed": "{n} refused",
+    "summary.since": "Since {time} — a till day runs from one morning to the next.",
+    "summary.queued":
+      "Not counted above: {n} sale(s) this till has not been able to send yet, {amount} of them in cash.",
+    "summary.failed": "The server could not be asked for the takings.",
+    "summary.retry": "Try again",
     "offline.nothingPending": "Nothing waiting to be sent.",
     "offline.stranded":
       "{n} kept for another event ({events}). They will be sent when this till is switched back to it.",
@@ -242,6 +252,8 @@ export const MESSAGES = {
     "history.notCancellable": "This entry cannot be cancelled from the till.",
     "summary.cancellations": "{n} cancellations are already netted off these figures.",
     "summary.depositRefunds": "{n} deposits handed back are already netted off these figures.",
+    "summary.earlierDays":
+      "{amount} of this was paid back tonight on {n} sale(s) from an earlier day. The drawer really is short by that much.",
     "settings.event": "Event",
     "settings.eventHelp": "Only events with Open POS enabled are listed.",
     "settings.switching": "Switching…",
@@ -274,6 +286,8 @@ export const MESSAGES = {
     "sale.total": "Total",
     "sale.charge": "Encaisser",
     "sale.clear": "Vider",
+    "sale.clearCredit":
+      "Ce panier porte l’avoir de {order}. Le vider supprime aussi l’avoir, et cet argent est dû au client. Vider quand même ?",
     "sale.soldOut": "Épuisé",
     "sale.left": "{n} restants",
     "custom.tile": "Montant libre",
@@ -310,6 +324,8 @@ export const MESSAGES = {
     "payment.readerRefused": "La carte a été refusée.",
     "payment.readerCancelled": "Le paiement a été annulé.",
     "payment.readerTimeout": "Le lecteur a attendu la carte trop longtemps.",
+    "payment.readerTaken":
+      "Le lecteur encaisse sur l’autre caisse. Attendez la fin, ou prenez cette vente en espèces.",
     "payment.readerRetry": "Réessayer",
     "payment.readerStop": "Annuler le paiement",
     "payment.readerCredit":
@@ -416,6 +432,12 @@ export const MESSAGES = {
     "offline.offline": "Pas de connexion. Ventes et scans sont conservés sur cette caisse.",
     "offline.badgeOffline": "Hors ligne · {n}",
     "offline.badgePending": "{n} à envoyer",
+    "offline.badgeFailed": "{n} refusé·e·s",
+    "summary.since": "Depuis {time} — une journée de caisse va d'un matin à l'autre.",
+    "summary.queued":
+      "Non compté ci-dessus : {n} vente(s) que cette caisse n'a pas encore pu envoyer, dont {amount} en espèces.",
+    "summary.failed": "Le serveur n'a pas pu être interrogé pour le relevé.",
+    "summary.retry": "Réessayer",
     "offline.nothingPending": "Rien en attente d’envoi.",
     "offline.stranded":
       "{n} en attente pour un autre événement ({events}). Elles partiront quand cette caisse y sera revenue.",
@@ -490,6 +512,8 @@ export const MESSAGES = {
     "history.notCancellable": "Cette écriture ne peut pas être annulée depuis la caisse.",
     "summary.cancellations": "{n} annulations sont déjà déduites de ces montants.",
     "summary.depositRefunds": "{n} consignes rendues sont déjà déduites de ces montants.",
+    "summary.earlierDays":
+      "{amount} ont été rendus ce soir sur {n} vente(s) d’un autre jour. Le tiroir est bien inférieur d’autant.",
     "settings.event": "Événement",
     "settings.eventHelp": "Seuls les événements où Open POS est activé sont listés.",
     "settings.switching": "Changement…",

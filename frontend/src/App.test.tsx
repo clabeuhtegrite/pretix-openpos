@@ -47,7 +47,10 @@ import { ApiError } from "./api";
 import { markReachable, markUnreachable } from "./connectivity";
 import { t } from "./i18n";
 import { formatMoney } from "./money";
-import { loadCashier, loadPairing, loadQueue, savePairing, saveQueue } from "./storage";
+import {
+  clearBasket, loadBasket, loadCashier, loadPairing, loadQueue, savePairing, saveBasket,
+  saveFailures, saveQueue,
+} from "./storage";
 import { fillStorage } from "./test/setup";
 import type { Catalog, JournalLine, PosConfig, SaleResult } from "./types";
 
@@ -260,6 +263,27 @@ describe("getting to the till", () => {
     expect(
       await screen.findByText(t("error.refused", { detail: "Invalid token." })),
     ).toBeDefined();
+    expect(screen.queryByRole("button", { name: /Bière/ })).toBeNull();
+  });
+
+  it("says nothing is on tonight, rather than selling from the cache", async () => {
+    // A series with no date on. The cached catalogue would hand back last
+    // week's evening and the till would sell against a date that is over,
+    // which the queue only finds out at the payment — the exact shape of the
+    // bug this replaced. It is also the one failure here that somebody can
+    // fix in a minute from the back office.
+    const { user } = show();
+    await ready();
+    const closed = new ApiError(400, "Nothing is on tonight.", {
+      code: "series_closed",
+    });
+    apiMock.config.mockRejectedValue(closed);
+    apiMock.catalog.mockRejectedValue(closed);
+
+    await user.click(screen.getByRole("button", { name: "settings" }));
+    await user.click(await screen.findByRole("button", { name: t("settings.refresh") }));
+
+    expect(await screen.findByText("Nothing is on tonight.")).toBeDefined();
     expect(screen.queryByRole("button", { name: /Bière/ })).toBeNull();
   });
 
@@ -875,6 +899,29 @@ describe("the queue", () => {
     ).toBeNull();
   });
 
+  it("goes on announcing a refusal after the queue has drained", async () => {
+    // The rule the whole offline mode rests on is that no refusal is ever
+    // swallowed. The badge is the only door to the panel that shows them, and
+    // it used to close the moment the queue emptied — taking the unread
+    // refusal with it.
+    saveFailures([{
+      entry: {
+        kind: "checkin", id: "n1", at: "2026-08-16T22:00:00.000Z",
+        event: "festival", list: 7, secret: "s", name: "Alice",
+      },
+      at: "2026-08-16T22:05:00.000Z",
+      message: "Already scanned",
+    }]);
+
+    show();
+    await ready();
+
+    expect(loadQueue()).toEqual([]);
+    expect(
+      await screen.findByRole("button", { name: t("offline.badgeFailed", { n: 1 }) }),
+    ).toBeTruthy();
+  });
+
   it("does not replay a queue in the middle of a payment", async () => {
     // Interrupting a half-tendered payment to drain a queue is the worst
     // possible moment.
@@ -1475,5 +1522,153 @@ describe("what a device is for", () => {
 
     await waitFor(() => expect(apiMock.checkout).toHaveBeenCalled());
     expect(apiMock.checkout.mock.calls[0][1].payment_type).toBe("cash");
+  });
+});
+
+
+describe("a till that was interrupted mid-sale", () => {
+  afterEach(() => {
+    clearBasket();
+    vi.unstubAllGlobals();
+  });
+
+  it("comes back with the basket still on screen", async () => {
+    // iOS kills a backgrounded PWA, a tablet reboots, somebody pulls to
+    // refresh. Before this, the queue at the bar started again from nothing.
+    saveBasket("festival", [{
+      key: "10:", itemId: 10, variationId: null, label: "Bière",
+      unitPrice: 300, count: 2, available: null,
+    }], null);
+    show();
+    await ready();
+
+    // Two beers at 3.00, priced by the catalogue these tests serve: the line
+    // and the basket total both read it back.
+    expect(await screen.findAllByText(formatMoney(600, "EUR"))).toHaveLength(2);
+  });
+
+  it("prices it against the tariff that is live now", async () => {
+    // It was saved with the prices of the session that was interrupted. The
+    // server would refuse a stale figure and the panel would recover, but the
+    // amount the operator reads out to a customer has to be right first time.
+    saveBasket("festival", [{
+      key: "10:", itemId: 10, variationId: null, label: "Bière",
+      unitPrice: 250, count: 2, available: null,
+    }], null);
+    show();
+    await ready();
+
+    // Two beers: 6.00 at the live tariff, 5.00 at the one this basket was
+    // saved with. The figure read out to the customer is the live one.
+    expect(await screen.findAllByText(formatMoney(600, "EUR"))).toHaveLength(2);
+    expect(screen.queryByText(formatMoney(500, "EUR"))).toBeNull();
+  });
+
+  it("brings the credit back with it", async () => {
+    // The part that is actually money: until the corrected sale is recorded,
+    // the credit exists nowhere but this tablet.
+    saveBasket("festival", [{
+      key: "10:", itemId: 10, variationId: null, label: "Bière",
+      unitPrice: 300, count: 1, available: null,
+    }], { amountCents: 1000, order: "POS09" });
+    const { user } = show();
+    await ready();
+
+    await user.click(screen.getByRole("button", { name: t("sale.charge") }));
+
+    expect(
+      await screen.findByText(t("payment.credit", { order: "POS09" })),
+    ).toBeTruthy();
+  });
+
+  it("leaves another event's basket where it is", async () => {
+    saveBasket("autre-soiree", [{
+      key: "10:", itemId: 10, variationId: null, label: "Bière",
+      unitPrice: 300, count: 2, available: null,
+    }], null);
+    show();
+    await ready();
+
+    expect(
+      screen.getByRole("button", { name: t("sale.charge") }),
+    ).toHaveProperty("disabled", true);
+  });
+
+  it("keeps the basket on disk as it is rung up", async () => {
+    const { user } = show();
+    await ready();
+
+    await user.click(screen.getByRole("button", { name: /Bière/ }));
+
+    await waitFor(() => expect(loadBasket("festival")?.cart).toHaveLength(1));
+  });
+
+  it("forgets it once the sale has been taken", async () => {
+    const { user } = show();
+    await ready();
+
+    await ringUp(user);
+    await confirm(user);
+
+    await waitFor(() => expect(apiMock.checkout).toHaveBeenCalled());
+    await waitFor(() => expect(loadBasket("festival")).toBeNull());
+  });
+});
+
+describe("emptying the basket", () => {
+  afterEach(() => {
+    clearBasket();
+    vi.unstubAllGlobals();
+  });
+
+  it("asks first when it would drop a credit", async () => {
+    // A credit is money the till is holding for a customer standing there. One
+    // stray tap on "Vider" used to be enough to lose it.
+    const confirmSpy = vi.fn(() => false);
+    vi.stubGlobal("confirm", confirmSpy);
+    saveBasket("festival", [{
+      key: "10:", itemId: 10, variationId: null, label: "Bière",
+      unitPrice: 300, count: 1, available: null,
+    }], { amountCents: 1000, order: "POS09" });
+    const { user } = show();
+    await ready();
+
+    await user.click(screen.getByRole("button", { name: t("sale.clear") }));
+
+    expect(confirmSpy).toHaveBeenCalled();
+    // Declined, so nothing was dropped.
+    expect(screen.getByRole("button", { name: t("sale.charge") })).toBeTruthy();
+  });
+
+  it("drops it once that is answered", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    saveBasket("festival", [{
+      key: "10:", itemId: 10, variationId: null, label: "Bière",
+      unitPrice: 300, count: 1, available: null,
+    }], { amountCents: 1000, order: "POS09" });
+    const { user } = show();
+    await ready();
+
+    await user.click(screen.getByRole("button", { name: t("sale.clear") }));
+
+    await waitFor(() => expect(loadBasket("festival")).toBeNull());
+  });
+
+  it("does not ask about an ordinary basket", async () => {
+    // Ten seconds to ring up again, and a dialog on every clear is a dialog
+    // nobody reads by the third one.
+    const confirmSpy = vi.fn(() => true);
+    vi.stubGlobal("confirm", confirmSpy);
+    const { user } = show();
+    await ready();
+
+    await user.click(screen.getByRole("button", { name: /Bière/ }));
+    await user.click(screen.getByRole("button", { name: t("sale.clear") }));
+
+    expect(confirmSpy).not.toHaveBeenCalled();
+    // Emptied: the button that takes the money has nothing to take.
+    expect(
+      screen.getByRole("button", { name: t("sale.charge") }),
+    ).toHaveProperty("disabled", true);
   });
 });

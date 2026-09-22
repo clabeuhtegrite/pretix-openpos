@@ -50,12 +50,29 @@ export function subscribe(listener: Listener): () => void {
  * possibly every few seconds, and must not depend on a device token still being
  * valid. A HEAD on the app shell is enough to tell a dead network from a live one.
  */
+const PROBE_TIMEOUT_MS = 5_000;
+
 export async function probe(): Promise<boolean> {
   if (probing) return online;
   probing = true;
   try {
-    await fetch(`/openpos/?probe=${Date.now()}`, { method: "HEAD", cache: "no-store" });
-    markReachable();
+    // Bounded for the same reason every other request is: a probe that hangs
+    // on a dead access point is a probe that never reports, and this one is
+    // the till's only way back to the truth while it believes it is offline.
+    // Shorter than a real request — nothing depends on its answer but the
+    // next probe ten seconds later.
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+    try {
+      await fetch(`/openpos/?probe=${Date.now()}`, {
+        method: "HEAD",
+        cache: "no-store",
+        signal: controller.signal,
+      });
+      markReachable();
+    } finally {
+      clearTimeout(timer);
+    }
   } catch {
     markUnreachable();
   } finally {

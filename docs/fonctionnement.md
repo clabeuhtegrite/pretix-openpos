@@ -262,7 +262,7 @@ En Docker/Kubernetes, [`deploy/Dockerfile`](../deploy/Dockerfile) intègre le pl
 
 ```bash
 cd frontend && npm run build && cd ..
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.11.0 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.12.0 .
 ```
 
 Deux pièges :
@@ -845,28 +845,42 @@ La consigne **se vend comme n'importe quel produit** : créez « Consigne
 gobelet » à 1 €, canal Open POS, un quota, et elle est dans la grille. Rien de
 particulier là-dedans.
 
-Le retour, lui, ne peut pas être une commande pretix : **le total d'une commande
-ne peut pas passer sous zéro**, et la file de fin de soirée, ce sont des gens qui
-rendent leurs gobelets sans rien acheter. Il est donc enregistré comme une
-écriture de journal à part, de type `deposit_refund`, montant négatif, **sans
-commande**. C'est la seule chose de la caisse qui existe dans le journal et pas
-dans pretix.
+Le retour, lui, ne peut pas être une ligne de commande pretix : **le total d'une
+commande ne peut pas passer sous zéro**, et la file de fin de soirée, ce sont des
+gens qui rendent leurs gobelets sans rien acheter. Il est donc enregistré comme
+une écriture de journal à part, de type `deposit_refund`, montant négatif,
+**sans commande**.
 
-Ce que ça donne pour « deux bières et je rends trois gobelets » :
+Ce que ça donne pour « quatre bières et je rends trois gobelets » :
 
 | # | Type | Commande | Montant |
 |---|---|---|---|
-| 41 | `sale` | CMD8K | 6,00 € |
+| 41 | `sale` | CMD8K | 12,00 € |
 | 42 | `deposit_refund` | — | −3,00 € |
 
-Le client pose 3 €. pretix voit une commande de deux bières à 6 €, ce qui est
-exact : deux bières ont bien été vendues, et 3 € sont sortis du tiroir pour des
-gobelets rendus. Ce sont deux événements économiques distincts, et les fondre en
-une commande à 3 € minorerait la recette du bar.
+Le client pose 9 €. Le journal garde les deux événements séparés : quatre bières
+vendues à 12 €, et 3 € sortis pour des gobelets rendus. Le tiroir reste la somme
+pure de la colonne `total` — 12 − 3 = 9 — comme il l'est déjà avec les
+annulations. C'est l'invariant sur lequel tout le reste tient.
 
-Le tiroir, lui, reste la somme pure de la colonne `total` du journal — 6 − 3 = 3
-— comme il l'est déjà avec les annulations. C'est l'invariant sur lequel tout le
-reste tient.
+**La commande pretix, elle, vaut 9 €**, parce que c'est ce qui a été payé pour
+elle : les quatre bières restent quatre bières de lignes de commande, à 12 €, et
+la consigne rendue est une ligne de frais négative de −3 € à côté — la forme que
+pretix utilise lui-même pour une carte cadeau utilisée. La recette du bar n'est
+donc pas minorée : les 12 € sont toujours là, en lignes de commande.
+
+C'est un changement par rapport aux versions ≤ 0.11.0, où la commande valait les
+12 € des bières. Le compte de pretix était alors gonflé de chaque consigne rendue
+— contre le tiroir, et contre SumUp sur un panier carte, puisque le lecteur ne
+prélève que le net. Et l'annulation rendait ces 12 € : SumUp ne rembourse que sa
+propre transaction, soit 9 €, et la caisse annonçait « déjà remboursé » — le
+client repartait avec 3 € de moins que ses gobelets. Maintenant les quatre
+chiffres concordent : le lecteur, la commande, l'encaissement et le
+remboursement.
+
+Si le panier passe sous zéro, la ligne de frais s'arrête à la vente : une
+commande pretix ne peut pas valoir moins que rien. Le reste demeure où vit déjà
+un retour sans vente, dans l'écriture de journal, hors de toute commande.
 
 Trois conséquences à connaître :
 
@@ -895,10 +909,13 @@ Deux limites assumées :
 
 - **Rendre une consigne ne remet pas de stock.** Le quota du produit de consigne
   est consommé à la vente et n'est pas rendu au retour : mettez-le en illimité.
-- **Annuler une vente mixte n'annule pas le retour qui l'accompagnait.**
-  L'annulation avoirie la commande — les deux bières — et laisse l'écriture de
-  décaissement telle quelle, ce qui est correct puisqu'elle n'en faisait pas
-  partie. Les gobelets, eux, sont chez le client.
+- **Annuler une vente mixte contre-passe les deux moitiés.** Le client a posé le
+  net sur le comptoir : lui rendre la vente sans reprendre la consigne laisserait
+  le tiroir court du montant de la consigne pour le reste de la soirée, un écart
+  que personne ne peut expliquer à 1 h 30. L'écriture de contre-passage de la
+  consigne dérive sa clé de celle de l'annulation, donc une annulation rejouée ne
+  la repasse pas deux fois. Ce que la caisse ne fait pas à votre place : reprendre
+  les gobelets, qui sont chez le client.
 
 ---
 
@@ -1029,6 +1046,62 @@ réessaie avec la même clé : le serveur lui rend l'annulation telle quelle *et
 finit le remboursement, ou répond qu'il était déjà fait. Rien d'autre ne
 repasserait derrière.
 
+### Deux caisses sur un seul lecteur
+
+Un bar avec deux tablettes et une seule machine entre elles, c'est un comptoir
+réel, et c'est autorisé : donner le même lecteur à deux caisses ne déclenche
+plus de refus dans le back-office. Les deux lignes affichent alors *Partagé avec
+une autre caisse*, pour que ce soit un choix visible.
+
+Elles se relaient, et c'est le **serveur** qui arbitre, pas l'application. Tant
+qu'une caisse a un panier sur le lecteur, l'autre est refusée sur la carte avec
+son panier intact — rien d'écrit, aucune clé d'idempotence consommée — et elle
+voit « Le lecteur encaisse sur l'autre caisse. Attendez la fin, ou prenez cette
+vente en espèces. » Presser *Carte* une minute plus tard est un premier essai
+propre, pas une reprise.
+
+SumUp refuse déjà le second encaissement de son côté, mais trop tard : au moment
+de l'appel, le serveur a écrit une ligne de paiement et brûlé la clé de la caisse
+sur un panier qu'aucun porteur de carte n'a jamais vu. D'où l'arbitrage avant.
+
+Deux détails qui comptent :
+
+- Le serveur ne se fie pas à sa propre ligne « en attente ». Elle dit *en
+  attente* parce que personne n'a regardé depuis, ce qui n'est pas la même chose
+  qu'un client encore devant la machine : il demande d'abord à SumUp ce qu'est
+  devenu ce paiement. C'est exactement l'appel que fait l'autre caisse en
+  interrogeant.
+- Un paiement auquel personne n'a jamais répondu cesse de tenir le lecteur au
+  bout de **cinq minutes**, et l'écran de la machine est effacé avant d'y
+  remettre un panier. Une tablette tombée en rade avec une invite affichée aurait
+  sinon coupé la carte pour le reste de la soirée, sans que personne puisse dire
+  pourquoi. La ligne orpheline, elle, reste ouverte et remonte dans *Ventes →
+  Paiements carte sans vente* plutôt que d'être classée au jugé.
+
+### Ce que le lecteur dit de lui-même
+
+L'écran *Lecteurs de carte* interroge chaque lecteur appairé : joignable ou non,
+au repos ou en train de prendre une carte, batterie, type de connexion, version
+de firmware. C'est la question qu'on se pose vraiment avant d'ouvrir une porte —
+l'appairage ne répond ni à « est-ce qu'il est allumé » ni à « est-ce qu'il est
+chargé ».
+
+Un lecteur qui ne peut pas répondre s'affiche **Inconnu**, jamais *Hors ligne* :
+la route d'état demande un firmware 3.3.39.0 sur un Solo là où encaisser demande
+3.3.24.3, donc un lecteur entre les deux fonctionne parfaitement et n'a rien à
+dire. Envoyer quelqu'un chercher une machine qui est là, en train de marcher,
+serait la pire des deux erreurs. L'appel est borné à cinq secondes pour la même
+raison : ne pas savoir, vite, est la réponse la plus utile pendant qu'une page
+se charge.
+
+Un lecteur bloqué en attente de carte reçoit un bouton **Effacer son écran**,
+qui termine l'encaissement resté dessus. Tant qu'il n'est pas effacé, le lecteur
+refuse le paiement suivant comme occupé, ce qui se lit à la porte comme « le
+terminal est cassé ». Ce bouton ne touche pas à la ligne de paiement :
+l'interruption est au mieux tentée, SumUp ne confirme rien, et il est donc
+incapable de dire si la carte avait déjà été débitée. Seule la transaction SumUp
+le dit, et c'est ce que demande le règlement du paiement.
+
 ### Quand le lecteur disparaît
 
 Un lecteur désappairé depuis le tableau de bord SumUp laisse une caisse qui
@@ -1081,6 +1154,49 @@ premier plan** — mais uniquement quand la caisse est au repos (panier vide, pa
 paiement en cours, pas d'écran de fin ni de scan). Recharger les prix sous un
 panier qu'on est en train de lire à un client, c'est exactement comme ça qu'on
 annonce un montant et qu'on en encaisse un autre.
+
+### 6.2bis Les séries : la caisse vend la date du soir
+
+Un événement pretix peut être une **série** : une même configuration, plusieurs
+dates, chacune avec son quota et éventuellement son prix. pretix refuse toute
+ligne de commande qui ne nomme pas une date — et la caisse n'en envoyait aucune.
+Le catalogue se chargeait proprement, en affichant cent places restantes, et la
+première vente revenait en « Le produit “Entrée” n'est pas rattaché à un
+quota », au moment du paiement, devant le client. Le message désigne la mauvaise
+cause : le produit est bien rattaché à un quota, mais pas à une date.
+
+La caisse n'envoie toujours pas de date. Elle n'envoie pas de prix non plus, et
+pour la même raison : la personne qui tient la caisse a une file devant elle et
+n'a pas à choisir l'un ou l'autre dans une liste entre deux clients. Le serveur
+décide, à l'horloge :
+
+- La date **déjà commencée et pas terminée** l'emporte — c'est celle pour
+  laquelle la file est là. Si deux se chevauchent, la plus récemment commencée.
+- Sinon la **prochaine de la soirée** : une porte vend avant d'ouvrir.
+- « La soirée » est la journée de caisse habituelle, six heures du matin à six
+  heures le lendemain. Une porte qui vend encore à une heure vend pour la
+  soirée en cours, pas pour la suivante. Une date sans heure de fin — le cas le
+  plus courant — court jusqu'à la fin de sa propre nuit, pas jusqu'à l'instant
+  où elle commence.
+- **Rien de programmé** : la caisse le dit au catalogue, à l'installation, et
+  refuse de s'ouvrir sur son cache. Vendre depuis le catalogue de la semaine
+  dernière ramènerait exactement le bug d'origine, découvert au paiement.
+
+Deux exceptions, toutes deux du côté de l'argent déjà encaissé. Une vente
+**rejouée** est rattachée à la soirée où elle a été encaissée, pas à celle où
+elle arrive : une caisse coupée rend ses ventes quand elle retrouve le réseau,
+ce qui peut être le lendemain matin. Et une vente déjà payée n'est **jamais**
+refusée faute de date : refuser ne rend pas l'argent, ça ne fait qu'échouer la
+vente hors de pretix. La date la plus proche est utilisée — c'est une
+approximation, et une approximation qu'on peut corriger vaut mieux qu'une vente
+introuvable.
+
+Le tarif sur place, lui, ignore les dates, délibérément : une porte vend au prix
+de la porte quelle que soit la soirée de la série, et lui donner une date
+obligerait à tenir un tarif par date pour changer le prix d'une bière. L'ordre
+de résolution est donc : tarif sur place, puis prix de la date, puis prix de la
+variante, puis prix du produit. La date vendue est écrite sur chaque ligne du
+journal, avec son nom du moment.
 
 ### 6.3 L'idempotence
 
@@ -1171,6 +1287,71 @@ avec *Dépairer* à portée de main ; elle ne s'efface jamais toute seule (§4.1
 
 ## 7. Au quotidien
 
+### 7.0 Avant la soirée
+
+Une liste courte, à faire la veille ou l'après-midi même, dans cet ordre. Chaque
+ligne est là parce que son absence coûte cher une fois la porte ouverte.
+
+**Les tablettes**
+
+1. Chaque tablette est **chargée**, et branchée si la soirée dépasse quatre
+   heures. Une caisse qui s'éteint emporte sa file d'attente hors ligne.
+2. Chaque tablette ouvre la caisse **depuis l'écran d'accueil**, pas depuis un
+   onglet. L'app refuse de vendre dans un onglet ; c'est délibéré, une barre
+   d'adresse au-dessus du panier et un geste de rafraîchissement en travers,
+   c'est une vente perdue.
+3. Le **nom du caissier** est renseigné dans les réglages de chaque tablette. Il
+   part avec chaque vente et c'est ce qui rend la recette ventilable en fin de
+   soirée.
+4. Le **rôle** de chaque appareil est le bon dans *Open POS → Appareils de
+   caisse* : caisse pour le bar, porte pour l'entrée. Un appareil sans rôle fait
+   les deux, ce qui convient à une petite soirée et pas à un bar qui bouscule.
+5. Faire **une vente en mode test** sur chaque tablette, puis l'annuler. C'est
+   le seul moyen de savoir que le token est encore valide, que l'événement est
+   joignable et que l'écran répond. Le mode test ne se mélange pas à la recette.
+
+**Le lecteur de carte**
+
+6. *Open POS → Lecteurs de carte* : le lecteur est **Appairé** et, dans la
+   colonne *En ce moment*, **Prêt**. « Inconnu » veut dire que le lecteur est
+   trop ancien pour répondre à cette question et non qu'il est éteint ; « Hors
+   ligne » veut dire qu'il l'est vraiment.
+7. La **batterie** affichée est suffisante, ou le lecteur est sur son socle.
+8. Si un lecteur affiche **Encaissement en cours** alors que personne
+   n'encaisse, presser **Effacer son écran** : il reste bloqué d'une soirée à
+   l'autre sinon, et refuse le premier paiement de la vôtre.
+9. Faire **un aller-retour à un euro** : une vente carte, puis son annulation.
+   C'est le seul test qui prouve la chaîne entière, du panier jusqu'au
+   remboursement.
+
+**Le serveur**
+
+10. *Open POS → Ventes* : la chaîne du journal ne signale rien, et la section
+    **Paiements carte sans vente** est vide. Si elle ne l'est pas, régler ces
+    lignes avant d'en ajouter de nouvelles.
+11. Les **tarifs sur place** sont ceux de ce soir. Un tarif modifié pendant une
+    vente est géré, mais c'est une seconde de flottement devant un client.
+
+### 7.0bis Si SumUp tombe en pleine soirée
+
+Ça arrive, et la réponse tient en une ligne : **les espèces continuent**. La
+caisse ne dépend de SumUp que pour la carte.
+
+- Le lecteur refuse ou ne répond plus : encaisser en espèces. La caisse propose
+  le choix à chaque vente, rien n'est à reconfigurer.
+- Si la panne dure, retirer le lecteur de la caisse dans *Open POS → Appareils
+  de caisse* (mettre son lecteur à **Aucun**). Cette caisse revient aux
+  paiements carte saisis à la main : quelqu'un prend la carte dans l'application
+  SumUp Paiements et le signale à la caisse. **Attention**, un lecteur piloté par
+  l'API Cloud est détaché de cette application — ce repli suppose un second
+  moyen d'encaisser, pas le même lecteur.
+- Un paiement resté en l'air apparaîtra dans *Ventes → Paiements carte sans
+  vente*. Ne pas réencaisser avant d'avoir vérifié dans SumUp si la carte a été
+  débitée.
+- Ce qui ne marche pas : faire payer deux fois « au cas où ». SumUp ne rembourse
+  que contre une transaction existante, et un client qui a payé deux fois
+  attendra deux remboursements.
+
 ### 7.1 Sur la caisse
 
 *Réglages* (⚙) contient :
@@ -1190,6 +1371,28 @@ avec *Dépairer* à portée de main ; elle ne s'efface jamais toute seule (§4.1
   soirée, pas les quatre-vingt-dix dernières minutes ;
 - *Recharger* et *Dépairer*.
 
+Le relevé affiche aussi l'**heure de début** de la journée de caisse, et
+signale les ventes encore en file d'attente hors ligne avec leur montant en
+espèces : la recette affichée ne les compte pas encore, et le tiroir, si.
+
+**Le panier survit à un rechargement.** iOS tue une application web mise en
+arrière-plan, une tablette redémarre, quelqu'un tire pour rafraîchir. Le panier
+est recopié sur le disque au fur et à mesure et restauré au démarrage suivant.
+L'**avoir** compte le plus : tant que la vente corrigée n'est pas enregistrée,
+il n'existe nulle part ailleurs que sur la tablette, et c'est de l'argent dû à
+quelqu'un qui est devant le comptoir.
+
+C'est aussi pour ça qu'il expire au bout d'une demi-heure. Restaurer un avoir
+périmé déduirait du total du client suivant de l'argent qui appartient à
+quelqu'un parti depuis une heure — de l'argent qui sort vraiment du tiroir —
+alors que perdre un avoir récent coûte un détour par l'historique. Les deux
+erreurs n'ont pas la même taille. Un panier restauré est par ailleurs
+retarifé sur le catalogue en vigueur avant d'être lu à voix haute.
+
+Vider un panier qui porte un avoir demande confirmation. Seulement dans ce cas :
+un panier de consommations se resaisit en dix secondes, et une confirmation à
+chaque *Vider* est une confirmation que plus personne ne lit à la troisième.
+
 C'est l'alternative légère à une vraie session de caisse : pas de fonds de
 caisse, pas de comptage aveugle, juste ce qui est passé depuis le début de la
 journée de caisse pour qu'un bénévole rapproche le tiroir en fin de soirée.
@@ -1203,10 +1406,92 @@ ligne mode test séparée, et l'état de la chaîne d'intégrité. Le bouton
 compris — pour la personne qui tient les comptes ; les recettes se recalculent
 depuis ce fichier, c'est le but.
 
+**Une soirée à la fois.** Deux champs de date en haut de la page réduisent le
+journal *et* les recettes à l'intervalle demandé, et le bouton Export CSV
+emporte le même intervalle — un export qui rendrait tout pendant que l'écran
+montre une soirée est le piège coûteux, puisque la personne qui l'ouvre est en
+train de rapprocher une caisse et n'a aucun moyen de s'en apercevoir.
+
+L'unité est la **soirée**, pas la journée civile : elle commence à six heures du
+matin et court jusqu'à six heures le lendemain. `Du 19/09 au 19/09` donne donc
+toute la soirée du samedi 19, petites heures comprises. Découper à minuit
+couperait chaque événement de ce système en deux moitiés qui ne répondent à
+rien. Les deux bornes sont facultatives, et une date illisible ou un intervalle
+à l'envers est dit à l'écran plutôt que silencieusement ignoré : un filtre qui
+ne fait rien sans le dire est pire que pas de filtre.
+
+Deux blocs ne suivent jamais ce filtre, exprès : la vérification d'intégrité et
+les paiements carte sans vente. La chaîne traverse le journal entier, donc en
+contrôler une tranche laisserait une page affichant une soirée déclarer le
+journal sain alors que l'écriture cassée est juste en dehors de la fenêtre ; et
+un débit orphelin a d'autant plus besoin d'être vu qu'il date d'avant.
+
 La page vérifie la chaîne depuis un point de contrôle plutôt que de re-hacher
 tout le journal à chaque affichage ; l'audit intégral, depuis la première
 écriture, se lance avec `python -m pretix openpos_verify_journal` (une ligne
-par événement, code de sortie non nul si une chaîne ne colle pas).
+par événement, code de sortie non nul si une chaîne ne colle pas). Sur le
+cluster, un CronJob le lance chaque nuit — voir `deploy/` dans le dépôt
+`homelab-k8s` — parce qu'une chaîne cassée découverte le jour où quelqu'un doute
+du journal est découverte trop tard.
+
+**Paiements carte sans vente.** La même page liste les paiements posés sur un
+lecteur sans qu'aucune vente n'ait jamais été enregistrée en face. C'est la seule
+chose que le journal ne peut pas montrer par construction : la recette est
+recalculée depuis lui, donc un débit qui ne l'a jamais atteint est absent de
+chaque chiffre plutôt que faux dans l'un d'eux, et le seul autre endroit où cette
+transaction existe est le tableau de bord SumUp.
+
+Deux formes du même problème :
+
+- **Débité** : SumUp dit que le paiement est passé et pretix n'en sait rien. Une
+  carte a été débitée. Il faut soit rembourser dans SumUp, soit ressaisir la
+  vente.
+- **Toujours en attente** : la caisse a cessé d'interroger — batterie, chute,
+  navigateur fermé — longtemps après que quiconque puisse être encore au
+  comptoir. Vérifier dans SumUp si la carte est passée avant de faire l'un ou
+  l'autre.
+
+Les refus et les paiements déjà remboursés n'y figurent pas : la section est vide
+une soirée ordinaire, et veut donc dire quelque chose quand elle ne l'est pas.
+Elle est en lecture seule, délibérément — quoi faire de l'une de ces lignes est
+une décision, pas quelque chose qu'un chargement de page doit trancher.
+
+**Vendu à un prix qui avait changé.** Une vente encaissée pendant que la caisse
+était coupée a été tarifée depuis le catalogue qu'elle avait en cache, et le
+client a payé ce montant-là. La commande est donc créée à ce qui a réellement
+été encaissé — facturer une somme que personne n'a versée serait pire — et
+l'écart est reporté plutôt que lissé. Une section de la page Ventes le liste
+pour l'intervalle affiché, ligne par ligne, avec le total de l'écart : c'est de
+l'argent réel, présent dans la caisse et absent du tarif. L'export CSV porte les
+deux mêmes colonnes, `tariff_total` et `off_tariff`, vides sur toutes les autres
+lignes — un tableur peut donc les sommer sans lire la colonne des positions à
+l'œil.
+
+Le même écart est écrit dans l'historique de la commande elle-même, qui est
+l'endroit où l'on regarde quand une seule commande ne colle pas au tarif deux
+jours après. Auparavant le panneau de resynchronisation de la caisse était le
+seul endroit où la chose était dite, une fois, à qui tenait la tablette.
+
+**L'historique en clair.** Tout ce que le plugin écrit dans l'historique pretix
+s'affiche en toutes lettres, et dit ce qui a changé plutôt que combien de choses
+ont changé : « Bière : 3,50 € → 4,00 € » plutôt que « 6 produits modifiés ». Les
+deux côtés de chaque changement et les noms sont recopiés dans l'entrée au
+moment où elle est écrite, puisqu'un produit renommé ou supprimé la saison
+suivante laisserait l'entrée pointer vers rien. La clé API SumUp n'y figure
+jamais : seuls les noms des champs modifiés sont enregistrés, ce qui est
+précisément la raison pour laquelle l'écran des réglages SumUp n'utilise pas
+celui de pretix — ce dernier écrit la *valeur* de chaque champ modifié dans
+l'historique.
+
+**Remboursements carte refusés par SumUp.** Une annulation de vente carte demande
+le remboursement par API, et le réseau peut répondre non : transaction déjà
+remboursée, plafond, lecteur disparu depuis. La caisse le dit en rouge, une fois,
+à la personne qui a appuyé — pendant qu'on annonce au client que l'annulation est
+passée. L'argent est toujours sur sa carte. Cette section est la liste qui
+manquait, avec la référence SumUp pour la retrouver dans le tableau de bord ;
+l'annulation, elle, tient, et pretix ne réessaie pas de lui-même. Comme les
+paiements carte sans vente, elle ignore le filtre par soirée : une dette envers un
+client ne cesse pas de compter parce que l'écran montre une autre soirée.
 
 Les commandes elles-mêmes sont des commandes pretix ordinaires : elles
 apparaissent dans les listes, les exports et les rapports habituels, sur le canal

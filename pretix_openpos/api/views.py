@@ -35,6 +35,16 @@ CARD_DECLARED = "declared"
 #: A reader is assigned to this device and is the only way to pay by card on it.
 CARD_TERMINAL = "terminal"
 
+#: How long a reader is treated as held by a payment nobody has answered.
+#:
+#: One machine can only face one cardholder, so a payment waiting on a reader
+#: holds it against every till that shares it. Past this it is a leftover
+#: rather than a payment in progress — the prompt has timed out on the device
+#: long before — and a leftover that held the reader for the rest of the
+#: evening would be the worse failure of the two: it would take card payments
+#: off the bar entirely, with nobody able to say why.
+READER_HELD_FOR = timedelta(minutes=5)
+
 
 def get_pos_channel(organizer):
     """
@@ -62,22 +72,46 @@ def pos_price_overrides(event):
     }
 
 
-def resolve_price(overrides, item, variation=None) -> Decimal:
+def resolve_price(overrides, item, variation=None, subevent=None) -> Decimal:
     """
     On-site price for a product, falling back to the webshop price.
 
-    Mirrors pretix' own resolution order (variation price, then item price) and
-    layers the till tariff on top of it.
+    Mirrors pretix' own resolution order — the date's own price, then the
+    variation price, then the item price — and layers the till tariff on top of
+    it. The tariff has no notion of a date, deliberately: a door sells at the
+    door price whichever evening of a series it is, and giving it one would
+    mean an organiser maintaining a price list per date to change one beer.
     """
     if variation is not None:
         if (item.pk, variation.pk) in overrides:
             return overrides[(item.pk, variation.pk)]
+        if subevent is not None:
+            per_date = subevent.var_price_overrides.get(variation.pk)
+            if per_date is not None:
+                return per_date
         if variation.default_price is not None:
             return variation.default_price
         return item.default_price
     if (item.pk, None) in overrides:
         return overrides[(item.pk, None)]
+    if subevent is not None:
+        per_date = subevent.item_price_overrides.get(item.pk)
+        if per_date is not None:
+            return per_date
     return item.default_price
+
+
+def for_date(quotas, subevent):
+    """
+    The quotas that apply on the date being sold.
+
+    A series keeps one set of quotas per date, so counting them all together
+    would report the whole season's remaining places at a door selling one
+    evening. ``None`` means the event is not a series and every quota applies.
+    """
+    if subevent is None:
+        return quotas
+    return [quota for quota in quotas if quota.subevent_id == subevent.pk]
 
 
 def quota_availability(quotas, cache):
@@ -132,13 +166,134 @@ OFFLINE_SNAPSHOT_LIMIT = 20000
 BUSINESS_DAY_STARTS_AT = time(6, 0)
 
 
-def start_of_business_day(event):
-    """The moment the takings count from: 6 am on the day the current night began."""
-    local = now().astimezone(event.timezone)
+def start_of_business_day(event, at=None):
+    """
+    The moment the takings count from: 6 am on the day that night began.
+
+    ``at`` is the moment being asked about, defaulting to this one. A sale
+    replayed the next morning has to be placed in the night it was rung up in,
+    not the one it arrives in.
+    """
+    local = (at or now()).astimezone(event.timezone)
     day = local.date()
     if local.time() < BUSINESS_DAY_STARTS_AT:
         day -= timedelta(days=1)
     return make_aware(datetime.combine(day, BUSINESS_DAY_STARTS_AT), event.timezone)
+
+
+def deposit_fee(refund_total, sale_total, item):
+    """
+    The deposits handed back with a sale, as a line on the order.
+
+    ``refund_total`` is negative — money leaving — and ``sale_total`` is what
+    the products came to. The order then totals what the customer actually
+    paid, which is the figure the card was charged, the figure the drawer took
+    and the figure a cancellation has to give back. It used to total the
+    products alone, so every deposit returned inflated pretix' takings against
+    both SumUp and the drawer at once.
+
+    Capped at the sale, never below zero: pretix cannot hold a negative order
+    and a basket that nets out that way is money leaving the drawer with
+    nothing sold. The remainder stays where a return with no sale at all
+    already lives — a journal row of its own, outside any order, which is the
+    only place it can go. That case is cash by definition; the till refuses a
+    card basket at or below zero because SumUp can only refund against one of
+    its own transactions.
+    """
+    given_back = -refund_total
+    if given_back <= 0 or item is None:
+        return []
+    return [
+        {
+            "fee_type": "other",
+            "value": str(-min(given_back, sale_total)),
+            "description": str(item.name),
+        }
+    ]
+
+
+def selling_subevent(event, at=None, *, settled=False):
+    """
+    Which date of a series the till is selling for, or ``None`` for a plain event.
+
+    A door till sells for tonight and nothing else. Whoever is standing at it
+    has one queue in front of them and no business picking a date off a list
+    between customers, so the server picks it — the same way it picks every
+    price. The app has never sent either, and this does not change that.
+
+    "Tonight" is the business day the rest of this system runs on: six in the
+    morning to six the next. A door still selling at one o'clock is selling
+    for the evening that is still going on, not for the next one. Within that
+    window the date that has already started wins over one still to come, and
+    a date that runs past the window — a festival day with no end time, or one
+    ending in the small hours — still counts while it is on.
+
+    ``at`` is the moment the money moved, so a sale replayed the next morning
+    is booked against the night it was rung up in rather than the one it
+    arrives in. ``settled`` says that money has already changed hands: nothing
+    is refused then, because refusing does not give it back, it only strands
+    the sale outside pretix. The nearest date is used instead.
+
+    Otherwise this raises, and the refusal belongs at the catalogue, where a
+    volunteer meets it while setting up. pretix used to raise it at the payment
+    instead, in front of a customer, in the form "the product is not assigned
+    to a quota" — which names the wrong cause entirely.
+    """
+    if not event.has_subevents:
+        return None
+
+    moment = at or now()
+    opened = start_of_business_day(event, moment)
+    closes = opened + timedelta(days=1)
+    # Bounded because a season can hold hundreds of dates and only the ones
+    # around this evening can win. Ordered so the last to have started is the
+    # first considered.
+    candidates = list(
+        event.subevents.filter(active=True, date_from__lt=closes)
+        .order_by("-date_from")[:20]
+    )
+
+    def ends(subevent):
+        # A date with no end time runs to the end of its own night, not to the
+        # instant it started. Most organisers never fill the end in, and
+        # treating the date as over the moment the doors open would send every
+        # sale after that to the next evening in the series.
+        if subevent.date_to:
+            return subevent.date_to
+        return start_of_business_day(event, subevent.date_from) + timedelta(days=1)
+
+    # Started already and not over: the one the queue outside is for. The most
+    # recently started, so two dates overlapping resolve to the later.
+    for subevent in candidates:
+        if subevent.date_from <= moment and ends(subevent) >= moment:
+            return subevent
+    # Otherwise the next one tonight — a door sells before it opens.
+    upcoming = [s for s in candidates if s.date_from > moment and s.date_from >= opened]
+    if upcoming:
+        return upcoming[-1]
+
+    if settled:
+        # Whatever is closest to when the money moved. A guess, and said to be
+        # one — but a sale that cannot be booked at all is worse than one
+        # booked against the neighbouring date, which somebody can move.
+        nearest = min(
+            event.subevents.filter(active=True),
+            key=lambda s: abs(s.date_from - moment),
+            default=None,
+        )
+        if nearest is not None:
+            return nearest
+
+    raise ValidationError(
+        {
+            "detail": [
+                _("Nothing is on tonight. This event is a series, and the till "
+                  "sells for the date that is on — add one for tonight, or "
+                  "check that it is switched on.")
+            ],
+            "code": "series_closed",
+        }
+    )
 
 
 def checkin_list_for(event):
@@ -201,7 +356,7 @@ class ResolvedLine:
         self.refund = refund
 
 
-def resolve_line(line, *, sellable, overrides, custom_item, deposit, settled):
+def resolve_line(line, *, sellable, overrides, custom_item, deposit, settled, subevent=None):
     """
     Price one line of a basket, and refuse the ones that may not be sold.
 
@@ -246,7 +401,7 @@ def resolve_line(line, *, sellable, overrides, custom_item, deposit, settled):
         # one place a line's price is decided — rather than at each caller.
         sent_price = Decimal(str(sent_price))
 
-    tariff = resolve_price(overrides, item, variation)
+    tariff = resolve_price(overrides, item, variation, subevent)
     if is_refund:
         # A deposit handed back is worth exactly what the deposit costs,
         # negated here rather than sent: the till names the product, the server
@@ -312,6 +467,12 @@ def settle_terminal_payment(payment, account):
     reach settles every payment anyway, a second or two later.
     """
     if payment.settled:
+        return payment
+    if not payment.client_transaction_id:
+        # The checkout call never came back with a handle, so there is nothing
+        # to ask about yet. Saying "not paid" here would be the same mistake as
+        # writing a refusal on a timeout: this row is still open, and the way
+        # it closes is the reader being cleared, not a guess made here.
         return payment
     try:
         transaction_data = account.transaction(payment.client_transaction_id)
@@ -515,6 +676,9 @@ class OpenPosViewSet(viewsets.ViewSet):
     def catalog(self, request, **kwargs):
         event = request.event
         channel = get_pos_channel(event.organizer)
+        # Raises for a series with nothing on, which is a 400 here rather than
+        # a refusal at the payment: the volunteer meets it while setting up.
+        subevent = selling_subevent(event)
         overrides = pos_price_overrides(event)
         quota_cache = {}
         custom = custom_sale_item(event)
@@ -557,17 +721,21 @@ class OpenPosViewSet(viewsets.ViewSet):
                         {
                             "id": variation.pk,
                             "name": str(variation.value),
-                            "price": str(resolve_price(overrides, item, variation)),
+                            "price": str(
+                                resolve_price(overrides, item, variation, subevent)
+                            ),
                             "available": quota_availability(
-                                variation.quotas.all(), quota_cache
+                                for_date(variation.quotas.all(), subevent), quota_cache
                             ),
                         }
                     )
                 if not entry["variations"]:
                     continue
             else:
-                entry["price"] = str(resolve_price(overrides, item))
-                entry["available"] = quota_availability(item.quotas.all(), quota_cache)
+                entry["price"] = str(resolve_price(overrides, item, None, subevent))
+                entry["available"] = quota_availability(
+                    for_date(item.quotas.all(), subevent), quota_cache
+                )
 
             category_id = item.category_id or 0
             if category_id not in categories:
@@ -675,6 +843,16 @@ class OpenPosViewSet(viewsets.ViewSet):
             data["positions"] = terminal.positions
         custom_item = custom_sale_item(event)
         deposit = deposit_item(event)
+        # A series sells for the date that is on. For a sale already paid for,
+        # that is the date it was on when the money moved — a replay arriving
+        # the next morning belongs to the night it was rung up in, which is
+        # precisely when replays arrive — and nothing is refused, because
+        # refusing does not give the money back.
+        subevent = selling_subevent(
+            event,
+            offline["recorded_at"] if offline else None,
+            settled=settled,
+        )
 
         sellable = sellable_items(event, channel, settled=settled)
 
@@ -697,6 +875,7 @@ class OpenPosViewSet(viewsets.ViewSet):
                 custom_item=custom_item,
                 deposit=deposit,
                 settled=settled,
+                subevent=subevent,
             )
             item = resolved.item
             variation = resolved.variation
@@ -720,6 +899,10 @@ class OpenPosViewSet(viewsets.ViewSet):
                     {
                         "item": item.pk,
                         "item_name": str(item.name),
+                        # Two variations of one item move independently, so the
+                        # name alone would name the wrong thing half the time.
+                        "variation": variation.pk if variation else None,
+                        "variation_name": str(variation.value) if variation else None,
                         "charged": str(price),
                         "tariff": str(tariff),
                     }
@@ -734,6 +917,13 @@ class OpenPosViewSet(viewsets.ViewSet):
                 "unit_price": str(price),
                 "line_total": str(price * count),
             }
+            if subevent is not None:
+                # Which date of a series this was sold for, named as it was
+                # called at the time. The journal outlives the order and the
+                # date alike, and a row that says only "Entrée × 2" answers
+                # nothing about a season that ran twelve evenings.
+                journal_line["subevent"] = subevent.pk
+                journal_line["subevent_name"] = str(subevent.name or subevent)
             if description:
                 # What the money was actually for. In the journal because that
                 # is the record that outlives the order, and on the order too,
@@ -755,15 +945,21 @@ class OpenPosViewSet(viewsets.ViewSet):
             sale_total += price * count
             journal_positions.append(journal_line)
             for _n in range(count):
-                api_positions.append(
-                    {
-                        "item": item.pk,
-                        "variation": variation.pk if variation else None,
-                        "price": str(price),
-                        "attendee_name_parts": {},
-                        "answers": [],
-                    }
-                )
+                position = {
+                    "item": item.pk,
+                    "variation": variation.pk if variation else None,
+                    "price": str(price),
+                    "attendee_name_parts": {},
+                    "answers": [],
+                }
+                if subevent is not None:
+                    # Required on every position of a series, and the reason a
+                    # till used to sell from a catalogue that loaded cleanly and
+                    # then fail at the payment: pretix refused the order with
+                    # "the product is not assigned to a quota", which is true
+                    # of no date in particular and names the wrong cause.
+                    position["subevent"] = subevent.pk
+                api_positions.append(position)
 
         # What actually changes hands: the order, less the deposits given back
         # with it. Every figure the customer is quoted is this one.
@@ -840,7 +1036,19 @@ class OpenPosViewSet(viewsets.ViewSet):
             "sales_channel": channel.identifier,
             "locale": event.settings.locale,
             "positions": api_positions,
-            "fees": [],
+            # Deposits handed back, as a negative fee, so the order is worth
+            # what the customer actually paid for it. Without this the order
+            # said 12.00 while 9.00 reached the card, every deposit returned
+            # inflated pretix' own takings against SumUp and against the
+            # drawer, and cancelling gave back the inflated figure — which the
+            # card cannot honour, so the customer left short of their cups.
+            #
+            # A fee rather than a position, because a returned cup is not a
+            # thing being sold: it settles a deposit taken on some earlier
+            # order, and pretix has no position that can carry a negative
+            # price. It is the shape pretix uses for a redeemed gift card, for
+            # the same reason.
+            "fees": deposit_fee(refund_total, sale_total, deposit),
         }
         if notes:
             # So a free amount is readable in the back office as well as in the
@@ -874,6 +1082,23 @@ class OpenPosViewSet(viewsets.ViewSet):
                     user=request.user if request.user.is_authenticated else None,
                     auth=request.auth,
                 )
+
+                if off_tariff:
+                    # Told to the till at resync, and until now told to nobody
+                    # else. The volunteer who happens to be holding the tablet
+                    # sees it once, in a panel they then dismiss; the person
+                    # reconciling the evening two days later sees an order at a
+                    # price the tariff does not explain and has nothing to go
+                    # on. The order's own history is where pretix keeps "what
+                    # happened to this order", so it goes there — the journal
+                    # line already carries the same figures, but the journal is
+                    # not what anybody opens when a single order looks odd.
+                    order.log_action(
+                        "pretix_openpos.order.off_tariff",
+                        data={"lines": off_tariff},
+                        user=request.user if request.user.is_authenticated else None,
+                        auth=request.auth,
+                    )
 
                 sale = PosSale.record(
                     event=event,
@@ -962,6 +1187,65 @@ class OpenPosViewSet(viewsets.ViewSet):
             "failure": payment.failure,
         }
 
+    @staticmethod
+    def _refuse_if_reader_is_busy(event, reader_id, idempotency_key, account):
+        """
+        One reader, one cardholder — even when two tills share it.
+
+        Two tablets behind one bar with one machine between them is a shape
+        Open POS allows, and nothing in SumUp's reader checkout makes it safe
+        on its own: it answers the *second* call with "busy", by which time
+        this server has written a payment row and spent the till's idempotency
+        key on a basket that never reached the reader. The cashier is then
+        looking at a failure for a payment that was never attempted, holding a
+        key they cannot reuse.
+
+        So the refusal is made here, before anything is written. The other till
+        keeps its cardholder, this one is told to wait or take cash, and its
+        basket is untouched — the key is minted per attempt, so pressing card
+        again a moment later is a clean first try rather than a retry.
+        """
+        if not reader_id:
+            return
+        held = (
+            PosTerminalPayment.objects.filter(
+                event__organizer=event.organizer,
+                reader_id=reader_id,
+                status=PosTerminalPayment.STATUS_PENDING,
+            )
+            .exclude(idempotency_key=idempotency_key)
+            .order_by("-created")
+            .first()
+        )
+        if held is None:
+            return
+        # Asked rather than assumed. The row reads pending because nobody has
+        # looked since it was written, which is not the same as the cardholder
+        # still standing there; this is the very call the other till's poll
+        # makes, and it is how a finished payment stops holding the machine.
+        held = settle_terminal_payment(held, account)
+        if held.status != PosTerminalPayment.STATUS_PENDING:
+            return
+
+        if held.created > now() - READER_HELD_FOR:
+            raise ValidationError(
+                {"detail": [
+                    _("The card reader is taking another payment. Wait for it to "
+                      "finish, or take this basket in cash.")
+                ], "code": "terminal_busy"}
+            )
+
+        # Long past anything a customer is still standing in front of. Clear
+        # the machine before using it, or SumUp refuses the checkout below and
+        # the cashier is left with a reader that says nothing. Best-effort by
+        # SumUp's own account, and safe to do here for the reason above: if the
+        # cardholder had in fact answered, settling would have said so and this
+        # line would not be reached.
+        try:
+            account.terminate_checkout(reader_id)
+        except SumUpError:
+            logger.info("Reader %s would not clear before a new payment", reader_id)
+
     @action(detail=False, methods=["post"], url_path="terminal/start", url_name="terminal-start")
     def terminal_start(self, request, **kwargs):
         """
@@ -993,10 +1277,15 @@ class OpenPosViewSet(viewsets.ViewSet):
                 status=status.HTTP_200_OK,
             )
 
+        self._refuse_if_reader_is_busy(
+            event, _pos_device.sumup_reader_id, idempotency_key, account
+        )
+
         channel = get_pos_channel(event.organizer)
         overrides = pos_price_overrides(event)
         custom_item = custom_sale_item(event)
         deposit = deposit_item(event)
+        subevent = selling_subevent(event)
         sellable = sellable_items(event, channel, settled=False)
 
         priced = []
@@ -1010,6 +1299,7 @@ class OpenPosViewSet(viewsets.ViewSet):
                 custom_item=custom_item,
                 deposit=deposit,
                 settled=False,
+                subevent=subevent,
             )
             total += resolved.price * resolved.count
             if not resolved.refund:
@@ -1018,10 +1308,11 @@ class OpenPosViewSet(viewsets.ViewSet):
                 # — the order is created a moment later, and is forced through
                 # by then because refusing a paid card would be worse — but it
                 # is what stops a sold-out product reaching a cardholder.
-                quotas = (
+                quotas = for_date(
                     resolved.variation.quotas.all()
                     if resolved.variation
-                    else resolved.item.quotas.all()
+                    else resolved.item.quotas.all(),
+                    subevent,
                 )
                 available = quota_availability(quotas, quota_cache)
                 if available is not None and available < resolved.count:
@@ -1093,8 +1384,24 @@ class OpenPosViewSet(viewsets.ViewSet):
                 return_url=webhook_url(event.organizer),
             )
         except SumUpError as exc:
+            if exc.retryable:
+                # "We could not ask" is not "it failed" — the rule the rest of
+                # this module is built on, and the one place it was not kept.
+                # The request may well have reached SumUp and put the amount on
+                # the reader, with only the answer lost. Writing a refusal here
+                # sends the cashier back to a fresh basket with a *new* key
+                # while a cardholder is looking at a live prompt, which is how
+                # one basket becomes two charges. So the row stays pending, and
+                # the till is told what is actually known: go and look at the
+                # reader.
+                raise ValidationError(
+                    {"detail": [exc.message], "code": "terminal_unsure"}
+                )
             payment.status = PosTerminalPayment.STATUS_FAILED
-            payment.failure = str(exc.message)
+            # Truncated like every other write to this column: the message is
+            # translated, and a language with longer words must not turn a
+            # refusal into a database error.
+            payment.failure = str(exc.message)[:190]
             payment.save(update_fields=["status", "failure", "updated"])
             raise ValidationError(
                 {"detail": [exc.message], "code": "terminal_unreachable"}
@@ -1106,11 +1413,13 @@ class OpenPosViewSet(viewsets.ViewSet):
     @action(detail=False, methods=["get"], url_path="terminal/status", url_name="terminal-status")
     def terminal_status(self, request, **kwargs):
         """Where a payment has got to. Polled by the till while it waits."""
-        _device, _pos_device, account = self._terminal_context(request)
+        device, _pos_device, account = self._terminal_context(request)
         payment = PosTerminalPayment.objects.filter(
             event=request.event, idempotency_key=request.query_params.get("idempotency_key", "")
         ).first()
-        if payment is None:
+        # Checked here as well as at checkout: a key is not a secret, and one
+        # till has no business watching — or ending — another till's payment.
+        if payment is None or not payment.belongs_to(device):
             raise ValidationError(
                 {"detail": [_("No card payment was started for this basket.")],
                  "code": "no_payment"}
@@ -1128,19 +1437,23 @@ class OpenPosViewSet(viewsets.ViewSet):
         asked for — a card tapped in the same second is a payment, and the till
         has to be told that rather than a cancellation that did not happen.
         """
-        _device, pos_device, account = self._terminal_context(request)
+        device, _pos_device, account = self._terminal_context(request)
         payment = PosTerminalPayment.objects.filter(
             event=request.event,
             idempotency_key=request.data.get("idempotency_key", ""),
         ).first()
-        if payment is None:
+        if payment is None or not payment.belongs_to(device):
             raise ValidationError(
                 {"detail": [_("No card payment was started for this basket.")],
                  "code": "no_payment"}
             )
         if not payment.settled:
             try:
-                account.terminate_checkout(pos_device.sumup_reader_id)
+                # The reader this payment was put on, not whichever one the
+                # till has been given since. An organizer tidying up the device
+                # screen mid-evening would otherwise have this stop a stranger's
+                # payment while the one being cancelled goes on waiting.
+                account.terminate_checkout(payment.reader_id)
             except SumUpError:
                 # Already finished, already gone, or unreachable. Asking SumUp
                 # what actually happened answers all three.
@@ -1291,6 +1604,17 @@ class OpenPosViewSet(viewsets.ViewSet):
             body["card_refund"] = (
                 self._refund_card(event, original) if original else "none"
             )
+            # And the books are brought in line with what just happened. A
+            # cancellation whose card refund was refused the first time leaves a
+            # failed refund on the order; succeeding on the retry has to clear
+            # it, or the order page keeps saying the customer was never paid
+            # back long after they were.
+            if original is not None and original.order_id:
+                self._settle_refund(
+                    request,
+                    original.order.refunds.order_by("-local_id").first(),
+                    body["card_refund"],
+                )
             return Response(body, status=status.HTTP_200_OK)
 
         sale = PosSale.objects.filter(event=event, seq=data["seq"]).select_related("order").first()
@@ -1335,7 +1659,13 @@ class OpenPosViewSet(viewsets.ViewSet):
                 raise ValidationError({"seq": [str(e)]})
 
             order.refresh_from_db()
-            refund = self._record_refund(request, order, sale, data["reason"])
+            refund = self._record_refund(
+                request, order, sale, data["reason"],
+                # A reader is about to be asked, after this transaction, and it
+                # can refuse. Nothing may claim the money is back until it has
+                # answered.
+                settle_now=self._reader_payment(event, sale) is None,
+            )
 
             cancellation = PosSale.record(
                 event=event,
@@ -1354,6 +1684,42 @@ class OpenPosViewSet(viewsets.ViewSet):
                 reason=data["reason"],
             )
 
+            # The deposit handed back with this sale is a journal row of its
+            # own, and reversing only the sale leaves the takings short by its
+            # amount for the rest of the evening. The customer put the *net* on
+            # the counter — the cups came off the bill — so the net is what
+            # goes back, and both halves have to be reversed for the column to
+            # return to where it started. Found by the key the sale's own key
+            # derives, which is how the two were written together in the first
+            # place.
+            deposit_refund = PosSale.objects.filter(
+                event=event,
+                idempotency_key=refund_key(sale.idempotency_key),
+                kind=PosSale.KIND_DEPOSIT_REFUND,
+            ).first()
+            if deposit_refund is not None and not PosSale.cancelled_seqs(
+                event, [deposit_refund.seq]
+            ):
+                PosSale.record(
+                    event=event,
+                    order=None,
+                    device=device,
+                    cashier=data["cashier"],
+                    payment_type=deposit_refund.payment_type,
+                    # Its total is negative — money that left the drawer — so
+                    # negating it puts the same amount back.
+                    total=-deposit_refund.total,
+                    positions=self._reversed_positions(deposit_refund.positions),
+                    # Derived from the cancellation's key exactly as the payout
+                    # row derived from the sale's, so a retried cancellation
+                    # recognises this half too instead of writing it twice.
+                    idempotency_key=refund_key(data["idempotency_key"]),
+                    testmode=deposit_refund.testmode,
+                    kind=PosSale.KIND_CANCELLATION,
+                    cancels_seq=deposit_refund.seq,
+                    reason=data["reason"],
+                )
+
         body = self._cancellation_payload(cancellation, sale, replayed=False)
         body["credit_note"] = self._credit_note_number(order)
         body["refunded"] = refund is not None
@@ -1364,7 +1730,29 @@ class OpenPosViewSet(viewsets.ViewSet):
         # So the cancellation stands first, and the card is a separate step
         # whose outcome is reported rather than assumed.
         body["card_refund"] = self._refund_card(event, sale)
+        self._settle_refund(request, refund, body["card_refund"])
         return Response(body, status=status.HTTP_201_CREATED)
+
+    @staticmethod
+    def _reader_payment(event, sale):
+        """
+        The reader payment this sale was settled by, if a reader settled it.
+
+        One lookup for two questions that must never disagree: whether the
+        server is going to ask SumUp for the money back, and which transaction
+        to ask about. A cash sale, or a card taken on somebody's phone, has
+        none — there is nothing here for this server to refund.
+        """
+        if sale.payment_type != PosSale.PAYMENT_CARD:
+            return None
+        payment = PosTerminalPayment.objects.filter(
+            event=event,
+            idempotency_key=sale.idempotency_key,
+            status=PosTerminalPayment.STATUS_SUCCESSFUL,
+        ).first()
+        if payment is None or not payment.transaction_id:
+            return None
+        return payment
 
     def _refund_card(self, event, sale):
         """
@@ -1386,14 +1774,8 @@ class OpenPosViewSet(viewsets.ViewSet):
             refund it from the SumUp app, and has to be told so plainly rather
             than shown a cancellation that looks complete.
         """
-        if sale.payment_type != PosSale.PAYMENT_CARD:
-            return "none"
-        payment = PosTerminalPayment.objects.filter(
-            event=event,
-            idempotency_key=sale.idempotency_key,
-            status=PosTerminalPayment.STATUS_SUCCESSFUL,
-        ).first()
-        if payment is None or not payment.transaction_id:
+        payment = self._reader_payment(event, sale)
+        if payment is None:
             return "none"
         if payment.refunded:
             return "already"
@@ -1433,6 +1815,31 @@ class OpenPosViewSet(viewsets.ViewSet):
         since = start_of_business_day(event)
         sales = PosSale.objects.filter(event=event, datetime__gte=since)
 
+        # Reversals written tonight of sales rung up on an earlier day.
+        #
+        # Their money nets off below and that is RIGHT: the cash physically left
+        # this drawer tonight, so the figure to count against still has to
+        # include it. What was wrong was that it did so invisibly — a volunteer
+        # saw a takings line quietly short by thirty euros with nothing on
+        # screen to say why, and no way to tell it from a miscount. So the
+        # arithmetic is left alone and the amount is reported beside it.
+        earlier_seqs = set(
+            PosSale.objects.filter(event=event, datetime__lt=since).values_list(
+                "seq", flat=True
+            )
+        )
+
+        def from_earlier_days(qs):
+            rows = qs.filter(
+                kind=PosSale.KIND_CANCELLATION, cancels_seq__in=earlier_seqs
+            )
+            amount = rows.aggregate(total=Sum("total"))["total"] or Decimal("0.00")
+            return {
+                "count": rows.count(),
+                # Negative, like the rows themselves: this is money that left.
+                "total": str(amount.quantize(Decimal("0.01"))),
+            }
+
         def totals(qs):
             # Two aggregate queries per bucket, instead of fetching every row
             # of the night to add it up in Python.
@@ -1466,6 +1873,11 @@ class OpenPosViewSet(viewsets.ViewSet):
                 result[payment_type] = str(amount)
                 grand += amount
             result["total"] = str(grand)
+            # Included in the figures above rather than excluded from them, and
+            # named so the volunteer counting the drawer knows what they are
+            # counting. Absent when there are none, which is most nights.
+            earlier = from_earlier_days(qs)
+            result["earlier_days"] = earlier if earlier["count"] else None
             return result
 
         # Test-mode money never existed, so it must not be in the figure a
@@ -1676,15 +2088,22 @@ class OpenPosViewSet(viewsets.ViewSet):
             reversed_lines.append(entry)
         return reversed_lines
 
-    def _record_refund(self, request, order, sale, reason):
+    def _record_refund(self, request, order, sale, reason, *, settle_now):
         """
         Record that the money went back out.
 
         Cancelling an order does not by itself say the customer was paid back —
         pretix would keep showing the payment as taken. The refund is what makes
-        the books agree with the drawer. It is marked done immediately because
-        it is: cash out of the till, or an operator who has just refunded on the
-        card terminal standing in front of the customer.
+        the books agree with the drawer.
+
+        ``settle_now`` is whether it can be marked done here. It can when the
+        money moves in the same breath as this call: cash out of the till, or a
+        card taken on somebody's phone and given back the same way. It cannot
+        when a reader is about to be asked, because that call is made after this
+        transaction commits and it can be refused. Marking it done first was a
+        real hole: a refusal left pretix showing a completed refund while the
+        money was still on the customer's card, which is the one state where the
+        books and the customer disagree and nothing records which is right.
         """
         payment = order.payments.filter(
             state=OrderPayment.PAYMENT_STATE_CONFIRMED
@@ -1707,11 +2126,42 @@ class OpenPosViewSet(viewsets.ViewSet):
                 "reason": reason,
             },
         )
+        if settle_now:
+            self._mark_refund_done(request, refund)
+        return refund
+
+    @staticmethod
+    def _mark_refund_done(request, refund):
         refund.done(
             user=request.user if request.user.is_authenticated else None,
             auth=request.auth,
         )
-        return refund
+
+    def _settle_refund(self, request, refund, outcome):
+        """
+        Write down what SumUp actually did with the money.
+
+        Called once the card has been asked, outside the transaction. Anything
+        other than a refusal means the amount is on its way back and the refund
+        stands; a refusal leaves it failed, which is what makes the order page
+        say the money was *not* returned. Without this the operator is the only
+        record that it was not, and they are at a bar.
+        """
+        if refund is None or refund.state == OrderRefund.REFUND_STATE_DONE:
+            return
+        if outcome == "failed":
+            refund.state = OrderRefund.REFUND_STATE_FAILED
+            refund.save(update_fields=["state"])
+            # In pretix' own log, on the order, where somebody reconciling the
+            # evening will be looking.
+            refund.order.log_action(
+                "pretix.event.order.refund.failed",
+                {"local_id": refund.local_id, "provider": refund.provider},
+                user=request.user if request.user.is_authenticated else None,
+                auth=request.auth,
+            )
+            return
+        self._mark_refund_done(request, refund)
 
     def _credit_note_number(self, order):
         invoice = order.invoices.filter(is_cancellation=True).order_by("-pk").first()
@@ -1723,10 +2173,21 @@ class OpenPosViewSet(viewsets.ViewSet):
         # have the till announce a sale worth minus three euros; the figures
         # that describe the transaction are added by _checkout_payload.
         orderless = sale.kind == PosSale.KIND_DEPOSIT_REFUND
+        # The order's own total, not the journal row's, whenever there is an
+        # order to read it from. The two part company on a basket with a
+        # deposit handed back: the row is what the beer came to, the order is
+        # what was paid for it. This line sits next to the order code on the
+        # till's last screen, so somebody who opens that order has to find the
+        # same figure there.
+        total = (
+            str(sale.order.total) if sale.order is not None
+            else "0.00" if orderless
+            else str(sale.total)
+        )
         return {
             "order": {
                 "code": sale.order_code,
-                "total": "0.00" if orderless else str(sale.total),
+                "total": total,
                 "url": (
                     f"/{sale.event.organizer.slug}/{sale.event.slug}/order/"
                     f"{sale.order_code}/{sale.order.secret}/"

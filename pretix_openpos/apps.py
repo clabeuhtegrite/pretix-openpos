@@ -30,7 +30,7 @@ class PluginApp(PluginConfig):
         ]
 
     def ready(self):
-        from . import signals  # noqa
+        from . import logdisplay, signals  # noqa
 
     def installed(self, event):
         """

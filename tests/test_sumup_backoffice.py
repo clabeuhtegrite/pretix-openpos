@@ -137,6 +137,152 @@ def test_a_reader_still_waiting_for_its_device_says_so(backoffice, organizer, su
 
 
 @pytest.mark.django_db
+def test_a_reader_says_what_it_is_doing_right_now(backoffice, organizer, sumup):
+    """
+    The question an organizer actually has before a door opens: is the thing
+    on, and is it charged. Pairing answers neither — a reader can be paired,
+    flat, and in a drawer.
+    """
+    sumup.set_state(sumup.add_reader("rdr_A"), "IDLE", battery_level=64)
+
+    page = backoffice.get(sumup_url(organizer)).content.decode()
+
+    assert "Ready" in page
+    assert "64" in page
+    assert "3.3.39.0" in page
+
+
+@pytest.mark.django_db
+def test_a_reader_with_a_card_waiting_on_it_is_not_ready(backoffice, organizer, sumup):
+    sumup.set_state(sumup.add_reader("rdr_A"), "WAITING_FOR_CARD")
+
+    page = backoffice.get(sumup_url(organizer)).content.decode()
+
+    assert "Taking a payment" in page
+    # And the way out of it is offered on the row itself.
+    assert 'value="free"' in page
+
+
+@pytest.mark.django_db
+def test_a_reader_that_is_off_says_so(backoffice, organizer, sumup):
+    sumup.set_state(sumup.add_reader("rdr_A"), "IDLE", status="OFFLINE")
+
+    page = backoffice.get(sumup_url(organizer)).content.decode()
+
+    assert "Offline" in page
+    # Nothing is waiting on a reader that is not there, so no button offers to
+    # clear it. (The paragraph explaining the button is always on the page.)
+    assert 'value="free"' not in page
+
+
+@pytest.mark.django_db
+def test_a_reader_too_old_to_be_asked_is_unknown_rather_than_off(
+    backoffice, organizer, sumup
+):
+    """
+    The status endpoint wants firmware 3.3.39.0 on a Solo; taking payments
+    wants 3.3.24.3. A reader in between works perfectly and cannot answer this
+    question, so drawing it as offline would send somebody to look for a reader
+    that is sitting there working.
+    """
+    sumup.add_reader("rdr_A")
+
+    page = backoffice.get(sumup_url(organizer)).content.decode()
+
+    assert "Unknown" in page
+    assert "Offline" not in page
+
+
+@pytest.mark.django_db
+def test_a_reader_still_pairing_is_not_asked_at_all(backoffice, organizer, sumup):
+    # One HTTP call per reader, on a page load. A reader that has not finished
+    # acknowledging its pairing has nothing to say and is not worth the wait.
+    sumup.add_reader("rdr_A", status="processing")
+
+    backoffice.get(sumup_url(organizer))
+
+    assert not [path for path in sumup.call_paths("GET") if path.endswith("/status")]
+
+
+@pytest.mark.django_db
+def test_a_reader_that_cannot_be_asked_does_not_take_the_page_down(
+    backoffice, organizer, sumup
+):
+    import requests
+
+    sumup.add_reader("rdr_A")
+    sumup.next_exception = requests.ConnectTimeout("no route")
+
+    # The first call is the reader list, so this lands on the status call.
+    response = backoffice.get(sumup_url(organizer))
+
+    assert response.status_code == 200
+
+
+# -- freeing a stuck reader -------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_clearing_a_screen_terminates_the_checkout(backoffice, organizer, sumup):
+    reader_id = sumup.set_state(sumup.add_reader("rdr_A"), "WAITING_FOR_CARD")
+
+    backoffice.post(sumup_url(organizer), {"action": "free", "reader_id": reader_id})
+
+    assert f"/v0.1/merchants/{sumup.merchant}/readers/{reader_id}/terminate" in (
+        sumup.call_paths("POST")
+    )
+
+
+@pytest.mark.django_db
+def test_clearing_a_screen_does_not_decide_whether_the_card_was_charged(
+    backoffice, organizer, device, sumup, event, ticket, reader_till, till
+):
+    """
+    The mistake this plugin has already made once, in the other direction.
+    Terminating is best-effort and SumUp confirms nothing, so it cannot say
+    whether the cardholder had already paid — only SumUp's own transaction
+    can, and that is what settling asks. Writing "failed" here would book a
+    refusal over a card that went through.
+    """
+    from pretix_openpos.models import PosTerminalPayment
+
+    till.post(
+        "terminal/start",
+        {"idempotency_key": "coincee-01", "positions": [{"item": ticket.pk, "count": 1}]},
+    )
+    payment = PosTerminalPayment.objects.get(idempotency_key="coincee-01")
+
+    backoffice.post(sumup_url(organizer), {"action": "free", "reader_id": reader_till})
+
+    payment.refresh_from_db()
+    assert payment.status == PosTerminalPayment.STATUS_PENDING
+
+
+@pytest.mark.django_db
+def test_a_reader_sumup_will_not_clear_says_why(backoffice, organizer, sumup):
+    sumup.set_state(sumup.add_reader("rdr_A"), "WAITING_FOR_CARD")
+    sumup.next_response = FakeResponse(500, {"message": "down"})
+
+    response = backoffice.post(
+        sumup_url(organizer), {"action": "free", "reader_id": "rdr_A"}, follow=True
+    )
+
+    assert "having trouble" in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_clearing_a_screen_is_closed_to_whoever_may_not_change_devices(
+    reader, organizer, sumup
+):
+    sumup.set_state(sumup.add_reader("rdr_A"), "WAITING_FOR_CARD")
+
+    response = reader.post(sumup_url(organizer), {"action": "free", "reader_id": "rdr_A"})
+
+    assert response.status_code == 403
+    assert not [p for p in sumup.call_paths("POST") if p.endswith("/terminate")]
+
+
+@pytest.mark.django_db
 def test_sumup_being_down_does_not_close_the_page_that_fixes_it(
     backoffice, organizer, sumup
 ):
@@ -312,9 +458,17 @@ def test_a_reader_may_only_be_given_to_a_till(backoffice, organizer, device, sum
 
 
 @pytest.mark.django_db
-def test_two_tills_cannot_share_one_reader(
+def test_two_tills_may_share_one_reader(
     backoffice, organizer, device, another_till, sumup
 ):
+    """
+    A bar with two tablets and one machine between them.
+
+    Safe because the server takes turns for them rather than because the
+    assignment is forbidden: while one till has a basket on the reader the
+    other is refused the card and sells for cash. Refusing here instead would
+    only mean a second tablet that cannot take a card at all.
+    """
     reader_id = sumup.add_reader("rdr_A")
 
     backoffice.post(
@@ -327,7 +481,38 @@ def test_two_tills_cannot_share_one_reader(
         },
     )
 
-    assert not PosDevice.objects.exists()
+    assert PosDevice.objects.filter(sumup_reader_id=reader_id).count() == 2
+
+
+@pytest.mark.django_db
+def test_a_shared_reader_says_so_on_the_screen(
+    backoffice, organizer, device, another_till, sumup
+):
+    # Allowed, but never by accident: an organizer who gave the same machine to
+    # two tablets has to be able to see that from the screen.
+    reader_id = sumup.add_reader("rdr_A")
+    for each in (device, another_till.device):
+        PosDevice.objects.create(
+            device=each, role=PosDevice.ROLE_TILL, sumup_reader_id=reader_id
+        )
+
+    page = backoffice.get(devices_url(organizer)).content.decode()
+
+    assert "Shared with another till" in page
+
+
+@pytest.mark.django_db
+def test_a_reader_on_one_till_alone_says_nothing_about_sharing(
+    backoffice, organizer, device, sumup
+):
+    reader_id = sumup.add_reader("rdr_A")
+    PosDevice.objects.create(
+        device=device, role=PosDevice.ROLE_TILL, sumup_reader_id=reader_id
+    )
+
+    page = backoffice.get(devices_url(organizer)).content.decode()
+
+    assert "Shared with another till" not in page
 
 
 @pytest.mark.django_db

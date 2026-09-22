@@ -5,10 +5,11 @@ Two things make this less obvious than summing a column: a till serves an
 evening and an evening crosses midnight, and test-mode money never existed.
 """
 import zoneinfo
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 import pytest
+from django.utils.timezone import now
 
 from pretix_openpos.api.views import BUSINESS_DAY_STARTS_AT, start_of_business_day
 from pretix_openpos.models import PosSale
@@ -177,3 +178,55 @@ def test_the_amounts_keep_their_trailing_zeros(till, ticket):
     sell(till, [{"item": ticket.pk, "count": 5}])
 
     assert till.get("summary").json()["event"]["cash"] == "50.00"
+
+
+# -- reversals of an earlier day --------------------------------------------
+
+
+@pytest.mark.django_db
+def test_a_cancellation_of_an_earlier_sale_is_named_rather_than_hidden(
+    till, event, ticket
+):
+    """
+    A customer comes back the following week and is given their money back.
+
+    The cash leaves *tonight's* drawer, so netting it off tonight's takings is
+    right and stays. What was wrong was that it did so invisibly: the takings
+    line was quietly short by the amount, with nothing on screen to tell it
+    from a miscount — and the volunteer counting the drawer is the person least
+    able to go and find out.
+    """
+    sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="hier-0001")
+    sale = PosSale.objects.get(event=event, idempotency_key="hier-0001")
+    # Rung up last week, reversed tonight.
+    PosSale.objects.filter(pk=sale.pk).update(datetime=now() - timedelta(days=7))
+    till.post("cancel", {"seq": sale.seq, "idempotency_key": "annule-0001"})
+
+    event_totals = till.get("summary").json()["event"]
+
+    assert event_totals["earlier_days"] == {"count": 1, "total": "-10.00"}
+    # And the money is still netted off, because the drawer really is short.
+    assert event_totals["cash"] == "-10.00"
+
+
+@pytest.mark.django_db
+def test_an_ordinary_evening_says_nothing_about_earlier_days(till, event, ticket):
+    # A line reading "0 reversals from earlier days" on every closing screen is
+    # noise that trains people to skip the section that matters.
+    sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="cesoir-0001")
+    sale = PosSale.objects.get(event=event, idempotency_key="cesoir-0001")
+    till.post("cancel", {"seq": sale.seq, "idempotency_key": "annule-0001"})
+
+    assert till.get("summary").json()["event"]["earlier_days"] is None
+
+
+@pytest.mark.django_db
+def test_the_till_s_own_figure_names_only_its_own(till, another_till, event, ticket):
+    sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="hier-0001")
+    sale = PosSale.objects.get(event=event, idempotency_key="hier-0001")
+    PosSale.objects.filter(pk=sale.pk).update(datetime=now() - timedelta(days=7))
+    till.post("cancel", {"seq": sale.seq, "idempotency_key": "annule-0001"})
+
+    assert till.get("summary").json()["device"]["earlier_days"]["count"] == 1
+    # The other till gave nothing back; its own drawer is not short.
+    assert another_till.get("summary").json()["device"]["earlier_days"] is None

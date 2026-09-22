@@ -175,6 +175,18 @@ export interface CartLine {
   refund?: boolean;
 }
 
+/**
+ * Money the till is holding for a customer whose order it just cancelled.
+ *
+ * Not a basket line: it is not something being sold, it is a figure the next
+ * payment is settled against, and it names the order it came from so the
+ * operator can see which correction they are in the middle of.
+ */
+export interface Credit {
+  amountCents: number;
+  order: string;
+}
+
 export type PaymentType = "cash" | "card";
 
 /** Where a card payment put on a reader has got to. */
@@ -409,6 +421,16 @@ export interface Takings {
   cancellations: number;
   /** Deposits handed back; same story, and equally not a sale. */
   deposit_refunds?: number;
+  /**
+   * Reversals made in this window of sales rung up on an EARLIER day.
+   *
+   * Their money is netted off the figures below and belongs there — the cash
+   * left this drawer tonight. Named separately because a takings line quietly
+   * short by thirty euros is indistinguishable from a miscount, and the
+   * volunteer counting is the person least able to go and find out. Null on
+   * an ordinary evening.
+   */
+  earlier_days?: { count: number; total: string } | null;
   cash: string;
   card: string;
   total: string;

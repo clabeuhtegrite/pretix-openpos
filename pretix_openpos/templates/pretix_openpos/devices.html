@@ -78,6 +78,11 @@
                                             </option>
                                         {% endif %}
                                     </select>
+                                    {% if row.shares_reader %}
+                                        <small class="text-muted">
+                                            {% trans "Shared with another till — they take turns on the card." %}
+                                        </small>
+                                    {% endif %}
                                 </td>
                             </tr>
                         {% endfor %}
@@ -91,7 +96,13 @@
                     the server refuses a card sale the reader did not validate, so a stale or
                     edited app cannot record one. Every other device goes on as before — the
                     cashier takes the card in the card provider's own app and tells the till it
-                    happened. A reader belongs to one till, and only to a till.
+                    happened. A reader can only go to a till, never to a door.
+                {% endblocktrans %}
+                <br>
+                {% blocktrans trimmed %}
+                    Two tills may share one reader — a bar with two tablets and one machine
+                    between them. They take turns: while one has a basket on the reader the
+                    other is told it is busy and takes that sale in cash.
                 {% endblocktrans %}
                 <br>
                 <a href="{{ sumup_url }}">{% trans "Set up the card readers" %}</a>

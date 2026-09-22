@@ -12,9 +12,10 @@ vi.mock("../api", async (importOriginal) => {
   return { ...actual, api: { ...actual.api, posEvents, summary } };
 });
 
-import { t } from "../i18n";
+import { locale, t } from "../i18n";
 import { formatMoney } from "../money";
-import type { Pairing, PosEvent, SummaryResponse } from "../types";
+import { saveQueue } from "../storage";
+import type { Pairing, PosEvent, QueuedSale, SummaryResponse } from "../types";
 import SettingsPanel from "./SettingsPanel";
 
 /**
@@ -170,6 +171,51 @@ describe("the takings", () => {
     // Still fully usable: this is a report, not a gate.
     expect(screen.getByRole("button", { name: t("settings.close") })).toBeDefined();
   });
+
+  it("says so, and offers another go, rather than three dots for ever", async () => {
+    // This is the closing-time screen. At half past one a spinner that never
+    // resolves is worse than a sentence saying what happened.
+    summary.mockRejectedValue(new Error("offline"));
+    const { user } = show();
+    await screen.findByText(t("summary.failed"));
+    summary.mockResolvedValue(takings);
+
+    await user.click(screen.getByRole("button", { name: t("summary.retry") }));
+
+    expect(await screen.findByText(t("summary.allTills"))).toBeDefined();
+  });
+
+  it("names the till day it is reporting on", async () => {
+    // A till day starts at six in the morning, so a bar that closes at 5:40
+    // and counts the drawer at 6:15 reads zeros everywhere — true, and
+    // useless without this line.
+    const clock = new Date(takings.since).toLocaleTimeString(locale, {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+    show();
+
+    expect(await screen.findByText(t("summary.since", { time: clock }))).toBeDefined();
+  });
+
+  it("owns up to what this till has not managed to send", async () => {
+    // The figures come from the server, so a sale encashed during a dropout
+    // is not in them. Somebody comparing this screen with the drawer would
+    // otherwise find a difference with nothing here to explain it.
+    const queued: QueuedSale = {
+      kind: "sale", id: "k1", at: "2026-08-16T22:00:00.000Z", event: "festival",
+      positions: [], chargedTotal: "12.00", paymentType: "cash", cashGiven: "12.00",
+      cashChange: "0.00", cashier: "Ana", admits: false, label: "1× Bière",
+    };
+    saveQueue([queued]);
+    show();
+
+    expect(
+      await screen.findByText(
+        t("summary.queued", { n: 1, amount: formatMoney(1200, "EUR") }),
+      ),
+    ).toBeDefined();
+  });
 });
 
 describe("the event switcher", () => {
@@ -280,5 +326,39 @@ describe("getting back to the till", () => {
     await user.click(screen.getByText(t("settings.title")));
 
     expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+describe("money paid back on another day's sale", () => {
+  it("says how much, because nothing else on this screen would", async () => {
+    // Somebody came back a week later and was refunded out of tonight's
+    // drawer. The takings are short by exactly that much — correctly — and a
+    // volunteer counting cash cannot tell that from a miscount.
+    summary.mockResolvedValue({
+      ...takings,
+      event: {
+        ...takings.event,
+        cash: "270.00",
+        total: "470.00",
+        earlier_days: { count: 1, total: "-30.00" },
+      },
+    });
+    show();
+
+    expect(
+      await screen.findByText(
+        t("summary.earlierDays", { n: 1, amount: formatMoney(3000, "EUR") }),
+      ),
+    ).toBeTruthy();
+  });
+
+  it("says nothing on an ordinary evening", async () => {
+    // A line reading "0,00 paid back on 0 earlier sales" on every closing
+    // screen is noise that trains people to skip the section that matters.
+    summary.mockResolvedValue(takings);
+    show();
+
+    await screen.findByText(t("summary.allTills"));
+    expect(screen.queryByText(/earlier day|autre jour/)).toBeNull();
   });
 });

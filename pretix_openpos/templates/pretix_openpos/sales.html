@@ -73,10 +73,216 @@
         </div>
     </div>
 
+    {% comment %}
+        Card payments with no sale behind them. Nowhere else in pretix can show
+        these: the takings are built from the journal, and a charge that never
+        reached the journal is invisible there by construction. Left out on the
+        ordinary evening, so its presence means something.
+    {% endcomment %}
+    {% if unresolved_card %}
+        <div class="row">
+            <div class="col-md-12">
+                <h3>{% trans "Card payments with no sale" %}</h3>
+                <div class="alert alert-warning">
+                    {% blocktrans trimmed %}
+                        These payments were put on a reader and no sale was ever recorded against
+                        them. A paid one means a card was charged and pretix knows nothing about
+                        it: refund it in SumUp, or ring the sale up again. One still waiting was
+                        left open by a till that stopped polling — check in SumUp whether it went
+                        through before doing either.
+                    {% endblocktrans %}
+                </div>
+                <table class="table table-condensed">
+                    <thead>
+                    <tr>
+                        <th>{% trans "Date" %}</th>
+                        <th>{% trans "Till" %}</th>
+                        <th>{% trans "State" %}</th>
+                        <th>{% trans "SumUp reference" %}</th>
+                        <th class="text-right">{% trans "Amount" %}</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    {% for row in unresolved_card %}
+                        <tr>
+                            <td>{{ row.payment.created|date:"SHORT_DATETIME_FORMAT" }}</td>
+                            <td>{{ row.till|default:"—" }}</td>
+                            <td>
+                                {% if row.paid %}
+                                    <span class="label label-danger">{% trans "Charged" %}</span>
+                                {% else %}
+                                    <span class="label label-warning">{% trans "Still waiting" %}</span>
+                                {% endif %}
+                            </td>
+                            {% comment %}
+                                The transaction id is what the SumUp dashboard is searched by;
+                                before the cardholder answers there is none, and the checkout's
+                                own id is the only handle that exists.
+                            {% endcomment %}
+                            <td><code>{{ row.payment.transaction_id|default:row.payment.client_transaction_id|default:"—" }}</code></td>
+                            <td class="text-right">{{ row.payment.amount|money:currency }}</td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    {% endif %}
+
+    {% comment %}
+        Cancellations whose money SumUp would not give back. Said in red on the
+        till, once, to whoever pressed the button — while the customer is being
+        told the cancellation went through. Not filtered by evening: a debt to a
+        customer does not stop mattering because the screen shows another night.
+    {% endcomment %}
+    {% if refused_refunds %}
+        <div class="row">
+            <div class="col-md-12">
+                <h3>{% trans "Card refunds SumUp refused" %}</h3>
+                <div class="alert alert-danger">
+                    {% blocktrans trimmed %}
+                        These sales were cancelled, and the refund did not go through. The money
+                        is still on the customer's card. Refund it from the SumUp dashboard using
+                        the reference below — pretix will not try again on its own, and the
+                        cancellation itself stands.
+                    {% endblocktrans %}
+                </div>
+                <table class="table table-condensed">
+                    <thead>
+                    <tr>
+                        <th>{% trans "Date" %}</th>
+                        <th>{% trans "Order" %}</th>
+                        <th>{% trans "SumUp reference" %}</th>
+                        <th class="text-right">{% trans "Amount" %}</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    {% for row in refused_refunds %}
+                        <tr>
+                            <td>{{ row.refund.created|date:"SHORT_DATETIME_FORMAT" }}</td>
+                            <td>
+                                <a href="{% url "control:event.order" organizer=request.event.organizer.slug event=request.event.slug code=row.order.code %}">
+                                    {{ row.order.code }}
+                                </a>
+                            </td>
+                            <td><code>{{ row.transaction|default:"—" }}</code></td>
+                            <td class="text-right">{{ row.refund.amount|money:currency }}</td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    {% endif %}
+
+    {% comment %}
+        Sales replayed at a price the tariff no longer carries. Said once to
+        whoever held the tablet at resync, and until this section to nobody
+        else — least of all the person reconciling the evening two days later,
+        who sees an order at a price the price list does not explain.
+    {% endcomment %}
+    {% if off_tariff %}
+        <div class="row">
+            <div class="col-md-12">
+                <h3>{% trans "Sold at a price that had changed" %}</h3>
+                <div class="alert alert-info">
+                    {% blocktrans trimmed %}
+                        These sales were rung up while the till was cut off, priced from the
+                        tariff it had cached, and the customer paid that. The order is recorded
+                        at what was actually charged — invoicing a sum nobody handed over would
+                        be worse — so the difference below is real money that is in the drawer
+                        and not in the price list.
+                    {% endblocktrans %}
+                </div>
+                <table class="table table-condensed">
+                    <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>{% trans "Date" %}</th>
+                        <th>{% trans "Order" %}</th>
+                        <th>{% trans "Product" %}</th>
+                        {% comment %}
+                            Per unit, because that is what the price list holds and
+                            what anyone compares against. The count is in the product
+                            column, and the footer's difference is the whole basket.
+                        {% endcomment %}
+                        <th class="text-right">{% trans "Charged, each" %}</th>
+                        <th class="text-right">{% trans "Price list, each" %}</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    {% for row in off_tariff %}
+                        {% for line in row.lines %}
+                            <tr>
+                                {% comment %}
+                                    One journal row can hold several diverging lines, so the
+                                    first three columns are written once and spanned.
+                                {% endcomment %}
+                                {% if forloop.first %}
+                                    <td rowspan="{{ row.lines|length }}">{{ row.sale.seq }}</td>
+                                    <td rowspan="{{ row.lines|length }}">{{ row.sale.datetime|date:"SHORT_DATETIME_FORMAT" }}</td>
+                                    <td rowspan="{{ row.lines|length }}">
+                                        {% if row.sale.order %}
+                                            <a href="{% url "control:event.order" organizer=request.event.organizer.slug event=request.event.slug code=row.sale.order_code %}">
+                                                {{ row.sale.order_code }}
+                                            </a>
+                                        {% else %}
+                                            {{ row.sale.order_code|default:"—" }}
+                                        {% endif %}
+                                    </td>
+                                {% endif %}
+                                <td>
+                                    {{ line.count }}× {{ line.item_name }}
+                                    {% if line.variation_name %}<small class="text-muted">{{ line.variation_name }}</small>{% endif %}
+                                </td>
+                                <td class="text-right">{{ line.unit_price|money:currency }}</td>
+                                <td class="text-right text-muted">{{ line.tariff_price|money:currency }}</td>
+                            </tr>
+                        {% endfor %}
+                    {% endfor %}
+                    </tbody>
+                    <tfoot>
+                    <tr>
+                        <th colspan="5">
+                            {% trans "Difference against the price list" %}
+                        </th>
+                        <th class="text-right">{{ off_tariff_difference|money:currency }}</th>
+                    </tr>
+                    </tfoot>
+                </table>
+            </div>
+        </div>
+    {% endif %}
+
+    {% comment %}
+        Nights, not calendar days: a till day starts at six in the morning
+        because an evening crosses midnight. Asking for one date gives that
+        whole evening, small hours included.
+    {% endcomment %}
+    <form action="" method="get" class="form-inline" style="margin-bottom: 15px;">
+        <label for="filter_from">{% trans "Evenings from" %}</label>
+        <input type="date" class="form-control input-sm" id="filter_from"
+               name="from" value="{{ filter_from }}">
+        {# Contextual: on its own, “to” is four different words in French. #}
+        <label for="filter_to">{% trans "to" context "end of a range of evenings" %}</label>
+        <input type="date" class="form-control input-sm" id="filter_to"
+               name="to" value="{{ filter_to }}">
+        <button type="submit" class="btn btn-default btn-sm">{% trans "Show" %}</button>
+        {% if filtered %}
+            <a href="?" class="btn btn-link btn-sm">{% trans "All evenings" %}</a>
+        {% endif %}
+    </form>
+
     <h3>
         {% trans "Journal" %}
-        {# The whole journal, not the page: the takings recompute from this file. #}
-        <a href="?export=csv" class="btn btn-default btn-sm pull-right">
+        {% comment %}
+            The journal, not the page — and the same range as the screen it was
+            downloaded from. An export that quietly handed back every evening
+            while the page showed one is the more expensive mistake: the person
+            opening it is reconciling something, and cannot tell.
+        {% endcomment %}
+        <a href="?export=csv{% if filter_from %}&amp;from={{ filter_from }}{% endif %}{% if filter_to %}&amp;to={{ filter_to }}{% endif %}"
+           class="btn btn-default btn-sm pull-right">
             <span class="fa fa-download"></span>
             {% trans "Export CSV" %}
         </a>

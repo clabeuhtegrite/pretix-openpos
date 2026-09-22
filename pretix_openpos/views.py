@@ -1,5 +1,6 @@
 import csv
 from collections import OrderedDict
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
 from django.contrib import messages
@@ -8,12 +9,15 @@ from django.db.models import Count, Min, Sum
 from django.http import StreamingHttpResponse
 from django.shortcuts import redirect
 from django.urls import reverse
+from django.utils.functional import cached_property
+from django.utils.timezone import make_aware, now
 from django.utils.translation import gettext_lazy as _
 from django.views.generic import ListView, TemplateView
 from pretix.base.models import Event
 from pretix.control.permissions import EventPermissionRequiredMixin
 from pretix.control.views.event import EventSettingsFormView, EventSettingsViewMixin
 
+from .api.views import BUSINESS_DAY_STARTS_AT
 from .forms import OpenPosSettingsForm
 from .models import PosPrice, PosSale
 
@@ -94,6 +98,19 @@ class PricesView(EventPermissionRequiredMixin, TemplateView):
                 }
         return rows
 
+    @staticmethod
+    def _change(row, before, after):
+        """One moved line, readable years later without the database."""
+        variation = row["variation"]
+        return {
+            "item": row["item"].pk,
+            "item_name": str(row["item"].name),
+            "variation": variation.pk if variation else None,
+            "variation_name": str(variation.value) if variation else None,
+            "from": None if before is None else str(before),
+            "to": None if after is None else str(after),
+        }
+
     def get_context_data(self, submitted=None, **kwargs):
         ctx = super().get_context_data(**kwargs)
         rows = list(self._rows().values())
@@ -152,23 +169,31 @@ class PricesView(EventPermissionRequiredMixin, TemplateView):
                 self.get_context_data(submitted=request.POST)
             )
 
-        changed = 0
+        # Both sides of every line that moved, not a count of them. A history
+        # that says "6 products were changed" answers nothing anyone asks of
+        # it: the question is always which product, from what, to what, and by
+        # the time it is asked the price list has moved on again. The names go
+        # in too, because an item renamed or deleted next season would leave
+        # the entry pointing at nothing.
+        changed = []
         with transaction.atomic():
             for row, price in parsed:
                 item, variation = row["item"], row["variation"]
+                before = row["pos_price"]
                 if price is None:
                     deleted, _details = PosPrice.objects.filter(
                         event=request.event, item=item, variation=variation
                     ).delete()
-                    changed += 1 if deleted else 0
+                    if deleted:
+                        changed.append(self._change(row, before, None))
                     continue
 
                 obj, created = PosPrice.objects.update_or_create(
                     event=request.event, item=item, variation=variation,
                     defaults={"price": price},
                 )
-                if created or row["pos_price"] != price:
-                    changed += 1
+                if created or before != price:
+                    changed.append(self._change(row, before, price))
 
         request.event.log_action(
             "pretix_openpos.prices.changed", user=request.user, data={"changed": changed}
@@ -192,6 +217,250 @@ class Echo:
         return value
 
 
+#: How long a card payment may sit unanswered before it is worth a human's
+#: attention.
+#:
+#: Generous: a cardholder rummaging for their wallet, a reader that took a
+#: while to wake, a till that polled late. Anything still open after this was
+#: not slow, it was abandoned.
+UNRESOLVED_AFTER = timedelta(minutes=20)
+
+
+def sold_off_tariff(sales):
+    """
+    Journal rows that were replayed at a price the tariff no longer carries.
+
+    A sale rung up while the till was cut off was priced from the tariff it had
+    cached, and the customer paid that. The order is created at what was
+    actually charged, because invoicing a sum nobody handed over is the worse
+    of the two lies — and the divergence is recorded on the line rather than
+    smoothed away.
+
+    Until now the only place it was ever said out loud was the till's own
+    resync panel, to whoever was holding the tablet, once. This is the same
+    thing in the place the evening is reconciled: the difference is real money
+    that is in the drawer and not in the price list, and it has to be added up
+    somewhere.
+
+    Takes an already-filtered queryset, so it follows the screen's own range.
+    """
+    rows = []
+    difference = Decimal("0.00")
+    for sale in sales.filter(offline=True).order_by("-seq"):
+        lines = []
+        for line in sale.positions:
+            if not line.get("tariff_price"):
+                continue
+            # The journal holds these as strings — it is JSON, and a price
+            # that came back as a float would be a worse bug than any of the
+            # ones on this page. Widened here rather than in the template,
+            # which has no arithmetic and whose money filter refuses a string.
+            charged = Decimal(line["unit_price"])
+            tariff = Decimal(line["tariff_price"])
+            difference += (charged - tariff) * line["count"]
+            lines.append({**line, "unit_price": charged, "tariff_price": tariff})
+        if lines:
+            rows.append({"sale": sale, "lines": lines})
+    return rows, difference
+
+
+def off_tariff_total(sale):
+    """
+    What the price list would have charged for this basket, or ``None``.
+
+    ``None`` rather than the total whenever nothing diverged, so a reader can
+    tell "the tariff agreed" from "the tariff was never compared" — an online
+    sale has no cached tariff to differ from and its row is blank, not zero.
+    """
+    if not any(line.get("tariff_price") for line in sale.positions):
+        return None
+    return sum(
+        (
+            Decimal(line.get("tariff_price") or line["unit_price"]) * line["count"]
+            for line in sale.positions
+        ),
+        Decimal("0.00"),
+    )
+
+
+def refused_card_refunds(event):
+    """
+    Cancellations whose money SumUp would not give back.
+
+    A card refund is asked for over the network, and the network can say no —
+    a transaction already refunded, an account limit, a reader long gone. The
+    till says so in red, to whoever pressed the button, once. Nobody else ever
+    heard: pretix marks the refund failed and moves on, and the customer is
+    standing at the counter being told the cancellation went through.
+
+    So the money is still on their card, and the only other record of that is
+    SumUp's dashboard. This is the list the organiser reconciling the next
+    morning did not have. Read-only, like the section above it: refunding one
+    of these from the SumUp app is a decision, not a page load.
+
+    Not filtered by evening, deliberately, and for the same reason: an unpaid
+    debt to a customer does not stop mattering because the screen is showing a
+    different night.
+    """
+    from pretix.base.models.orders import OrderRefund
+
+    from .payment import CARD
+
+    refunds = list(
+        OrderRefund.objects.filter(
+            order__event=event,
+            provider=CARD,
+            state=OrderRefund.REFUND_STATE_FAILED,
+        )
+        .select_related("order")
+        .order_by("-created")[:200]
+    )
+    if not refunds:
+        return []
+
+    # The SumUp handle for each, so the dashboard can be searched. It lives on
+    # the payment row rather than on the refund, which knows only pretix.
+    keys = {
+        sale.order_id: sale.idempotency_key
+        for sale in PosSale.objects.filter(
+            event=event,
+            order_id__in=[refund.order_id for refund in refunds],
+            kind=PosSale.KIND_SALE,
+        )
+    }
+    from .models import PosTerminalPayment
+
+    transactions = {
+        payment.idempotency_key: payment.transaction_id
+        for payment in PosTerminalPayment.objects.filter(
+            event=event, idempotency_key__in=list(keys.values())
+        )
+    }
+    return [
+        {
+            "refund": refund,
+            "order": refund.order,
+            "transaction": transactions.get(keys.get(refund.order_id), ""),
+        }
+        for refund in refunds
+    ]
+
+
+def unresolved_terminal_payments(event):
+    """
+    Card payments that never became a sale, for the one screen that can say so.
+
+    Two shapes, and they are the same problem seen at two moments. A payment
+    SumUp says went through, with no journal row carrying its key: the money
+    left the customer's card and pretix has never heard of it. And a payment
+    still waiting long after anyone could be standing at the counter: the till
+    was closed, or lost, or its battery went, while a reader had a basket on
+    it — nobody will ever poll it again, and it may or may not have been paid.
+
+    Neither is visible anywhere else. The takings are built from the journal,
+    so they cannot show a charge that never reached it; the only other record
+    is SumUp's own dashboard, read line by line against a statement days
+    later. This is the whole reason the screen has a section for it.
+
+    Read-only, and deliberately so: what to do about one of these is a
+    decision — refund it, or ring the sale up again — and not something a page
+    load should make.
+    """
+    from .models import PosTerminalPayment
+
+    payments = (
+        PosTerminalPayment.objects.filter(event=event, refunded__isnull=True)
+        .exclude(status=PosTerminalPayment.STATUS_FAILED)
+        .select_related("device")
+    )
+    stale = now() - UNRESOLVED_AFTER
+    candidates = [
+        payment
+        for payment in payments.order_by("-created")[:500]
+        if payment.status == PosTerminalPayment.STATUS_SUCCESSFUL
+        or payment.created < stale
+    ]
+    if not candidates:
+        return []
+
+    # One query for the journal side rather than one per row.
+    booked = set(
+        PosSale.objects.filter(
+            event=event,
+            idempotency_key__in=[payment.idempotency_key for payment in candidates],
+        ).values_list("idempotency_key", flat=True)
+    )
+    return [
+        {
+            "payment": payment,
+            "till": payment.device.name if payment.device else payment.device_serial,
+            # What a human has to decide about, said in the row itself.
+            "paid": payment.status == PosTerminalPayment.STATUS_SUCCESSFUL,
+        }
+        for payment in candidates
+        if payment.idempotency_key not in booked
+    ]
+
+
+def business_day_window(event, start, end):
+    """
+    Turn two dates into the span of nights they name.
+
+    Nights, not calendar days, and that is the whole reason this exists: a till
+    day here begins at six in the morning, because an evening crosses midnight
+    and the figure somebody reconciles the drawer against at half past one has
+    to cover the whole of it. A filter that cut at midnight would split every
+    single event in this system down the middle and hand back two halves that
+    answer nothing.
+
+    So ``from=2026-09-19&to=2026-09-19`` means the night of Saturday the 19th:
+    six in the morning that day, up to six the next. Either end may be left
+    out. Returns ``(start, end, problems)`` with datetimes or ``None``, and a
+    list of what could not be read — shown to the organiser rather than
+    silently ignored, because a filter that quietly does nothing is worse than
+    none at all.
+    """
+    problems = []
+
+    def parse(value, complaint):
+        if not value:
+            return None
+        try:
+            return date.fromisoformat(value.strip())
+        except ValueError:
+            # The whole sentence, rather than one built from a translated word
+            # dropped into a slot: a bare “from” is the kind of msgid a
+            # catalogue renders as the wrong one of the four French words for
+            # it, and there is nothing in the string to tell a translator which.
+            problems.append(complaint.format(value=value[:20]))
+            return None
+
+    first = parse(
+        start,
+        _("“{value}” is not a date. The first evening goes in as YYYY-MM-DD."),
+    )
+    last = parse(
+        end,
+        _("“{value}” is not a date. The last evening goes in as YYYY-MM-DD."),
+    )
+    if first and last and last < first:
+        problems.append(_("The end of the range is before its beginning."))
+        first = last = None
+
+    def at_six(day):
+        return make_aware(
+            datetime.combine(day, BUSINESS_DAY_STARTS_AT), event.timezone
+        )
+
+    return (
+        at_six(first) if first else None,
+        # Up to six the morning AFTER the last night asked for, so that night
+        # is included whole rather than cut short at its own six o'clock.
+        at_six(last + timedelta(days=1)) if last else None,
+        problems,
+    )
+
+
 class SalesView(EventPermissionRequiredMixin, ListView):
     """Journal of till sales, with the takings broken down per device."""
 
@@ -203,11 +472,35 @@ class SalesView(EventPermissionRequiredMixin, ListView):
     def get(self, request, *args, **kwargs):
         if request.GET.get("export") == "csv":
             return self._export_csv()
+        for problem in self.window[2]:
+            messages.error(request, problem)
         return super().get(request, *args, **kwargs)
+
+    @cached_property
+    def window(self):
+        """The nights being looked at, read once per request."""
+        return business_day_window(
+            self.request.event,
+            self.request.GET.get("from"),
+            self.request.GET.get("to"),
+        )
+
+    def in_window(self, qs):
+        start, end, _problems = self.window
+        if start is not None:
+            qs = qs.filter(datetime__gte=start)
+        if end is not None:
+            qs = qs.filter(datetime__lt=end)
+        return qs
 
     def _export_csv(self):
         """
-        The whole journal as one file, for whoever keeps the books.
+        The journal as one file, for whoever keeps the books.
+
+        Carries the same filter as the screen it was downloaded from. An export
+        that silently handed back every event's worth of rows when the page
+        showed one night would be the more expensive of the two mistakes: the
+        person opening it is reconciling something, and has no way to tell.
 
         The journal itself, not the takings: the takings are recomputable from
         it, which is the point of exporting it whole. Streamed row by row in
@@ -221,7 +514,14 @@ class SalesView(EventPermissionRequiredMixin, ListView):
         header = [
             "seq", "kind", "datetime", "order", "till", "till_serial", "cashier",
             "payment_type", "total", "cash_given", "cash_change", "testmode",
-            "offline", "cancels_seq", "reason", "positions",
+            # What the price list would have charged for the same basket, and
+            # the gap. Blank on every row but an offline replay whose tariff
+            # had moved, so a column of blanks with three figures in it is the
+            # honest shape of this: it is a rare thing that matters when it
+            # happens, and a spreadsheet can sum it without reading the
+            # positions column by eye.
+            "offline", "tariff_total", "off_tariff", "cancels_seq", "reason",
+            "positions",
         ]
 
         def rows():
@@ -229,7 +529,9 @@ class SalesView(EventPermissionRequiredMixin, ListView):
             # The BOM stops Excel guessing at the encoding.
             yield "\ufeff"
             yield writer.writerow(header)
-            journal = PosSale.objects.filter(event=event).order_by("seq").iterator()
+            journal = self.in_window(
+                PosSale.objects.filter(event=event)
+            ).order_by("seq").iterator()
             for sale in journal:
                 positions = " + ".join(
                     "{}× {}{}{}".format(
@@ -242,6 +544,7 @@ class SalesView(EventPermissionRequiredMixin, ListView):
                     )
                     for line in sale.positions
                 )
+                tariff_total = off_tariff_total(sale)
                 yield writer.writerow([
                     sale.seq,
                     sale.kind,
@@ -256,27 +559,41 @@ class SalesView(EventPermissionRequiredMixin, ListView):
                     "" if sale.cash_change is None else sale.cash_change,
                     "1" if sale.testmode else "",
                     "1" if sale.offline else "",
+                    "" if tariff_total is None else tariff_total,
+                    "" if tariff_total is None else sale.total - tariff_total,
                     "" if sale.cancels_seq is None else sale.cancels_seq,
                     sale.reason,
                     positions,
                 ])
 
         response = StreamingHttpResponse(rows(), content_type="text/csv; charset=utf-8")
+        # The range in the filename, so two exports of different nights do not
+        # land in the same downloads folder under the same name.
+        start, end, _problems = self.window
+        span = "".join(
+            part for part in (
+                f"-{start.date().isoformat()}" if start else "",
+                f"-{(end - timedelta(days=1)).date().isoformat()}" if end else "",
+            )
+        )
         response["Content-Disposition"] = (
-            f'attachment; filename="openpos-journal-{event.slug}.csv"'
+            f'attachment; filename="openpos-journal-{event.slug}{span}.csv"'
         )
         return response
 
     def get_queryset(self):
         return (
-            PosSale.objects.filter(event=self.request.event)
+            self.in_window(PosSale.objects.filter(event=self.request.event))
             .select_related("device", "order")
             .order_by("-seq")
         )
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
-        all_sales = PosSale.objects.filter(event=self.request.event)
+        # The takings follow the filter, or the figures under a filtered journal
+        # would belong to a different set of rows than the ones listed — which
+        # is the way to make a page lie without a single wrong number on it.
+        all_sales = self.in_window(PosSale.objects.filter(event=self.request.event))
 
         def empty():
             return {"cash": Decimal("0.00"), "card": Decimal("0.00"), "count": 0}
@@ -350,8 +667,23 @@ class SalesView(EventPermissionRequiredMixin, ListView):
             testmode_totals if all_sales.filter(testmode=True).exists() else None
         )
         ctx["currency"] = self.request.event.currency
-        # Surfaced so a broken chain is visible rather than silently trusted.
+        # Deliberately NOT filtered, unlike everything above. The chain runs
+        # through the whole journal, so checking a slice of it would let a page
+        # showing one night report a sound journal while an entry outside the
+        # window is the broken one. Same for card payments left in the air:
+        # they are an outstanding job, not a figure about this night.
         # Checked from an anchored checkpoint; `manage.py openpos_verify_journal`
         # is the full audit.
         ctx["tampered_with"] = PosSale.verify_chain_cached(self.request.event)
+        ctx["unresolved_card"] = unresolved_terminal_payments(self.request.event)
+        # Follows the filter, unlike the two blocks above it: this is money
+        # that belongs to the evening being reconciled, not a loose end that
+        # needs seeing whatever range is on screen.
+        ctx["off_tariff"], ctx["off_tariff_difference"] = sold_off_tariff(all_sales)
+        ctx["refused_refunds"] = refused_card_refunds(self.request.event)
+        # Echoed back so the form keeps what was asked for, and so the export
+        # link can carry it.
+        ctx["filter_from"] = (self.request.GET.get("from") or "").strip()
+        ctx["filter_to"] = (self.request.GET.get("to") or "").strip()
+        ctx["filtered"] = any(self.window[:2])
         return ctx

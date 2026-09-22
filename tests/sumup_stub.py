@@ -49,6 +49,11 @@ class FakeSumUp:
         #: What a freshly paired reader comes back as. SumUp says ``processing``
         #: until the device itself acknowledges, which takes a few seconds.
         self.pairing_status = "paired"
+        #: reader id -> what ``/status`` says about it. A reader with no entry
+        #: here answers 404, which is what a Solo on firmware older than
+        #: 3.3.39.0 does: old enough to take a payment, too old to be asked
+        #: about one.
+        self.reader_states = {}
         self._counter = 0
 
     # -- setting a scene ---------------------------------------------------
@@ -59,6 +64,18 @@ class FakeSumUp:
             "name": name,
             "status": status,
             "device": {"identifier": f"dev-{reader_id}", "model": model},
+        }
+        return reader_id
+
+    def set_state(self, reader_id, state="IDLE", *, status="ONLINE", **extra):
+        """What ``/status`` will say about this reader."""
+        self.reader_states[reader_id] = {
+            "status": status,
+            "state": state,
+            "battery_level": 72,
+            "connection_type": "Wi-Fi",
+            "firmware_version": "3.3.39.0",
+            **extra,
         }
         return reader_id
 
@@ -114,6 +131,9 @@ class FakeSumUp:
         terminate = re.fullmatch(rf"{re.escape(prefix)}/([^/]+)/terminate", path)
         if method == "POST" and terminate:
             return self._terminate
+        state = re.fullmatch(rf"{re.escape(prefix)}/([^/]+)/status", path)
+        if method == "GET" and state:
+            return self._reader_status(state.group(1))
         if method == "GET" and path == f"/v2.1/merchants/{self.merchant}/transactions":
             return self._transaction
         refund = re.fullmatch(
@@ -161,6 +181,15 @@ class FakeSumUp:
             return FakeResponse(
                 201, {"data": {"client_transaction_id": client_transaction_id}}
             )
+
+        return handler
+
+    def _reader_status(self, reader_id):
+        def handler(body, params):
+            state = self.reader_states.get(reader_id)
+            if state is None:
+                return FakeResponse(404, {"message": "not supported"})
+            return FakeResponse(200, state)
 
         return handler
 

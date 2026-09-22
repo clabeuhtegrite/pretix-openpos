@@ -70,7 +70,9 @@ class SumUpView(OrganizerSettingsFormView):
                 # that.
                 ctx["reader_error"] = exc.message
             else:
-                ctx["readers"] = [self._row(reader, assigned) for reader in readers]
+                ctx["readers"] = [
+                    self._row(reader, assigned, account) for reader in readers
+                ]
                 # A till pointing at a reader SumUp has never heard of refuses
                 # every card payment, and does so silently as far as the cashier
                 # is concerned. It happens when a reader is unpaired from the
@@ -87,22 +89,38 @@ class SumUpView(OrganizerSettingsFormView):
         return ctx
 
     @staticmethod
-    def _row(reader, assigned):
+    def _row(reader, assigned, account):
         """One reader as the template wants it, rather than as SumUp sends it."""
         reader_id = str(reader.get("id") or "")
         status = str(reader.get("status") or "")
         row = assigned.get(reader_id)
+        paired = status == "paired"
+        # Only the paired ones, and only one call each: a reader that is still
+        # acknowledging its pairing has nothing to say, and this runs while an
+        # organizer waits for a page.
+        live = account.reader_status(reader_id) if paired else None
+        state = str((live or {}).get("state") or "")
         return {
             "id": reader_id,
             "name": reader.get("name") or reader_id,
             "model": (reader.get("device") or {}).get("model") or "",
             "status": status,
-            "paired": status == "paired",
+            "paired": paired,
             # SumUp answers a pairing request before the physical device has
             # acknowledged it, so this state is normal for a few seconds and
             # not a failure.
             "pairing": status == "processing",
             "till": row.device if row else None,
+            # None when the reader could not be asked — firmware too old, or
+            # SumUp slow to answer. Distinct from "offline", which is a thing
+            # SumUp actually said.
+            "live": live,
+            "online": bool(live) and live.get("status") == "ONLINE",
+            "state": state,
+            "busy": state in SumUpAccount.BUSY_STATES,
+            "battery": (live or {}).get("battery_level"),
+            "firmware": (live or {}).get("firmware_version") or "",
+            "connection": (live or {}).get("connection_type") or "",
         }
 
     def post(self, request, *args, **kwargs):
@@ -111,6 +129,8 @@ class SumUpView(OrganizerSettingsFormView):
             return self._pair(request)
         if action == "forget":
             return self._forget(request)
+        if action == "free":
+            return self._free(request)
         return self._save_settings(request)
 
     @transaction.atomic
@@ -167,6 +187,41 @@ class SumUpView(OrganizerSettingsFormView):
                 _("SumUp has accepted the code. The reader will show as paired "
                   "once the device itself confirms — reload in a few seconds."),
             )
+        return redirect(self.get_success_url())
+
+    def _free(self, request):
+        """
+        Take whatever is on a reader's screen off it.
+
+        For the reader left showing an amount nobody is coming back for: a till
+        that crashed mid-payment, a basket put on and then abandoned. Until it
+        is cleared the reader refuses the next payment as busy, which at the
+        door reads as "the card machine is broken".
+
+        Deliberately does *not* touch the payment row. Terminating is
+        best-effort and SumUp confirms nothing, so this cannot say whether the
+        cardholder had already paid — only SumUp's own transaction can, and
+        that is what settling asks. Writing "failed" here on a guess is exactly
+        the mistake this plugin has already made once.
+        """
+        reader_id = (request.POST.get("reader_id") or "").strip()
+        account = SumUpAccount(request.organizer)
+        try:
+            account.terminate_checkout(reader_id)
+        except SumUpError as exc:
+            messages.error(request, exc.message)
+            return redirect(self.get_success_url())
+        request.organizer.log_action(
+            "pretix_openpos.sumup.reader.freed",
+            user=request.user,
+            data={"reader": reader_id},
+        )
+        messages.success(
+            request,
+            _("The reader has been asked to clear its screen. If a card had "
+              "already been accepted, that payment still stands — check the "
+              "till sales page before charging again."),
+        )
         return redirect(self.get_success_url())
 
     def _forget(self, request):

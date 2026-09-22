@@ -307,3 +307,470 @@ def test_a_sale_from_a_till_that_has_since_been_deleted_is_still_counted(
 
     assert context["totals"]["count"] == 1
     assert len(context["by_device"]) == 1
+
+
+# -- card payments that never became a sale ---------------------------------
+#
+# The one thing the journal cannot show by construction: the takings are
+# recomputed from it, so a card charged without a sale behind it is missing
+# from every figure on the page rather than wrong in one of them.
+
+
+def put_on_reader(till, positions, key):
+    return till.post(
+        "terminal/start", {"idempotency_key": key, "positions": positions}
+    )
+
+
+@pytest.mark.django_db
+def test_a_card_charged_with_no_sale_behind_it_is_listed(
+    backoffice, till, event, ticket, reader_till, sumup
+):
+    from pretix_openpos.models import PosTerminalPayment
+
+    put_on_reader(till, [{"item": ticket.pk, "count": 1}], "abandonne-01")
+    payment = PosTerminalPayment.objects.get(idempotency_key="abandonne-01")
+    sumup.pay(payment.client_transaction_id, transaction_id="tx_perdue")
+    # The cardholder paid and the till never came back — dropped tablet, dead
+    # battery, closed browser. Nothing else in pretix will ever mention it.
+    till.get("terminal/status", idempotency_key="abandonne-01")
+
+    context = backoffice.get(sales_url(event)).context
+
+    assert [row["payment"].idempotency_key for row in context["unresolved_card"]] == [
+        "abandonne-01"
+    ]
+    assert context["unresolved_card"][0]["paid"] is True
+    assert context["unresolved_card"][0]["till"] == "Caisse bar"
+    # And the reference a human searches the SumUp dashboard by is on the page.
+    assert "tx_perdue" in backoffice.get(sales_url(event)).content.decode()
+
+
+@pytest.mark.django_db
+def test_a_basket_left_on_a_reader_is_listed_once_nobody_is_coming_back(
+    backoffice, till, event, ticket, reader_till, sumup
+):
+    from django.utils.timezone import now
+
+    from pretix_openpos.models import PosTerminalPayment
+    from pretix_openpos.views import UNRESOLVED_AFTER
+
+    put_on_reader(till, [{"item": ticket.pk, "count": 1}], "en-attente-01")
+
+    # Still within the window: a customer rummaging for their wallet is not an
+    # incident, and a row here on every slow payment is a row nobody reads.
+    assert backoffice.get(sales_url(event)).context["unresolved_card"] == []
+
+    PosTerminalPayment.objects.filter(idempotency_key="en-attente-01").update(
+        created=now() - UNRESOLVED_AFTER * 2
+    )
+
+    context = backoffice.get(sales_url(event)).context
+
+    assert len(context["unresolved_card"]) == 1
+    # Flagged as unknown rather than as charged: whether the money moved is
+    # exactly what nobody here can say.
+    assert context["unresolved_card"][0]["paid"] is False
+
+
+@pytest.mark.django_db
+def test_a_card_payment_that_became_a_sale_is_not_listed(
+    backoffice, till, event, ticket, reader_till, sumup
+):
+    from pretix_openpos.models import PosTerminalPayment
+
+    put_on_reader(till, [{"item": ticket.pk, "count": 1}], "vendue-01")
+    payment = PosTerminalPayment.objects.get(idempotency_key="vendue-01")
+    sumup.pay(payment.client_transaction_id, transaction_id="tx_ok")
+    till.get("terminal/status", idempotency_key="vendue-01")
+    sell(
+        till,
+        [{"item": ticket.pk, "count": 1}],
+        payment_type="card",
+        idempotency_key="vendue-01",
+    )
+
+    # The ordinary card sale. The section exists to be empty on a normal night.
+    assert backoffice.get(sales_url(event)).context["unresolved_card"] == []
+    assert "Card payments with no sale" not in backoffice.get(
+        sales_url(event)
+    ).content.decode()
+
+
+@pytest.mark.django_db
+def test_a_refusal_is_not_something_to_chase(
+    backoffice, till, event, ticket, reader_till, sumup
+):
+    from pretix_openpos.models import PosTerminalPayment
+
+    put_on_reader(till, [{"item": ticket.pk, "count": 1}], "refusee-01")
+    PosTerminalPayment.objects.filter(idempotency_key="refusee-01").update(
+        status=PosTerminalPayment.STATUS_FAILED
+    )
+
+    # A declined card is the system working. Nothing was taken, so there is
+    # nothing to give back and nothing to ring up.
+    assert backoffice.get(sales_url(event)).context["unresolved_card"] == []
+
+
+@pytest.mark.django_db
+def test_a_payment_already_sent_back_is_settled(
+    backoffice, till, event, ticket, reader_till, sumup
+):
+    from django.utils.timezone import now
+
+    from pretix_openpos.models import PosTerminalPayment
+
+    put_on_reader(till, [{"item": ticket.pk, "count": 1}], "rendue-01")
+    payment = PosTerminalPayment.objects.get(idempotency_key="rendue-01")
+    sumup.pay(payment.client_transaction_id, transaction_id="tx_rendue")
+    till.get("terminal/status", idempotency_key="rendue-01")
+
+    assert len(backoffice.get(sales_url(event)).context["unresolved_card"]) == 1
+
+    PosTerminalPayment.objects.filter(pk=payment.pk).update(refunded=now())
+
+    # Somebody dealt with it. Leaving the row up would have the next person
+    # refund it a second time.
+    assert backoffice.get(sales_url(event)).context["unresolved_card"] == []
+
+
+# -- looking at one evening -------------------------------------------------
+#
+# After a handful of events the journal is a wall of rows and the takings are
+# the sum of every evening this event ever had, which answers nothing about the
+# one somebody is reconciling.
+
+
+def on_night(event, key, day):
+    """Move a journal row to six in the evening on `day`, local time."""
+    from datetime import datetime, time
+
+    from django.utils.timezone import make_aware
+
+    PosSale.objects.filter(event=event, idempotency_key=key).update(
+        datetime=make_aware(datetime.combine(day, time(18, 0)), event.timezone)
+    )
+
+
+@pytest.mark.django_db
+def test_one_evening_can_be_asked_for(backoffice, till, event, ticket, beer):
+    from datetime import date
+
+    sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="samedi-01")
+    sell(till, [{"item": beer.pk, "count": 1}], idempotency_key="vendredi-1")
+    on_night(event, "samedi-01", date(2026, 9, 19))
+    on_night(event, "vendredi-1", date(2026, 9, 12))
+
+    context = backoffice.get(sales_url(event) + "?from=2026-09-19&to=2026-09-19").context
+
+    assert [sale.idempotency_key for sale in context["sales"]] == ["samedi-01"]
+    # And the takings are the takings of that evening, not of every evening:
+    # figures belonging to other rows than the ones listed is how a page lies
+    # without a single wrong number on it.
+    assert context["totals"]["total"] == Decimal("10.00")
+
+
+@pytest.mark.django_db
+def test_an_evening_is_a_night_rather_than_a_calendar_day(
+    backoffice, till, event, ticket
+):
+    """
+    The whole reason this is not a plain date filter. A till day begins at six
+    in the morning because an evening crosses midnight, and the figure somebody
+    reconciles the drawer against at half past one has to cover the whole of
+    it. Cutting at midnight would split every single event in this system.
+    """
+    from datetime import date, datetime, time
+
+    from django.utils.timezone import make_aware
+
+    sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="minuit-01")
+    # Half past one on the Sunday morning — still Saturday's evening.
+    PosSale.objects.filter(event=event, idempotency_key="minuit-01").update(
+        datetime=make_aware(
+            datetime.combine(date(2026, 9, 20), time(1, 30)), event.timezone
+        )
+    )
+
+    context = backoffice.get(sales_url(event) + "?from=2026-09-19&to=2026-09-19").context
+
+    assert [sale.idempotency_key for sale in context["sales"]] == ["minuit-01"]
+
+
+@pytest.mark.django_db
+def test_an_open_ended_range_works_from_either_side(backoffice, till, event, ticket):
+    from datetime import date
+
+    sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="ancienne-1")
+    sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="recente-01")
+    on_night(event, "ancienne-1", date(2026, 9, 12))
+    on_night(event, "recente-01", date(2026, 9, 19))
+
+    since = backoffice.get(sales_url(event) + "?from=2026-09-19").context["sales"]
+    until = backoffice.get(sales_url(event) + "?to=2026-09-12").context["sales"]
+
+    assert [s.idempotency_key for s in since] == ["recente-01"]
+    assert [s.idempotency_key for s in until] == ["ancienne-1"]
+
+
+@pytest.mark.django_db
+def test_the_export_carries_the_same_range_as_the_screen(
+    backoffice, till, event, ticket, beer
+):
+    # The more expensive of the two mistakes: the person opening this file is
+    # reconciling something and has no way to tell it covers every evening.
+    from datetime import date
+
+    sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="samedi-01")
+    sell(till, [{"item": beer.pk, "count": 1}], idempotency_key="vendredi-1")
+    on_night(event, "samedi-01", date(2026, 9, 19))
+    on_night(event, "vendredi-1", date(2026, 9, 12))
+
+    response = backoffice.get(
+        sales_url(event) + "?export=csv&from=2026-09-19&to=2026-09-19"
+    )
+
+    body = b"".join(response.streaming_content).decode("utf-8")
+    assert "Entrée" in body
+    assert "Bière" not in body
+    # And the range is in the filename, so two evenings do not land in the same
+    # downloads folder under one name.
+    assert "2026-09-19" in response["Content-Disposition"]
+
+
+@pytest.mark.django_db
+def test_a_date_that_is_not_a_date_is_said_rather_than_ignored(
+    backoffice, till, event, ticket
+):
+    # A filter that quietly does nothing is worse than no filter: the page
+    # looks answered.
+    sell(till, [{"item": ticket.pk, "count": 1}])
+
+    response = backoffice.get(sales_url(event) + "?from=samedi", follow=True)
+
+    assert response.status_code == 200
+    assert "is not a date" in response.content.decode()
+    # Nothing was filtered out on a guess.
+    assert len(response.context["sales"]) == 1
+
+
+@pytest.mark.django_db
+def test_a_range_that_runs_backwards_is_refused_rather_than_emptied(
+    backoffice, till, event, ticket
+):
+    sell(till, [{"item": ticket.pk, "count": 1}])
+
+    response = backoffice.get(
+        sales_url(event) + "?from=2026-09-19&to=2026-09-12", follow=True
+    )
+
+    assert "before its beginning" in response.content.decode()
+    assert len(response.context["sales"]) == 1
+
+
+@pytest.mark.django_db
+def test_the_integrity_check_still_reads_the_whole_journal(
+    backoffice, till, event, ticket
+):
+    """
+    Not filtered, unlike everything else on the page. The chain runs through
+    the whole journal, so checking a slice would let a page showing one evening
+    report a sound journal while the broken entry sits outside the window.
+    """
+    from datetime import date
+
+    sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="ancienne-1")
+    sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="recente-01")
+    on_night(event, "ancienne-1", date(2026, 9, 12))
+    on_night(event, "recente-01", date(2026, 9, 19))
+    PosSale.objects.filter(event=event, idempotency_key="ancienne-1").update(
+        total=Decimal("1.00")
+    )
+
+    context = backoffice.get(sales_url(event) + "?from=2026-09-19&to=2026-09-19").context
+
+    assert context["tampered_with"] is not None
+
+
+# -- sold at a price the tariff no longer carries -------------------------
+
+def replayed(till, event, positions, **kwargs):
+    """A sale rung up while the till was cut off, arriving late."""
+    from datetime import timedelta
+
+    from django.utils.timezone import now
+
+    total = sum(
+        (Decimal(p["price"]) * p["count"] for p in positions), Decimal("0.00")
+    )
+    return sell(
+        till,
+        positions,
+        offline={
+            "recorded_at": (now() - timedelta(hours=2)).isoformat(),
+            "charged_total": str(total),
+        },
+        **kwargs,
+    )
+
+
+@pytest.mark.django_db
+def test_a_replay_at_the_old_price_is_shown_with_the_difference(
+    backoffice, till, event, ticket
+):
+    """
+    The only place this was ever said was the till's own resync panel, once,
+    to whoever was holding the tablet. The person reconciling the evening two
+    days later saw an order at a price the price list does not explain.
+    """
+    PosPrice.objects.create(event=event, item=ticket, price=Decimal("12.00"))
+    replayed(till, event, [{"item": ticket.pk, "count": 2, "price": "10.00"}])
+
+    page = backoffice.get(sales_url(event)).content.decode()
+
+    assert "Sold at a price that had changed" in page
+    # Both sides, and the gap: four euros that are in the drawer and not in
+    # the price list.
+    assert "10.00" in page and "12.00" in page
+    # Four euros that are in the drawer and not in the price list. The money
+    # filter puts the currency between the sign and the digits.
+    assert "-€4.00" in page
+
+
+@pytest.mark.django_db
+def test_an_ordinary_evening_shows_no_such_section(backoffice, till, event, ticket):
+    sell(till, [{"item": ticket.pk, "count": 1}])
+
+    page = backoffice.get(sales_url(event)).content.decode()
+
+    # Empty on the ordinary evening, so its presence means something.
+    assert "Sold at a price that had changed" not in page
+
+
+@pytest.mark.django_db
+def test_a_replay_at_the_current_price_is_not_a_divergence(
+    backoffice, till, event, ticket
+):
+    replayed(till, event, [{"item": ticket.pk, "count": 1, "price": "10.00"}])
+
+    page = backoffice.get(sales_url(event)).content.decode()
+
+    assert "Sold at a price that had changed" not in page
+
+
+@pytest.mark.django_db
+def test_the_section_follows_the_evening_filter(backoffice, till, event, ticket):
+    from datetime import date
+
+    PosPrice.objects.create(event=event, item=ticket, price=Decimal("12.00"))
+    replayed(
+        till, event, [{"item": ticket.pk, "count": 1, "price": "10.00"}],
+        idempotency_key="vendredi-1",
+    )
+    on_night(event, "vendredi-1", date(2026, 9, 12))
+
+    page = backoffice.get(
+        sales_url(event) + "?from=2026-09-19&to=2026-09-19"
+    ).content.decode()
+
+    # It belongs to the evening being reconciled, unlike the orphan card
+    # payments above it, which need seeing whatever range is on screen.
+    assert "Sold at a price that had changed" not in page
+
+
+@pytest.mark.django_db
+def test_the_export_carries_the_tariff_the_screen_compares_against(
+    backoffice, till, event, ticket
+):
+    PosPrice.objects.create(event=event, item=ticket, price=Decimal("12.00"))
+    replayed(
+        till, event, [{"item": ticket.pk, "count": 2, "price": "10.00"}],
+        idempotency_key="rejoue-01",
+    )
+    sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="enligne-1")
+
+    response = backoffice.get(sales_url(event) + "?export=csv")
+    rows = b"".join(response.streaming_content).decode().strip().splitlines()
+
+    header = rows[0].lstrip("﻿").split(";")
+    assert "tariff_total" in header and "off_tariff" in header
+    tariff = header.index("tariff_total")
+    gap = header.index("off_tariff")
+    values = [row.split(";") for row in rows[1:]]
+    # One row diverged; the ordinary sale's cells are blank rather than zero,
+    # because "the tariff agreed" and "there was no tariff to compare" are
+    # different answers.
+    assert sorted(cells[tariff] for cells in values) == ["", "24.00"]
+    assert sorted(cells[gap] for cells in values) == ["", "-4.00"]
+
+
+# -- refunds SumUp would not give back ------------------------------------
+
+def refused_refund(till, event, ticket, sumup):
+    """Cancel a card sale with SumUp answering no, and return the sale."""
+    from .sumup_stub import FakeResponse
+    from .test_terminal import KEY, start, status
+
+    start(till, [{"item": ticket.pk, "count": 1}])
+    sumup.pay()
+    status(till)
+    sale = sell(
+        till, [{"item": ticket.pk, "count": 1}], payment_type="card", idempotency_key=KEY
+    ).json()
+    sumup.next_response = FakeResponse(422, {"message": "too late"})
+    till.post("cancel", {"seq": sale["journal_seq"], "idempotency_key": "annule-01"})
+    return sale
+
+
+@pytest.mark.django_db
+def test_a_refund_sumup_refused_is_listed_with_its_reference(
+    backoffice, till, event, ticket, reader_till, sumup
+):
+    """
+    The money is still on the customer's card, and until this section the only
+    people who ever heard were a volunteer who saw a red banner and the
+    customer being told the cancellation went through.
+    """
+    sale = refused_refund(till, event, ticket, sumup)
+
+    page = backoffice.get(sales_url(event)).content.decode()
+
+    assert "Card refunds SumUp refused" in page
+    assert sale["order"]["code"] in page
+    # Searchable in the SumUp dashboard, which is the only other record.
+    assert "tx_1" in page
+
+
+@pytest.mark.django_db
+def test_a_refund_that_went_through_is_not_listed(
+    backoffice, till, event, ticket, reader_till, sumup
+):
+    from .test_terminal import KEY, start, status
+
+    start(till, [{"item": ticket.pk, "count": 1}])
+    sumup.pay()
+    status(till)
+    sale = sell(
+        till, [{"item": ticket.pk, "count": 1}], payment_type="card", idempotency_key=KEY
+    ).json()
+    till.post("cancel", {"seq": sale["journal_seq"], "idempotency_key": "annule-01"})
+
+    page = backoffice.get(sales_url(event)).content.decode()
+
+    assert "Card refunds SumUp refused" not in page
+
+
+@pytest.mark.django_db
+def test_the_list_ignores_the_evening_filter(
+    backoffice, till, event, ticket, reader_till, sumup
+):
+    refused_refund(till, event, ticket, sumup)
+
+    page = backoffice.get(
+        sales_url(event) + "?from=2020-01-01&to=2020-01-01"
+    ).content.decode()
+
+    # A debt to a customer does not stop mattering because the screen is
+    # showing a different night.
+    assert "Card refunds SumUp refused" in page

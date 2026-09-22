@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, ApiError, type PositionPayload } from "./api";
+import { api, ApiError, errorCode, type PositionPayload } from "./api";
 import { basketFromJournal, customKey, refundKey, repriceCart } from "./basket";
 import CheckinScreen from "./components/CheckinScreen";
 import CustomSalePanel from "./components/CustomSalePanel";
@@ -17,15 +17,15 @@ import { t } from "./i18n";
 import { fromCents, toCents } from "./money";
 import { newNonce } from "./nonce";
 import {
-  clearPairing, enqueue, loadCached, loadCashier, loadPairing, loadQueue,
-  loadUpdateAttempt, requestPersistence, saveCached, saveCashier, savePairing,
-  saveUpdateAttempt,
+  clearBasket, clearPairing, enqueue, loadBasket, loadCached, loadCashier, loadFailures,
+  loadPairing, loadQueue, loadUpdateAttempt, requestPersistence, saveBasket, saveCached,
+  saveCashier, savePairing, saveUpdateAttempt,
 } from "./storage";
 import { useConnectivity } from "./connectivity";
 import { drainQueue } from "./sync";
 import { applyTheme, loadTheme, saveTheme, watchDeviceTheme, type Theme } from "./theme";
 import type {
-  Catalog, CartLine, DeviceRole, Pairing, PaymentType, PosConfig, QueuedSale,
+  Catalog, CartLine, Credit, DeviceRole, Pairing, PaymentType, PosConfig, QueuedSale,
   SaleResult, SyncReport,
 } from "./types";
 import { useBackClose } from "./useBackClose";
@@ -117,7 +117,16 @@ export default function App() {
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
-  const [cart, setCart] = useState<CartLine[]>([]);
+  /**
+   * The basket, restored if this till was interrupted mid-sale.
+   *
+   * Read once, from the same storage the effect below writes to, and only for
+   * the event this till is paired to. What comes back is priced as it was
+   * left; the catalogue may have moved since, which is what the reprice below
+   * settles before the operator reads a figure out to anybody.
+   */
+  const restored = useState(() => (pairing ? loadBasket(pairing.event) : null))[0];
+  const [cart, setCart] = useState<CartLine[]>(() => restored?.cart ?? []);
   const [cashier, setCashier] = useState<string>(loadCashier);
   const [theme, setTheme] = useState<Theme>(loadTheme);
   /** Read once at startup: the server version a previous reload already tried. */
@@ -149,10 +158,20 @@ export default function App() {
    * outlive that panel: it is spent at the payment step, against a basket the
    * operator may still be editing.
    */
-  const [credit, setCredit] = useState<{ amountCents: number; order: string } | null>(null);
+  const [credit, setCredit] = useState<Credit | null>(() => restored?.credit ?? null);
 
   const online = useConnectivity();
   const [pending, setPending] = useState(() => loadQueue().length);
+  /**
+   * Entries the server refused, which nobody has dealt with yet.
+   *
+   * Counted here because the badge is the only door to the panel that shows
+   * them. A drain that sends forty sales and has one refused leaves nothing to
+   * send and a till that is back online — so the badge used to disappear,
+   * taking the unread refusal with it, in direct contradiction of the rule
+   * that no refusal is ever swallowed.
+   */
+  const [failures, setFailures] = useState(() => loadFailures().length);
   const [syncing, setSyncing] = useState(false);
   const [lastSync, setLastSync] = useState<SyncReport | null>(null);
   const [syncOpen, setSyncOpen] = useState(false);
@@ -176,6 +195,37 @@ export default function App() {
   // What is queued is money that exists nowhere else yet; ask the browser not
   // to evict it.
   useEffect(requestPersistence, []);
+
+  /**
+   * Keep the basket on disk, so a reload does not lose it.
+   *
+   * An effect rather than a write at each of the dozen places that change the
+   * basket: one of those would be missed, and a basket that survives only the
+   * reloads somebody remembered to handle is a basket that does not survive.
+   * The credit is the part that matters — it is money the till is holding for
+   * a customer, and until the corrected sale is recorded it exists nowhere
+   * else at all.
+   */
+  useEffect(() => {
+    if (!pairing) return;
+    saveBasket(pairing.event, cart, credit);
+  }, [pairing, cart, credit]);
+
+  /**
+   * Price a restored basket against the catalogue that is actually live.
+   *
+   * It was saved with the prices of the session that was interrupted, and the
+   * tariff may have been edited since. The server would refuse the sale and
+   * the panel would recover — that safety net is already there — but the
+   * figure the operator reads out to a customer has to be right the first
+   * time. Once only: after this the ordinary refresh owns the prices.
+   */
+  const repriced = useRef(restored === null);
+  useEffect(() => {
+    if (!catalog || repriced.current) return;
+    repriced.current = true;
+    setCart((lines) => repriceCart(lines, catalog));
+  }, [catalog]);
 
   const { atDoor, opensOnDoor, doorReachable } = screensFor(config);
 
@@ -215,6 +265,7 @@ export default function App() {
     } finally {
       syncingRef.current = false;
       setPending(loadQueue().length);
+      setFailures(loadFailures().length);
       setSyncing(false);
     }
   }, [pairing]);
@@ -258,6 +309,17 @@ export default function App() {
       // only be refused again at the first sale, in front of a customer.
       if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
         setLoadError(t("error.refused", { detail: err.message }));
+        return;
+      }
+
+      // The event is a series and no date is on tonight. Said rather than
+      // papered over with the cache below, because the cache would hand back
+      // last week's catalogue and the till would sell against a date that is
+      // over — the queue would only find out at the payment, which is the
+      // whole shape of the bug this replaced. It is also the one thing here
+      // that somebody can fix in a minute from the back office.
+      if (errorCode(err) === "series_closed") {
+        setLoadError(describeError(err));
         return;
       }
 
@@ -330,10 +392,12 @@ export default function App() {
 
   function unpair() {
     clearPairing();
+    clearBasket();
     setPairing(null);
     setConfig(null);
     setCatalog(null);
     setCart([]);
+    setCredit(null);
     setSettingsOpen(false);
   }
 
@@ -420,8 +484,20 @@ export default function App() {
     });
   }
 
-  /** Emptying the basket abandons the correction, and the credit with it. */
+  /**
+   * Emptying the basket abandons the correction, and the credit with it.
+   *
+   * Asked about only when there is a credit, because only then is the tap
+   * expensive: a basket of drinks is ten seconds to ring up again, while a
+   * credit is money the till is holding for a customer who is standing
+   * there — gone from the app the moment it is dropped, and recoverable only
+   * by finding the cancellation again in the history. A dialog on every clear
+   * would be a dialog nobody reads by the third one.
+   */
   function clearCart() {
+    if (credit && !window.confirm(t("sale.clearCredit", { order: credit.order }))) {
+      return;
+    }
     setCart([]);
     setCredit(null);
   }
@@ -442,7 +518,11 @@ export default function App() {
    * customer is still standing there — rather than being shown a receipt for
    * something that will never exist.
    */
-  function sellOffline(paymentType: PaymentType, cashGiven: string | null): SaleResult {
+  function sellOffline(
+    paymentType: PaymentType,
+    cashGiven: string | null,
+    charged?: string,
+  ): SaleResult {
     const admissionItems = new Set(config?.admission_items ?? []);
     const entry: QueuedSale = {
       kind: "sale",
@@ -461,7 +541,11 @@ export default function App() {
         ...(line.description ? { description: line.description } : {}),
         ...(line.refund ? { refund: true } : {}),
       })),
-      chargedTotal: fromCents(total),
+      // What the reader took, when one did: the server priced this basket
+      // when it put it on the reader, and that is the figure the customer
+      // agreed to. Without it the receipt and the sync panel read out this
+      // app's own total, which is not what the card paid.
+      chargedTotal: charged ?? fromCents(total),
       paymentType,
       cashGiven,
       cashChange:
@@ -548,7 +632,7 @@ export default function App() {
     if (!online) {
       setPayError(null);
       try {
-        const result = sellOffline(paymentType, cashGiven);
+        const result = sellOffline(paymentType, cashGiven, charged);
         setSale(result);
         setPaying(null);
         setCart([]);
@@ -592,7 +676,7 @@ export default function App() {
         // server understood and refused, and queueing a refusal would only mean
         // being refused again later, out of sight of the person who could fix it.
         try {
-          const queued = sellOffline(paymentType, cashGiven);
+          const queued = sellOffline(paymentType, cashGiven, charged);
           setSale(queued);
           setPaying(null);
           setCart([]);
@@ -698,14 +782,21 @@ export default function App() {
             {t("checkin.open")}
           </button>
         )}
-        {(!online || pending > 0) && (
+        {(!online || pending > 0 || failures > 0) && (
           <button
             className={`btn ghost topbar-action sync-badge${online ? "" : " is-offline"}`}
             onClick={() => setSyncOpen(true)}
           >
-            {online
-              ? t("offline.badgePending", { n: pending })
-              : t("offline.badgeOffline", { n: pending })}
+            {!online
+              ? t("offline.badgeOffline", { n: pending })
+              : pending > 0
+                ? t("offline.badgePending", { n: pending })
+                // Nothing left to send and the network is back, but something
+                // was refused and nobody has looked at it. "0 to send" would
+                // be true and useless; the badge has to name what is actually
+                // outstanding, because it is the only way into the panel that
+                // shows it.
+                : t("offline.badgeFailed", { n: failures })}
           </button>
         )}
         <button
@@ -805,6 +896,9 @@ export default function App() {
           defaultListId={doorList}
           admissionItems={config.admission_items}
           onListChange={setDoorListId}
+          // A scan admitted with no network is money's equivalent at the door:
+          // pretix has not heard of it yet, and only this count gets it sent.
+          onQueued={() => setPending(loadQueue().length)}
           // The door steps out to the grid to sell a ticket; every other device
           // already has the grid underneath and is merely closing an overlay.
           onSell={atDoor ? () => setCheckinOpen(false) : undefined}
@@ -819,7 +913,12 @@ export default function App() {
           report={lastSync}
           event={pairing.event}
           onSync={() => void sync()}
-          onClose={() => setSyncOpen(false)}
+          // Refusals are cleared from inside the panel, so the count that
+          // keeps the badge alive is re-read on the way out.
+          onClose={() => {
+            setSyncOpen(false);
+            setFailures(loadFailures().length);
+          }}
         />
       )}
 

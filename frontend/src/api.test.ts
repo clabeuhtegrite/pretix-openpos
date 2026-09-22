@@ -169,15 +169,45 @@ describe("what counts as the server not being there", () => {
     expect(connectivity.isOnline()).toBe(true);
   });
 
-  it("lets an abort through as an abort, not as an outage", async () => {
+  it("lets the caller's own abort through as an abort, not as an outage", async () => {
     // A catalogue refresh cancelled because the screen changed must not make
     // the till believe it lost the network.
+    const controller = new AbortController();
+    controller.abort();
     fetchMock.mockRejectedValue(new DOMException("aborted", "AbortError"));
 
-    const error = await api.catalog(pairing).catch((e: unknown) => e);
+    const error = await api.catalog(pairing, controller.signal).catch((e: unknown) => e);
 
     expect(error).toBeInstanceOf(DOMException);
     expect(connectivity.isOnline()).toBe(true);
+  });
+
+  it("calls a request that never answers a dead network", async () => {
+    // The venue wifi that accepts the socket and leads nowhere. Left
+    // unbounded the browser sits on this for its own minute and more, and for
+    // all that time the till believes it is online: no offline queue, no
+    // keypad, a confirm button that does nothing.
+    vi.useFakeTimers();
+    try {
+      fetchMock.mockImplementation(
+        (_url: string, init?: RequestInit) =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener("abort", () =>
+              reject(new DOMException("aborted", "AbortError")),
+            );
+          }),
+      );
+
+      const settled = api.catalog(pairing).catch((e: unknown) => e);
+      await vi.advanceTimersByTimeAsync(20_000);
+      const error = await settled;
+
+      expect(error).toBeInstanceOf(ApiError);
+      expect((error as { status: number }).status).toBe(0);
+      expect(connectivity.isOnline()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

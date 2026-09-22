@@ -111,6 +111,16 @@ class DevicesView(OrganizerDetailViewMixin, OrganizerPermissionRequiredMixin, Te
                     and pos_device.sumup_reader_id not in {r for r, _l in readers},
                 }
             )
+        # Which tills share a machine. Said on the screen rather than refused:
+        # sharing works, and the one thing an organizer needs to know about it
+        # is that the two tills take turns on the card.
+        shared = {
+            row["reader"]
+            for row in rows
+            if row["reader"] and sum(1 for r in rows if r["reader"] == row["reader"]) > 1
+        }
+        for row in rows:
+            row["shares_reader"] = row["reader"] in shared
         ctx["rows"] = rows
         ctx["roles"] = PosDevice.ROLE_CHOICES
         ctx["readers"] = readers
@@ -141,7 +151,11 @@ class DevicesView(OrganizerDetailViewMixin, OrganizerPermissionRequiredMixin, Te
             messages.error(request, error)
             return self.render_to_response(self.get_context_data())
 
-        changed = 0
+        # Both sides of every device that moved, not a count. "3 devices were
+        # changed" is unreadable the moment anyone needs it — which is when a
+        # till has stopped taking cards and somebody is working out whether the
+        # reader was moved to the other tablet an hour ago, and by whom.
+        changed = []
         with transaction.atomic():
             for device in devices:
                 role, reader = submitted[device.pk]
@@ -156,7 +170,14 @@ class DevicesView(OrganizerDetailViewMixin, OrganizerPermissionRequiredMixin, Te
                 PosDevice.objects.update_or_create(
                     device=device, defaults={"role": role, "sumup_reader_id": reader}
                 )
-                changed += 1
+                changed.append({
+                    "device": device.pk,
+                    "device_name": device.name,
+                    "role": role,
+                    "role_before": current.role,
+                    "reader": reader,
+                    "reader_before": current.sumup_reader_id,
+                })
 
         request.organizer.log_action(
             "pretix_openpos.devices.changed", user=request.user, data={"changed": changed}
@@ -202,10 +223,10 @@ class DevicesView(OrganizerDetailViewMixin, OrganizerPermissionRequiredMixin, Te
                     "A card reader can only be given to a till. Set “{device}” to "
                     "till, or take its reader away."
                 ).format(device=device.name)
-            if reader in seen:
-                return _(
-                    "Two devices cannot share one card reader. “{device}” wants one "
-                    "that is already taken."
-                ).format(device=device.name)
+            # Two tills sharing one reader is allowed: a bar with two tablets
+            # and one machine between them is a real counter. It is safe
+            # because the server serialises them — a basket cannot go on a
+            # reader another till is still waiting on — and the second till
+            # keeps taking cash meanwhile.
             seen.add(reader)
         return None

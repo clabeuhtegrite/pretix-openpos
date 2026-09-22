@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 
 import { api } from "../api";
-import { t } from "../i18n";
+import { loadQueue } from "../storage";
+import { locale, t } from "../i18n";
 import { formatMoney, toCents } from "../money";
 import { THEMES, type Theme } from "../theme";
 import type { Pairing, PosEvent, SummaryResponse, Takings } from "../types";
@@ -26,6 +27,17 @@ const THEME_LABELS: Record<Theme, "settings.themeSystem" | "settings.themeLight"
   dark: "settings.themeDark",
 };
 
+function time(iso: string): string {
+  return new Date(iso).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
+}
+
+/** The cash half of what is still queued, which is what the drawer holds. */
+function queuedCash(entries: { paymentType: string; chargedTotal: string }[]): number {
+  return entries
+    .filter((entry) => entry.paymentType === "cash")
+    .reduce((sum, entry) => sum + toCents(entry.chargedTotal), 0);
+}
+
 function TakingsRow({ label, takings, currency }: { label: string; takings: Takings; currency: string }) {
   return (
     <tr>
@@ -45,6 +57,17 @@ export default function SettingsPanel({
   onClose, onEventChange,
 }: Props) {
   const [summary, setSummary] = useState<SummaryResponse | null>(null);
+  const [summaryFailed, setSummaryFailed] = useState(false);
+  /**
+   * What this till is still holding, which the figures below cannot know.
+   *
+   * The takings come from the server, so a sale encashed during a dropout and
+   * still in the queue is not in them. At half past one somebody compares this
+   * screen with the drawer and finds a difference with nothing on the screen
+   * to explain it — while the badge that would have explained it lives in the
+   * top bar, two screens away.
+   */
+  const [queued] = useState(() => loadQueue().filter((entry) => entry.kind === "sale"));
   const [events, setEvents] = useState<PosEvent[] | null>(null);
 
   useEffect(() => {
@@ -63,21 +86,26 @@ export default function SettingsPanel({
     };
   }, [pairing]);
 
+  const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     let cancelled = false;
+    setSummaryFailed(false);
     api
       .summary(pairing)
       .then((data) => {
         if (!cancelled) setSummary(data);
       })
       .catch(() => {
-        // The takings panel is informational; a failure here should not block
-        // the operator from getting back to selling.
+        // Still not a reason to block the operator from getting back to
+        // selling — but not a reason to show three dots for ever either. This
+        // is the closing-time screen, and at half past one a spinner that
+        // never resolves is worse than a sentence saying what happened.
+        if (!cancelled) setSummaryFailed(true);
       });
     return () => {
       cancelled = true;
     };
-  }, [pairing]);
+  }, [pairing, attempt]);
 
   return (
     <div className="overlay" onClick={onClose}>
@@ -173,8 +201,47 @@ export default function SettingsPanel({
             {t("summary.depositRefunds", { n: summary.event.deposit_refunds ?? 0 })}
           </div>
         )}
-        {!summary && (
+        {summary?.event.earlier_days && (
+          // The one that cannot be worked out from this screen. Somebody came
+          // back days later and was paid out of tonight's drawer: the takings
+          // above are short by that much, correctly, and nothing else here
+          // would ever say so.
+          <div className="attendance-note">
+            {t("summary.earlierDays", {
+              n: summary.event.earlier_days.count,
+              amount: formatMoney(
+                Math.abs(toCents(summary.event.earlier_days.total)),
+                currency,
+              ),
+            })}
+          </div>
+        )}
+        {summary && (
+          // A till day starts at six in the morning, so a bar that closes at
+          // 5:40 and counts the drawer at 6:15 reads zeros everywhere. True,
+          // and useless without this line.
+          <div className="attendance-note">
+            {t("summary.since", { time: time(summary.since) })}
+          </div>
+        )}
+        {queued.length > 0 && (
+          <div className="attendance-note">
+            {t("summary.queued", {
+              n: queued.length,
+              amount: formatMoney(queuedCash(queued), currency),
+            })}
+          </div>
+        )}
+        {!summary && !summaryFailed && (
           <p style={{ color: "var(--text-dim)" }}>…</p>
+        )}
+        {!summary && summaryFailed && (
+          <div className="attendance-note">
+            {t("summary.failed")}{" "}
+            <button className="btn ghost" onClick={() => setAttempt((n) => n + 1)}>
+              {t("summary.retry")}
+            </button>
+          </div>
         )}
 
         <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 24 }}>

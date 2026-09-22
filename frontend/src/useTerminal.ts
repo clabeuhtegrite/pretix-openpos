@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, isRetryable, type PositionPayload } from "./api";
+import { api, errorCode, isRetryable, type PositionPayload } from "./api";
 import { describeError } from "./errors";
 import { t } from "./i18n";
 import type { Pairing, TerminalPayment } from "./types";
@@ -122,7 +122,26 @@ export function useTerminal(
       try {
         apply(await api.terminalStart(pairing, { idempotency_key: key, positions }));
       } catch (err) {
-        if (isRetryable(err)) {
+        // The reader is in the middle of somebody else's payment — two tills
+        // behind one bar sharing one machine. Nothing was put on the reader
+        // and nothing was charged, so this is a plain answer rather than an
+        // unknown: the panel says so, the method toggle stays live, and the
+        // sale goes through in cash or waits a moment.
+        if (errorCode(err) === "terminal_busy") {
+          setState({
+            phase: "failed",
+            amount: null,
+            currency: null,
+            message: t("payment.readerTaken"),
+            stalled: false,
+          });
+          return;
+        }
+        // ``terminal_unsure`` is the server saying the same thing about its own
+        // leg: it could not get an answer out of SumUp, so the amount may be on
+        // the reader with only the answer lost. It arrives as a 400 and is
+        // emphatically not a refusal.
+        if (isRetryable(err) || errorCode(err) === "terminal_unsure") {
           // The request may well have reached the reader — a lost answer and a
           // lost request look identical from here. Polling under the same key
           // finds out, and until it does the customer is asked for their card

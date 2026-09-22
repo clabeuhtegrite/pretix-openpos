@@ -27,12 +27,33 @@ let getUserMedia: ReturnType<typeof vi.fn>;
 /** The pending animation-frame callback, so a test can decide when a frame lands. */
 let frame: FrameRequestCallback | null;
 
+/**
+ * A stand-in for MediaStreamTrack, listeners included.
+ *
+ * The listeners are not decoration: the scanner watches for the track ending,
+ * because a camera the system takes away leaves a <video> showing its last
+ * frame and nothing on screen to say so.
+ */
 function track(capabilities: Record<string, unknown> = {}) {
+  const listeners: Record<string, (() => void)[]> = {};
   return {
     stop,
     applyConstraints,
     getSettings,
     getCapabilities: () => capabilities,
+    readyState: "live",
+    muted: false,
+    addEventListener(name: string, handler: () => void) {
+      (listeners[name] ??= []).push(handler);
+    },
+    removeEventListener(name: string, handler: () => void) {
+      listeners[name] = (listeners[name] ?? []).filter((h) => h !== handler);
+    },
+    /** Test-only: what the browser does when another app takes the camera. */
+    end() {
+      this.readyState = "ended";
+      (listeners.ended ?? []).forEach((handler) => handler());
+    },
   };
 }
 
@@ -195,6 +216,53 @@ describe("opening the camera", () => {
     });
 
     expect(stop).toHaveBeenCalled();
+  });
+});
+
+describe("a camera the system takes away", () => {
+  it("takes it back rather than showing a frozen frame", async () => {
+    // The failure this exists for is silent: the <video> keeps its last
+    // frame, `starting` is false and there is no error, so a door looks like
+    // it is scanning and decodes nothing while a queue builds in front of it.
+    const camera = cameraGives();
+    show();
+    await waitFor(() => expect(screen.queryByText(t("scan.starting"))).toBeNull());
+    getUserMedia.mockClear();
+
+    await act(async () => {
+      camera.end();
+    });
+
+    await waitFor(() => expect(getUserMedia).toHaveBeenCalled());
+  });
+
+  it("checks the camera survived when the screen comes back", async () => {
+    const camera = cameraGives();
+    show();
+    await waitFor(() => expect(screen.queryByText(t("scan.starting"))).toBeNull());
+    getUserMedia.mockClear();
+    // Muted rather than ended: the state the system leaves behind when it
+    // merely suspended the tab, which fires no event of its own.
+    camera.muted = true;
+
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    await waitFor(() => expect(getUserMedia).toHaveBeenCalled());
+  });
+
+  it("leaves a healthy camera alone when the screen comes back", async () => {
+    cameraGives();
+    show();
+    await waitFor(() => expect(screen.queryByText(t("scan.starting"))).toBeNull());
+    getUserMedia.mockClear();
+
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    expect(getUserMedia).not.toHaveBeenCalled();
   });
 });
 
