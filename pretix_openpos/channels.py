@@ -33,8 +33,10 @@ class PosSalesChannelType(SalesChannelType):
     #: Nobody logs into a customer account while queueing at the door.
     customer_accounts_supported = False
 
-    #: Automatic discounts are driven by webshop-oriented rules; on-site pricing
-    #: is handled by the plugin's own price overrides instead.
+    #: Automatic discounts are driven by webshop-oriented rules — a basket
+    #: total, a customer account, a time window — none of which a queue at the
+    #: door has. A price that differs at the till is a product of its own,
+    #: limited to this channel.
     discounts_supported = False
 
     testmode_supported = True

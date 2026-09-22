@@ -1,139 +1,18 @@
 """
-The screens the organiser uses: the tariff, the journal, and pretix' own order
-page — which the plugin renders part of, and once turned into a 500 for every
-cash sale.
+The screens the organiser uses: the journal, and pretix' own order page — which
+the plugin renders part of, and once turned into a 500 for every cash sale.
 """
 from decimal import Decimal
 
 import pytest
 
-from pretix_openpos.models import PosPrice, PosSale
+from pretix_openpos.models import PosSale
 
 from .conftest import sell
 
 
-def prices_url(event):
-    return f"/control/event/{event.organizer.slug}/{event.slug}/openpos/prices/"
-
-
 def sales_url(event):
     return f"/control/event/{event.organizer.slug}/{event.slug}/openpos/sales/"
-
-
-def form(event, **prices):
-    """The price form as the browser posts it: one field per sellable line."""
-    return {f"price_{key}": value for key, value in prices.items()}
-
-
-@pytest.mark.django_db
-def test_the_tariff_lists_every_sellable_line(backoffice, event, ticket, shirt):
-    item, small, large = shirt
-
-    page = backoffice.get(prices_url(event)).content.decode()
-
-    assert "Entrée" in page
-    assert f'name="price_{ticket.pk}_"' in page
-    # A product with options is priced per option, never as a whole.
-    assert f'name="price_{item.pk}_{small.pk}"' in page
-    assert f'name="price_{item.pk}_{large.pk}"' in page
-    assert f'name="price_{item.pk}_"' not in page
-
-
-@pytest.mark.django_db
-def test_saving_a_price_creates_the_override(backoffice, event, ticket):
-    backoffice.post(prices_url(event), form(event, **{f"{ticket.pk}_": "8.50"}))
-
-    assert PosPrice.objects.get(event=event, item=ticket).price == Decimal("8.50")
-
-
-@pytest.mark.django_db
-def test_a_comma_is_a_decimal_separator(backoffice, event, ticket):
-    # The keyboard this is typed on has a comma where the point is.
-    backoffice.post(prices_url(event), form(event, **{f"{ticket.pk}_": "8,50"}))
-
-    assert PosPrice.objects.get(event=event, item=ticket).price == Decimal("8.50")
-
-
-@pytest.mark.django_db
-def test_emptying_a_field_goes_back_to_the_online_price(backoffice, event, ticket):
-    PosPrice.objects.create(event=event, item=ticket, price=Decimal("8.00"))
-
-    backoffice.post(prices_url(event), form(event, **{f"{ticket.pk}_": ""}))
-
-    assert not PosPrice.objects.filter(event=event, item=ticket).exists()
-
-
-@pytest.mark.django_db
-def test_a_negative_price_is_refused(backoffice, event, ticket):
-    backoffice.post(prices_url(event), form(event, **{f"{ticket.pk}_": "-1.00"}))
-
-    assert not PosPrice.objects.filter(event=event).exists()
-
-
-@pytest.mark.django_db
-def test_one_bad_price_saves_none_of_the_others(backoffice, event, ticket, beer):
-    """
-    The form means what it says, or it says nothing.
-
-    Both halves used to run in one loop inside a transaction that was committed
-    anyway when errors were reported: a single mistyped price saved every other
-    line while telling the organiser nothing had been saved. The tariff is what
-    the till charges, so "I thought it had not gone through" is not an
-    acceptable state to leave somebody in.
-    """
-    response = backoffice.post(
-        prices_url(event),
-        form(event, **{f"{ticket.pk}_": "8.00", f"{beer.pk}_": "trois euros"}),
-    )
-
-    assert response.status_code == 200
-    assert not PosPrice.objects.filter(event=event).exists()
-
-
-@pytest.mark.django_db
-def test_a_bad_price_does_not_undo_an_existing_one_either(backoffice, event, ticket, beer):
-    PosPrice.objects.create(event=event, item=ticket, price=Decimal("8.00"))
-
-    backoffice.post(
-        prices_url(event),
-        form(event, **{f"{ticket.pk}_": "", f"{beer.pk}_": "trois euros"}),
-    )
-
-    # Clearing the first field was part of the same refused submission.
-    assert PosPrice.objects.get(event=event, item=ticket).price == Decimal("8.00")
-
-
-@pytest.mark.django_db
-def test_a_refused_form_comes_back_with_what_was_typed(backoffice, event, ticket, beer):
-    response = backoffice.post(
-        prices_url(event),
-        form(event, **{f"{ticket.pk}_": "8.00", f"{beer.pk}_": "trois euros"}),
-    )
-
-    page = response.content.decode()
-    # In the fields themselves, not merely quoted back in the error message:
-    # nothing was written, so re-rendering the inputs from the database would
-    # silently throw away every other edit made alongside the one that was wrong.
-    assert 'value="8.00"' in page
-    assert 'value="trois euros"' in page
-
-
-@pytest.mark.django_db
-def test_a_valid_form_is_saved_whole(backoffice, event, ticket, beer):
-    backoffice.post(
-        prices_url(event),
-        form(event, **{f"{ticket.pk}_": "8.00", f"{beer.pk}_": "2.50"}),
-    )
-
-    assert PosPrice.objects.get(item=ticket).price == Decimal("8.00")
-    assert PosPrice.objects.get(item=beer).price == Decimal("2.50")
-
-
-@pytest.mark.django_db
-def test_the_tariff_is_closed_to_somebody_who_may_only_read_orders(reader, event, ticket):
-    response = reader.get(prices_url(event))
-
-    assert response.status_code == 403
 
 
 @pytest.mark.django_db
@@ -624,7 +503,8 @@ def test_a_replay_at_the_old_price_is_shown_with_the_difference(
     to whoever was holding the tablet. The person reconciling the evening two
     days later saw an order at a price the price list does not explain.
     """
-    PosPrice.objects.create(event=event, item=ticket, price=Decimal("12.00"))
+    ticket.default_price = Decimal("12.00")
+    ticket.save(update_fields=["default_price"])
     replayed(till, event, [{"item": ticket.pk, "count": 2, "price": "10.00"}])
 
     page = backoffice.get(sales_url(event)).content.decode()
@@ -663,7 +543,8 @@ def test_a_replay_at_the_current_price_is_not_a_divergence(
 def test_the_section_follows_the_evening_filter(backoffice, till, event, ticket):
     from datetime import date
 
-    PosPrice.objects.create(event=event, item=ticket, price=Decimal("12.00"))
+    ticket.default_price = Decimal("12.00")
+    ticket.save(update_fields=["default_price"])
     replayed(
         till, event, [{"item": ticket.pk, "count": 1, "price": "10.00"}],
         idempotency_key="vendredi-1",
@@ -683,7 +564,8 @@ def test_the_section_follows_the_evening_filter(backoffice, till, event, ticket)
 def test_the_export_carries_the_tariff_the_screen_compares_against(
     backoffice, till, event, ticket
 ):
-    PosPrice.objects.create(event=event, item=ticket, price=Decimal("12.00"))
+    ticket.default_price = Decimal("12.00")
+    ticket.save(update_fields=["default_price"])
     replayed(
         till, event, [{"item": ticket.pk, "count": 2, "price": "10.00"}],
         idempotency_key="rejoue-01",

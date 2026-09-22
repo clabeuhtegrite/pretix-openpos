@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pretix-openpos — une caisse libre pour pretix</title>
+<meta name="description" content="Encaissez billets et consommations à la porte depuis n'importe quelle tablette ou téléphone. Une caisse libre pour un pretix auto-hébergé : un plugin Django et une application web progressive.">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f131a" media="(prefers-color-scheme: dark)">
+<link rel="canonical" href="https://clabeuhtegrite.github.io/pretix-openpos/fr/">
+<link rel="alternate" hreflang="en" href="https://clabeuhtegrite.github.io/pretix-openpos/">
+<link rel="alternate" hreflang="fr" href="https://clabeuhtegrite.github.io/pretix-openpos/fr/">
+<link rel="alternate" hreflang="es" href="https://clabeuhtegrite.github.io/pretix-openpos/es/">
+<link rel="alternate" hreflang="de" href="https://clabeuhtegrite.github.io/pretix-openpos/de/">
+<link rel="alternate" hreflang="x-default" href="https://clabeuhtegrite.github.io/pretix-openpos/">
+<meta property="og:title" content="pretix-openpos">
+<meta property="og:description" content="Une caisse libre pour pretix, pilotée par une application web progressive.">
+<meta property="og:type" content="website">
+<link rel="stylesheet" href="../assets/openpos.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="wrap">
+    <a class="brand" href="./">pretix<span>-openpos</span></a>
+    <nav class="langs" aria-label="Langue">
+      <a href="../" lang="en" hreflang="en">EN</a>
+      <a href="./" aria-current="true" lang="fr">FR</a>
+      <a href="../es/" lang="es" hreflang="es">ES</a>
+      <a href="../de/" lang="de" hreflang="de">DE</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<div class="wrap hero">
+  <p class="tag">Alpha — en service à un vrai bar et à une vraie porte depuis septembre 2026</p>
+  <h1>Une caisse pour pretix qui tourne dans un navigateur</h1>
+  <p class="lede">
+    Encaissez billets et consommations à la porte depuis n'importe quelle tablette
+    ou téléphone. Une caisse libre pour un <a href="https://pretix.eu">pretix</a>
+    auto-hébergé : un plugin Django et une application web progressive, sans
+    application native à installer et sans licence par appareil.
+  </p>
+  <p class="lede">
+    pretix a déjà une excellente caisse, pretixPOS. C'est une application Android
+    adossée à un plugin pretix Enterprise, et pour une installation auto-hébergée
+    cette licence est la partie chère. Voici une solution plus petite et plus
+    étroite, pour qui a besoin d'une caisse, héberge pretix lui-même et préfère ne
+    pas payer pour ça.
+  </p>
+  <div class="cta">
+    <a class="btn primary" href="https://github.com/clabeuhtegrite/pretix-openpos">Voir sur GitHub</a>
+    <a class="btn ghost" href="#install">Comment l'installer</a>
+  </div>
+</div>
+
+<div class="wrap">
+  <figure class="shot" style="margin-bottom:16px">
+    <img src="../assets/till-grid.png" alt="La grille de produits de la caisse sur une tablette : les catégories en haut, les produits avec leur prix, et le panier avec son total sur la droite." width="2360" height="1640" loading="lazy" decoding="async">
+    <figcaption>La caisse du bar. Un appui sur un produit, un appui sur Encaisser.</figcaption>
+  </figure>
+  <div class="shots">
+    <figure class="shot">
+      <img src="../assets/reader.png" alt="Le panneau d'encaissement demandant espèces ou carte, avec le montant dû et un lecteur qui attend le client." width="2360" height="1640" loading="lazy" decoding="async">
+      <figcaption>Espèces ou carte est demandé avant toute validation. Sur une caisse qui a un lecteur, choisir la carte y pose le panier.</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="../assets/till-dark.png" alt="La même grille de produits en palette sombre." width="2360" height="1640" loading="lazy" decoding="async">
+      <figcaption>Une palette sombre pour une salle peu éclairée, une claire pour un bar en extérieur à deux heures de l'après-midi.</figcaption>
+    </figure>
+  </div>
+</div>
+
+<section id="what">
+  <div class="wrap">
+    <h2>Ce qu'elle fait</h2>
+    <p class="sub">
+      Tout ce qui suit existe aujourd'hui dans le logiciel, couvert par des tests
+      qui tournent à chaque envoi et utilisé lors d'un vrai événement.
+    </p>
+    <div class="grid">
+
+      <div class="card">
+        <h3>Dans le navigateur</h3>
+        <p>Safari ou Chrome, installée sur l'écran d'accueil. Pas de magasin
+        d'applications, pas de gestion de parc, pas de licence par caisse. On appaire
+        un appareil en scannant le QR code que pretix affiche pour lui.</p>
+      </div>
+
+      <div class="card">
+        <h3>Le scan à la porte</h3>
+        <p>Scan continu à la caméra, avec un verdict lisible à bout de bras. C'est
+        l'endpoint de contrôle d'accès de pretix qui est appelé : les règles et
+        chaque motif de refus viennent de pretix, pas d'une réimplémentation.</p>
+      </div>
+
+      <div class="card">
+        <h3>Le compteur de présents</h3>
+        <p>Combien de personnes sont à l'intérieur en ce moment, comptées sur les
+        produits d'admission et sur toutes les portes et caisses. Un appui ouvre un
+        organigramme : billets attendus, entrés, sur place, ressortis.</p>
+      </div>
+
+      <div class="card">
+        <h3>Un rôle par appareil</h3>
+        <p>Une tablette est la <em>caisse</em> du bar ou la <em>porte</em>, attribué
+        au back-office, et chacune ne vend que les catégories qui la concernent. Un
+        bénévole qui sort du scanner pour vendre un billet ne tombe plus sur tout le
+        catalogue.</p>
+      </div>
+
+      <div class="card">
+        <h3>Un lecteur piloté par le serveur</h3>
+        <p>On appaire un SumUp Solo à son compte depuis le back-office et on
+        l'attribue à une caisse. Choisir la carte pose le panier sur le lecteur et
+        attend le client. Le serveur tarife le panier au moment où il demande la
+        carte et crée la commande depuis ce même panier tarifé : le débit et la
+        commande ne peuvent pas diverger.</p>
+      </div>
+
+      <div class="card">
+        <h3>Espèces, monnaie et consignes</h3>
+        <p>La monnaie est calculée, et les coupures courantes sont à un appui. Une
+        consigne est un produit comme un autre ; son retour est un bouton qui en
+        retire le prix du panier, donc « deux bières et je rends trois gobelets »
+        est une seule transaction et un seul montant à régler.</p>
+      </div>
+
+      <div class="card">
+        <h3>Elle continue sans réseau</h3>
+        <p>Une coupure n'arrête pas la caisse : elle vend depuis le catalogue qu'elle
+        a mis en cache, scanne contre une liste embarquée, puis rejoue la file dans
+        l'ordre sous les mêmes clés d'idempotence — un rejeu ne vend jamais deux fois
+        — et signale ce qui demande un humain.</p>
+      </div>
+
+      <div class="card">
+        <h3>Un journal en ajout seul</h3>
+        <p>Une ligne par vente, jamais modifiée ni supprimée, chacune portant le
+        hachage de la précédente : retoucher l'historique après coup se voit. Avec un
+        export CSV, la recette par caisse et par caissier, et un contrôle
+        d'intégrité à lancer depuis cron.</p>
+      </div>
+
+      <div class="card">
+        <h3>Les commandes arrivent dans pretix</h3>
+        <p>Des commandes payées ordinaires, sur un canal de vente à elles, avec la
+        répartition espèces / carte visible dans les rapports de pretix. Les billets
+        sont pointés à la vente, donc le client entre directement.</p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section id="safe">
+  <div class="wrap">
+    <h2>Les deux règles qui rendent la chose tenable</h2>
+    <p class="sub">
+      Une caisse, c'est un navigateur sur un comptoir. N'importe qui peut en ouvrir
+      les outils de développement. Ces deux règles sont tenues par le serveur, et
+      c'est ce qui leur donne un sens.
+    </p>
+    <div class="rules">
+      <div class="rule">
+        <h3>La caisse n'envoie jamais de prix</h3>
+        <p>Elle envoie des identifiants de produits et des quantités, et le serveur
+        en déduit le montant. Une app trafiquée, ou simplement périmée, ne peut pas
+        vendre un billet à 40 € pour 4 €. Le bouton « montant libre » est la seule
+        exception, et elle est bornée : uniquement sur le produit réservé à ça,
+        uniquement au-dessus de zéro, et uniquement avec un motif.</p>
+      </div>
+      <div class="rule">
+        <h3>Chaque encaissement porte une clé d'idempotence</h3>
+        <p>Elle est frappée à l'ouverture du panneau de paiement et réutilisée à
+        chaque tentative : un délai dépassé qui avait pourtant abouti renvoie la
+        commande d'origine au lieu de vendre deux fois les mêmes billets. C'est ce
+        qui rend la file hors ligne rejouable sans risque.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="scope">
+  <div class="wrap">
+    <h2>Ce qu'elle ne fait délibérément pas</h2>
+    <p class="sub">Le dire d'emblée vous épargnera une évaluation.</p>
+    <ul class="scope">
+      <li><strong>Aucune certification fiscale.</strong> Le journal est conçu pour
+      qu'un travail de conformité reste possible plus tard, mais rien n'est affirmé
+      sur les lois française, allemande ou autrichienne sur les caisses. Si vous
+      êtes assujetti à la TVA, parlez-en d'abord à votre comptable.</li>
+      <li><strong>Pas d'impression de ticket</strong> ni de billet.</li>
+      <li><strong>Pas de Tap to Pay.</strong> Stripe ne l'expose que par ses SDK iOS
+      et Android natifs, donc c'est impossible depuis une app web.</li>
+      <li><strong>Pas de remboursement partiel</strong> depuis la caisse. Une vente
+      s'annule entière puis se ressaisit corrigée ; rendre deux bières sur trois est
+      un travail de back-office.</li>
+      <li><strong>Pas de remboursement libre sur carte.</strong> SumUp ne rembourse
+      que contre une transaction à lui, donc une consigne rendue sort du tiroir.
+      Annuler une vente par carte est autre chose, et c'est entièrement
+      automatique.</li>
+      <li><strong>Pas d'annulation hors ligne.</strong> Un avoir demande le serveur,
+      donc les corrections attendent le réseau. Vendre et scanner, non.</li>
+      <li><strong>Pas de questions au contrôle d'accès.</strong> Un produit qui
+      exige des réponses à la porte est refusé avec un motif clair plutôt que pointé
+      à moitié. Utilisez pretixSCAN pour ceux-là.</li>
+      <li><strong>QR codes uniquement</strong> au scan. Un billet imprimé avec un
+      code-barres Code128 ou PDF417 doit être saisi ou lu avec une douchette.</li>
+    </ul>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <h2>L'installer</h2>
+    <p class="sub">
+      Il faut un pretix auto-hébergé en <strong>2024.7.0 ou plus récent</strong>,
+      Python 3.11+ et HTTPS — les service workers, le verrou de veille et
+      l'installation sur l'écran d'accueil exigent tous un contexte sécurisé. pretix
+      Hosted n'autorise pas les plugins tiers, donc ça ne peut pas y servir.
+    </p>
+<pre><code>pip install "pretix-openpos @ git+https://github.com/clabeuhtegrite/pretix-openpos"
+python -m pretix migrate
+python -m pretix rebuild</code></pre>
+    <p class="sub">
+      Pas encore sur PyPI, donc l'installation se fait depuis le dépôt. Épinglez un commit si vous préférez ne pas suivre <code>main</code>.
+    </p>
+    <p class="sub">
+      Si vous faites tourner pretix dans Docker ou Kubernetes, le
+      <code>deploy/Dockerfile</code> du dépôt intègre le plugin à l'image officielle
+      et construit le JavaScript de la caisse à l'intérieur, donc le bundle et le
+      plugin qui le sert portent toujours la même version.
+    </p>
+    <h3>Puis, dans pretix</h3>
+    <ol class="steps">
+      <li><strong>Activer le plugin</strong> pour l'événement.</li>
+      <li><strong>Rendre les produits vendables au guichet</strong> en cochant le
+      canal <em>Open POS</em> dessus. Un produit qui n'existe <em>que</em> sur place
+      est un produit avec ce seul canal.</li>
+      <li><strong>Les tarifer dans pretix</strong>, sur les produits eux-mêmes. La
+      caisse n'a pas de liste de prix à elle. Pour vendre plus cher à la porte qu'en
+      prévente, faites-en un produit à part sur le canal Open POS — « Entrée sur
+      place », par exemple — pour qu'un nom vaille un prix et que la recette reste
+      lisible.</li>
+      <li><strong>Choisir la liste de contrôle d'accès</strong>, pour que les billets
+      soient pointés à la vente.</li>
+      <li><strong>Appairer un appareil</strong> dans les réglages d'appareils de
+      pretix et scanner le QR code depuis l'app.</li>
+    </ol>
+    <p class="sub">
+      Le <a href="https://github.com/clabeuhtegrite/pretix-openpos#readme">README</a>,
+      en anglais, détaille chaque étape, y compris le lecteur de carte et les boutons
+      optionnels. Le fonctionnement interne est documenté en français dans
+      <a href="https://github.com/clabeuhtegrite/pretix-openpos/blob/main/docs/fonctionnement.md"><code>docs/fonctionnement.md</code></a>.
+    </p>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p class="note">
+      <strong>Alpha.</strong> Tout le parcours fonctionne et est couvert par des
+      tests qui tournent à chaque envoi — le back-end contre un vrai pretix, le code
+      de la caisse depuis l'arithmétique en centimes jusqu'à ce qu'un caissier peut
+      presser, et un parcours de bout en bout contre une pile vivante avec plusieurs
+      caisses écrivant dans un même journal. Le logiciel a tenu un vrai événement et
+      il est en production pour l'association pour laquelle il a été écrit. Il n'a
+      pas encore tenu celui de quelqu'un d'autre.
+    </p>
+    <p>
+      Sous licence <a href="https://github.com/clabeuhtegrite/pretix-openpos/blob/main/LICENSE">Apache-2.0</a>,
+      ce que <a href="https://docs.pretix.eu/trust/licensing/faq/">pretix recommande pour les plugins</a>.
+      pretix lui-même est en AGPLv3 avec une permission additionnelle, et un plugin
+      qui tourne à côté forme une œuvre combinée : ce que vous pouvez faire de ce
+      code en pratique découle donc de la licence de pretix plus que de celle-ci.
+    </p>
+    <p>
+      Ce projet n'est ni affilié à pretix GmbH ni approuvé par lui.
+      <a href="https://github.com/clabeuhtegrite/pretix-openpos">Le code sur GitHub</a>.
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

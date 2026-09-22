@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pretix-openpos — eine freie Kasse für pretix</title>
+<meta name="description" content="Tickets und Getränke am Einlass von jedem Tablet oder Handy aus verkaufen. Eine freie Kasse für ein selbst gehostetes pretix: ein Django-Plugin und eine progressive Web-App.">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f131a" media="(prefers-color-scheme: dark)">
+<link rel="canonical" href="https://clabeuhtegrite.github.io/pretix-openpos/de/">
+<link rel="alternate" hreflang="en" href="https://clabeuhtegrite.github.io/pretix-openpos/">
+<link rel="alternate" hreflang="fr" href="https://clabeuhtegrite.github.io/pretix-openpos/fr/">
+<link rel="alternate" hreflang="es" href="https://clabeuhtegrite.github.io/pretix-openpos/es/">
+<link rel="alternate" hreflang="de" href="https://clabeuhtegrite.github.io/pretix-openpos/de/">
+<link rel="alternate" hreflang="x-default" href="https://clabeuhtegrite.github.io/pretix-openpos/">
+<meta property="og:title" content="pretix-openpos">
+<meta property="og:description" content="Eine freie Kasse für pretix, bedient von einer progressiven Web-App.">
+<meta property="og:type" content="website">
+<link rel="stylesheet" href="../assets/openpos.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="wrap">
+    <a class="brand" href="./">pretix<span>-openpos</span></a>
+    <nav class="langs" aria-label="Sprache">
+      <a href="../" lang="en" hreflang="en">EN</a>
+      <a href="../fr/" lang="fr" hreflang="fr">FR</a>
+      <a href="../es/" lang="es" hreflang="es">ES</a>
+      <a href="./" aria-current="true" lang="de">DE</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<div class="wrap hero">
+  <p class="tag">Alpha — seit September 2026 an einer echten Theke und einem echten Einlass im Einsatz</p>
+  <h1>Eine Kasse für pretix, die im Browser läuft</h1>
+  <p class="lede">
+    Tickets und Getränke am Einlass von jedem Tablet oder Handy aus verkaufen. Eine
+    freie Kasse für ein selbst gehostetes <a href="https://pretix.eu">pretix</a>: ein
+    Django-Plugin und eine progressive Web-App, ohne native App zum Installieren und
+    ohne Lizenz pro Gerät.
+  </p>
+  <p class="lede">
+    pretix hat bereits eine ausgezeichnete Kasse, pretixPOS. Sie ist eine
+    Android-App mit einem pretix-Enterprise-Plugin dahinter, und für eine selbst
+    gehostete Installation ist genau diese Lizenz der teure Teil. Dies hier ist die
+    kleinere, engere Alternative — für alle, die eine Kasse brauchen, pretix selbst
+    betreiben und dafür lieber nichts zahlen möchten.
+  </p>
+  <div class="cta">
+    <a class="btn primary" href="https://github.com/clabeuhtegrite/pretix-openpos">Auf GitHub ansehen</a>
+    <a class="btn ghost" href="#install">So wird es installiert</a>
+  </div>
+</div>
+
+<div class="wrap">
+  <figure class="shot" style="margin-bottom:16px">
+    <img src="../assets/till-grid.png" alt="Das Produktraster der Kasse auf einem Tablet: die Kategorien oben, die Produkte mit ihrem Preis, und rechts der Warenkorb mit seiner Summe." width="2360" height="1640" loading="lazy" decoding="async">
+    <figcaption>Die Kasse an der Theke. Ein Tipp auf ein Produkt, ein Tipp auf Kassieren.</figcaption>
+  </figure>
+  <div class="shots">
+    <figure class="shot">
+      <img src="../assets/reader.png" alt="Das Zahlfenster fragt nach bar oder Karte, mit dem offenen Betrag und einem Lesegerät, das auf die Kundin wartet." width="2360" height="1640" loading="lazy" decoding="async">
+      <figcaption>Bar oder Karte wird gefragt, bevor überhaupt bestätigt werden kann. An einer Kasse mit Lesegerät legt „Karte“ den Warenkorb darauf.</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="../assets/till-dark.png" alt="Dasselbe Produktraster in der dunklen Palette." width="2360" height="1640" loading="lazy" decoding="async">
+      <figcaption>Eine dunkle Palette für einen düsteren Raum, eine helle für eine Außentheke um zwei Uhr nachmittags.</figcaption>
+    </figure>
+  </div>
+</div>
+
+<section id="what">
+  <div class="wrap">
+    <h2>Was sie kann</h2>
+    <p class="sub">
+      Alles Folgende steckt heute in der Software, ist von Tests abgedeckt, die bei
+      jedem Push laufen, und war auf einer echten Veranstaltung im Einsatz.
+    </p>
+    <div class="grid">
+
+      <div class="card">
+        <h3>Im Browser</h3>
+        <p>Safari oder Chrome, auf den Startbildschirm gelegt. Kein App Store, keine
+        Geräteverwaltung, keine Lizenz pro Kasse. Ein Gerät wird gekoppelt, indem man
+        den QR-Code scannt, den pretix dafür anzeigt.</p>
+      </div>
+
+      <div class="card">
+        <h3>Scannen am Einlass</h3>
+        <p>Fortlaufendes Scannen mit der Kamera und ein Urteil, das man auf
+        Armeslänge lesen kann. Aufgerufen wird pretix' eigener Check-in-Endpunkt: die
+        Regeln und jeder Ablehnungsgrund kommen von pretix und nicht aus einer
+        Nachbildung.</p>
+      </div>
+
+      <div class="card">
+        <h3>Laufende Besucherzahl</h3>
+        <p>Wie viele Menschen gerade drin sind, gezählt über die Eintrittsprodukte und
+        über alle Einlässe und Kassen hinweg. Ein Tipp öffnet ein Flussdiagramm:
+        erwartete, eingelassene, anwesende und wieder hinausgescannte Tickets.</p>
+      </div>
+
+      <div class="card">
+        <h3>Eine Rolle je Gerät</h3>
+        <p>Ein Tablet ist die <em>Kasse</em> an der Theke oder der <em>Einlass</em>,
+        im Backoffice zugewiesen, und jedes verkauft nur die Kategorien, für die es da
+        ist. Wer am Einlass aus dem Scanner heraus ein Ticket verkauft, landet nicht
+        mehr im ganzen Katalog.</p>
+      </div>
+
+      <div class="card">
+        <h3>Ein Lesegerät, das der Server steuert</h3>
+        <p>Ein SumUp Solo wird im Backoffice mit dem Konto gekoppelt und einer Kasse
+        zugewiesen. „Karte“ legt den Warenkorb auf das Gerät und wartet auf die
+        Kundin. Der Server bepreist den Warenkorb in dem Moment, in dem er die Karte
+        anfordert, und bucht die Bestellung aus genau diesem bepreisten Warenkorb —
+        Belastung und Bestellung können also nicht auseinanderlaufen.</p>
+      </div>
+
+      <div class="card">
+        <h3>Bar, Wechselgeld und Becherpfand</h3>
+        <p>Das Wechselgeld wird ausgerechnet, die gängigen Scheine sind ein Tipp weit.
+        Pfand ist ein Produkt wie jedes andere; die Rückgabe ist ein Knopf, der seinen
+        Preis vom Warenkorb abzieht. „Zwei Bier, und ich gebe drei Becher zurück“ ist
+        damit ein Vorgang und ein Betrag.</p>
+      </div>
+
+      <div class="card">
+        <h3>Sie läuft ohne Netz weiter</h3>
+        <p>Ein Ausfall hält die Kasse nicht an: Sie verkauft aus dem
+        zwischengespeicherten Katalog weiter und scannt gegen eine mitgeführte
+        Gästeliste, spielt die Warteschlange dann der Reihe nach unter denselben
+        Idempotenzschlüsseln ein — eine Wiederholung verkauft nie doppelt — und meldet,
+        was ein Mensch ansehen muss.</p>
+      </div>
+
+      <div class="card">
+        <h3>Ein Journal, das nur anhängt</h3>
+        <p>Eine Zeile je Verkauf, nie geändert und nie gelöscht, jede mit dem Hash der
+        vorigen: eine nachträglich frisierte Historie fällt auf. Mit CSV-Export,
+        Einnahmen je Kasse und je Kassierer und einer Integritätsprüfung für den
+        Cronjob.</p>
+      </div>
+
+      <div class="card">
+        <h3>Bestellungen landen in pretix</h3>
+        <p>Ganz normale bezahlte Bestellungen auf einem eigenen Vertriebskanal, mit
+        der Aufteilung zwischen bar und Karte in pretix' eigener Auswertung. Tickets
+        werden beim Verkauf eingecheckt, die Person geht also direkt hinein.</p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section id="safe">
+  <div class="wrap">
+    <h2>Die zwei Regeln, die das vertretbar machen</h2>
+    <p class="sub">
+      Eine Kasse ist ein Browser auf einem Tresen. Jede und jeder kann die
+      Entwicklerwerkzeuge öffnen. Beide Regeln werden auf dem Server durchgesetzt —
+      das ist es, was ihnen Gewicht gibt.
+    </p>
+    <div class="rules">
+      <div class="rule">
+        <h3>Die Kasse sendet nie einen Preis</h3>
+        <p>Sie sendet Produkt-IDs und Mengen, und der Server ermittelt, was das
+        kostet. Eine manipulierte oder schlicht veraltete App kann kein 40-€-Ticket für
+        4 € verkaufen. Der Knopf für den freien Betrag ist die einzige bewusste
+        Ausnahme, und sie ist eingehegt: nur auf dem einen dafür vorgesehenen Produkt,
+        nur über null und nur mit einer Begründung.</p>
+      </div>
+      <div class="rule">
+        <h3>Jeder Kassiervorgang trägt einen Idempotenzschlüssel</h3>
+        <p>Er entsteht beim Öffnen des Zahlfensters und wird bei jedem neuen Versuch
+        wiederverwendet. Eine Zeitüberschreitung, die in Wahrheit doch durchging, gibt
+        so die ursprüngliche Bestellung zurück, statt dieselben Tickets ein zweites Mal
+        zu verkaufen. Genau das macht die Offline-Warteschlange gefahrlos
+        wiederholbar.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="scope">
+  <div class="wrap">
+    <h2>Was sie bewusst nicht kann</h2>
+    <p class="sub">Das gleich vorweg zu sagen, erspart Ihnen eine Evaluierung.</p>
+    <ul class="scope">
+      <li><strong>Keine Kassensicherung, keine Zertifizierung.</strong> Das Journal ist
+      so gebaut, dass Compliance-Arbeit später möglich bleibt, aber es wird nichts
+      über deutsches, österreichisches oder französisches Kassenrecht behauptet —
+      insbesondere keine KassenSichV, keine TSE und keine GoBD-Konformität. Wer
+      umsatzsteuerpflichtig ist, spricht zuerst mit der Steuerberatung.</li>
+      <li><strong>Kein Bondruck</strong> und kein Ticketdruck.</li>
+      <li><strong>Kein Tap to Pay.</strong> Stripe bietet es nur über seine nativen
+      iOS- und Android-SDKs an, aus einer Web-App ist es damit unmöglich.</li>
+      <li><strong>Keine Teilerstattungen</strong> an der Kasse. Ein Verkauf wird ganz
+      storniert und korrigiert neu erfasst; zwei von drei Bier zurückzugeben ist
+      Backoffice-Arbeit.</li>
+      <li><strong>Keine freie Rückzahlung auf Karte.</strong> SumUp erstattet nur gegen
+      eine eigene Transaktion, zurückgegebenes Pfand kommt also aus der Kasse. Einen
+      Kartenverkauf zu stornieren ist etwas anderes und läuft vollautomatisch.</li>
+      <li><strong>Keine Stornos ohne Netz.</strong> Eine Gutschrift braucht den Server,
+      Korrekturen warten also auf die Verbindung. Verkaufen und Scannen nicht.</li>
+      <li><strong>Keine Check-in-Fragen.</strong> Ein Produkt, das am Einlass Antworten
+      verlangt, wird mit klarem Grund abgelehnt statt halb eingecheckt. Dafür gibt es
+      pretixSCAN.</li>
+      <li><strong>Nur QR-Codes</strong> beim Scannen. Ein Ticket mit Code128- oder
+      PDF417-Barcode muss getippt oder mit einem Handscanner gelesen werden.</li>
+    </ul>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <h2>Installation</h2>
+    <p class="sub">
+      Sie brauchen ein selbst gehostetes pretix <strong>2024.7.0 oder neuer</strong>,
+      Python 3.11+ und HTTPS — Service Worker, Wake Lock und die Installation auf dem
+      Startbildschirm setzen alle einen sicheren Kontext voraus. pretix Hosted lässt
+      keine eigenen Plugins zu, dort geht es also nicht.
+    </p>
+<pre><code>pip install "pretix-openpos @ git+https://github.com/clabeuhtegrite/pretix-openpos"
+python -m pretix migrate
+python -m pretix rebuild</code></pre>
+    <p class="sub">
+      Noch nicht auf PyPI, die Installation läuft also über das Repository. Wer <code>main</code> nicht folgen möchte, pinnt einen Commit.
+    </p>
+    <p class="sub">
+      Wer pretix in Docker oder Kubernetes betreibt: Das
+      <code>deploy/Dockerfile</code> im Repository backt das Plugin in das offizielle
+      Image und baut das JavaScript der Kasse darin mit, sodass Bundle und
+      ausliefernde Plugin immer dieselbe Version tragen.
+    </p>
+    <h3>Danach in pretix</h3>
+    <ol class="steps">
+      <li><strong>Das Plugin einschalten</strong> für die Veranstaltung.</li>
+      <li><strong>Produkte an der Kasse verkäuflich machen</strong>, indem Sie bei
+      ihnen den Kanal <em>Open POS</em> anhaken. Ein Produkt, das es <em>nur</em> vor
+      Ort gibt, hat diesen Kanal und sonst keinen.</li>
+      <li><strong>Sie in pretix bepreisen</strong>, an den Produkten selbst. Die Kasse
+      hat keine eigene Preisliste. Wer an der Abendkasse mehr verlangt als im
+      Vorverkauf, legt dafür ein eigenes Produkt auf dem Open-POS-Kanal an —
+      „Abendkasse“ etwa — damit ein Name einen Preis wert bleibt und die Einnahmen
+      lesbar bleiben.</li>
+      <li><strong>Die Check-in-Liste wählen</strong>, damit Tickets beim Verkauf
+      eingecheckt werden.</li>
+      <li><strong>Ein Gerät koppeln</strong> in pretix' eigener Geräteverwaltung und
+      den QR-Code aus der App scannen.</li>
+    </ol>
+    <p class="sub">
+      Die <a href="https://github.com/clabeuhtegrite/pretix-openpos#readme">README</a>
+      beschreibt jeden Schritt ausführlich, samt Kartenlesegerät und den optionalen
+      Knöpfen.
+    </p>
+    <p class="note">
+      <strong>Zur Sprache.</strong> Diese Seite ist auf Deutsch, die Kasse selbst
+      spricht heute aber Englisch und Französisch: Sie folgt der Sprache des Tablets
+      und fällt sonst auf Englisch zurück. Das Backoffice von pretix ist dagegen in
+      viele weitere Sprachen übersetzt. Wer die Kasse auf Deutsch möchte: Die Texte
+      liegen in einer einzigen Datei, Beiträge sind willkommen.
+    </p>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p class="note">
+      <strong>Alpha.</strong> Der ganze Ablauf funktioniert und ist von Tests
+      abgedeckt, die bei jedem Push laufen — das Backend gegen ein echtes pretix, der
+      Code der Kasse von der Cent-Arithmetik bis zu dem, was eine Kassiererin drücken
+      kann, und ein Durchlauf von Anfang bis Ende gegen einen laufenden Stack, bei dem
+      mehrere Kassen in dasselbe Journal schreiben. Sie hat eine echte Veranstaltung
+      getragen und ist bei dem Verein im Einsatz, für den sie geschrieben wurde. Die
+      Veranstaltung von jemand anderem hat sie noch nicht getragen.
+    </p>
+    <p>
+      Lizenziert unter <a href="https://github.com/clabeuhtegrite/pretix-openpos/blob/main/LICENSE">Apache-2.0</a>,
+      was <a href="https://docs.pretix.eu/trust/licensing/faq/">pretix für Plugins empfiehlt</a>.
+      pretix selbst steht unter AGPLv3 mit einer zusätzlichen Erlaubnis, und ein Plugin,
+      das daneben läuft, bildet ein verbundenes Werk — was Sie mit diesem Code in der
+      Praxis tun dürfen, folgt also eher aus pretix' Lizenz als aus dieser.
+    </p>
+    <p>
+      Dieses Projekt steht in keiner Verbindung zu pretix GmbH und wird von dort nicht
+      unterstützt.
+      <a href="https://github.com/clabeuhtegrite/pretix-openpos">Der Quellcode auf GitHub</a>.
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>

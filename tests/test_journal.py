@@ -291,22 +291,6 @@ def test_a_row_names_itself_by_sequence_order_and_amount(till, event, ticket):
 
 
 @pytest.mark.django_db
-def test_an_on_site_price_names_the_line_it_applies_to(event, ticket, shirt):
-    from decimal import Decimal
-
-    from pretix_openpos.models import PosPrice
-
-    item, small, _large = shirt
-    plain = PosPrice.objects.create(event=event, item=ticket, price=Decimal("12.00"))
-    varied = PosPrice.objects.create(
-        event=event, item=item, variation=small, price=Decimal("13.00")
-    )
-
-    assert str(plain) == f"{ticket}: 12.00"
-    assert str(varied) == f"{item} – {small}: 13.00"
-
-
-@pytest.mark.django_db
 def test_recording_the_same_sale_twice_hands_back_the_first_row(
     till, event, ticket, device
 ):

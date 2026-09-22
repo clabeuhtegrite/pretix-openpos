@@ -10,8 +10,6 @@ from decimal import Decimal
 import pytest
 from pretix.base.models import Item, Quota
 
-from pretix_openpos.models import PosPrice
-
 
 def catalogue(till):
     body = till.get("catalog").json()
@@ -58,8 +56,10 @@ def test_a_product_can_exist_only_on_site(till, event, channel):
 
 
 @pytest.mark.django_db
-def test_the_price_shown_is_the_on_site_tariff(till, event, ticket):
-    PosPrice.objects.create(event=event, item=ticket, price=Decimal("8.00"))
+def test_the_price_shown_is_the_one_pretix_carries(till, event, ticket):
+    """The till displays what the server priced, never a figure of its own."""
+    ticket.default_price = Decimal("8.00")
+    ticket.save(update_fields=["default_price"])
 
     assert catalogue(till)["Entrée"]["price"] == "8.00"
 
@@ -175,14 +175,16 @@ def test_an_option_with_no_price_of_its_own_inherits_the_product_s(till, event, 
 
 
 @pytest.mark.django_db
-def test_an_option_priced_at_the_door_beats_both(till, event, channel, shirt):
-    item, small, _large = shirt
-    PosPrice.objects.create(event=event, item=item, variation=small, price=Decimal("12.00"))
+def test_an_option_priced_on_its_own_beats_the_product(till, event, channel, shirt):
+    item, _small, _large = shirt
+    small = item.variations.get(value="S")
+    small.default_price = Decimal("12.00")
+    small.save(update_fields=["default_price"])
 
     options = {v["name"]: v for v in catalogue(till)["T-shirt"]["variations"]}
 
     assert options["S"]["price"] == "12.00"
-    # The other option is untouched by an override aimed at one of them.
+    # The other option is untouched: two options of one product move apart.
     assert options["L"]["price"] == "18.00"
 
 

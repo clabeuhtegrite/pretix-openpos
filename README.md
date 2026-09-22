@@ -4,6 +4,9 @@ An open-source point of sale for [pretix](https://pretix.eu), driven by a
 progressive web app. Sell tickets at the door from any tablet or phone with a
 browser — no native app, no per-device licence.
 
+**[clabeuhtegrite.github.io/pretix-openpos](https://clabeuhtegrite.github.io/pretix-openpos/)**
+— the same introduction with screenshots, in English, French, Spanish and German.
+
 pretix already has an excellent POS product, pretixPOS. It is an Android app
 backed by a pretix Enterprise plugin, and for a self-hosted installation that
 licence is the expensive part. This is a smaller, narrower alternative for
@@ -14,8 +17,9 @@ every push — the backend against a real pretix, the till's own code from
 integer-cent arithmetic up to what a cashier can press, and an end-to-end run
 against a live stack on PostgreSQL with several tills writing to one journal at
 once. Both suites are held to a coverage floor, so a screen nobody tests fails
-the build rather than shipping. It has not yet been through a real event. Read
-the scope section before deciding it fits.
+the build rather than shipping. It has run a real event — one night, one door
+and one bar, several hundred people — and is in production for the association
+it was written for. Read the scope section before deciding it fits.
 
 ## What it does
 
@@ -59,8 +63,11 @@ the scope section before deciding it fits.
   installation SumUp cannot reach works identically, a second or two slower.
 - A dedicated **`openpos` sales channel**, so a product can be limited to the
   door, kept off it, or made to exist *only* on site.
-- **On-site pricing**: a separate tariff per product, because pretix itself has
-  no concept of a price per sales channel.
+- **One price per product**, pretix' own. The till has no price list of its
+  own and cannot have one: charging more at the door is a *product* of its own,
+  limited to the `openpos` channel and priced in pretix like everything else.
+  The takings of a product are then the takings of a product, whichever counter
+  rang it up.
 - **A free amount**, for what has no product of its own — a broken glass, a
   donation, a plate at a stand. The cashier types the figure and a reason; the
   reason is kept on the journal line and on the order. Off unless the organiser
@@ -164,7 +171,7 @@ cannot sell a 40 € ticket for 4 €. The free-amount button is the one deliber
 exception, and it is fenced in: the amount is only accepted on the single
 product the organiser set aside for it, only above zero, and only with a reason
 attached. A returned deposit is not an exception at all — the till says a line
-is a return, and the server takes the price from its own tariff and negates it.
+is a return, and the server takes the product's price and negates it.
 
 **Every checkout carries an idempotency key.** It is minted when the payment
 panel opens and reused for every retry, so a timeout that actually committed
@@ -188,8 +195,11 @@ pretix Hosted does not allow custom plugins, so this cannot be used there.
 
 ## Installation
 
+Not on PyPI yet, so it is installed from the repository. Pin a commit if you
+would rather not follow `main`.
+
 ```bash
-pip install pretix-openpos
+pip install "pretix-openpos @ git+https://github.com/clabeuhtegrite/pretix-openpos"
 ```
 
 Then, in your pretix installation:
@@ -203,7 +213,7 @@ If you run pretix in Docker or Kubernetes, [`deploy/Dockerfile`](deploy/Dockerfi
 bakes the plugin into the official image:
 
 ```bash
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.14.0 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.15.0 .
 ```
 
 The PWA bundle is built inside the image, from the tree you are building, so the
@@ -226,8 +236,11 @@ rather than to a rolling minor.
    channels and pick from there — including products that exist *only* on
    **Open POS**. Every product needs a quota, unlimited if need be: one attached
    to none shows as sold out at the till, as it would in the shop.
-3. **Set the on-site prices** under *Open POS → On-site prices*. Leave a field
-   empty to charge the same as the online shop.
+3. **Price the products in pretix**, on the products themselves. The till
+   charges that price and no other. To charge more at the door than in advance,
+   make it a separate product on the **Open POS** channel — "Door entry", say —
+   rather than looking for a second price: one name is worth one price, and
+   that is what keeps the takings readable afterwards.
 4. **Choose the check-in list** under *Open POS → Settings*, so tickets are
    checked in as they are sold. Leave it empty to sell without checking in. The
    same screen has **Issue invoices for till sales**, on by default: it is what
@@ -378,6 +391,15 @@ Roughly in the order they would earn their keep:
 
 ## License
 
-AGPL-3.0-or-later, matching pretix itself. See [LICENSE](LICENSE).
+Apache-2.0. See [LICENSE](LICENSE).
+
+pretix itself is AGPLv3 with an additional permission, and a plugin running
+beside it forms a combined work, so what you may do with this code in practice
+follows from pretix' licence rather than from this one. Apache-2.0 is what
+[pretix recommends for plugins](https://docs.pretix.eu/trust/licensing/faq/) and
+what they use for their own: a plugin under pure AGPL would be incompatible with
+that additional permission, and would oblige whoever installs it to publish the
+source of *every* plugin in the same environment, even for their own events.
+Licensing this one permissively keeps that off the people who run it.
 
 This project is not affiliated with or endorsed by pretix GmbH.

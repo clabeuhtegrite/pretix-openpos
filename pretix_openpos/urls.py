@@ -25,11 +25,6 @@ urlpatterns = [
         views.SettingsView.as_view(),
         name="settings",
     ),
-    re_path(
-        r"^control/event/(?P<organizer>[^/]+)/(?P<event>[^/]+)/openpos/prices/$",
-        views.PricesView.as_view(),
-        name="prices",
-    ),
     # Event-level, unlike the roles themselves: a category belongs to one
     # event, a paired device does not. The two meet in the role.
     re_path(

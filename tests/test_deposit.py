@@ -47,10 +47,10 @@ def test_the_till_is_told_what_a_deposit_is_worth(till, event, deposit):
 
 
 @pytest.mark.django_db
-def test_the_on_site_tariff_decides_it_like_any_other_price(till, event, deposit):
-    from pretix_openpos.models import PosPrice
-
-    PosPrice.objects.create(event=event, item=deposit, price=Decimal("2.00"))
+def test_the_deposit_is_priced_by_pretix_like_any_other_product(till, event, deposit):
+    """The till is told the figure; it never works one out for itself."""
+    deposit.default_price = Decimal("2.00")
+    deposit.save(update_fields=["default_price"])
 
     assert till.get("config").json()["deposit"]["price"] == "2.00"
 

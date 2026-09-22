@@ -34,8 +34,8 @@ class CheckoutPositionSerializer(serializers.Serializer):
         max_length=190, required=False, allow_blank=True, default=""
     )
     #: A deposit handed back rather than taken. The amount is the configured
-    #: deposit product's own on-site price, negated by the server — the till
-    #: names the product and the quantity, as it does for everything else.
+    #: deposit product's own price, negated by the server — the till names the
+    #: product and the quantity, as it does for everything else.
     refund = serializers.BooleanField(required=False, default=False)
 
 

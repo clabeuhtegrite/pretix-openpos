@@ -95,7 +95,7 @@ class OpenPosSettingsForm(SettingsForm):
         label=_("Cup deposit product"),
         help_text=_(
             "Sell the deposit like any other product, then let the till hand it back: "
-            "naming it here adds a “deposit back” button that takes its on-site price "
+            "naming it here adds a “deposit back” button that takes its price "
             "off the basket. A return is not a pretix order — an order cannot total "
             "less than nothing, and the end of an evening is people returning cups and "
             "buying nothing — so it is recorded in the till journal, where the takings "

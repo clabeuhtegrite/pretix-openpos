@@ -13,17 +13,11 @@ it comes back out as a sentence. They go through the real screens rather than
 calling ``log_action`` directly — a payload nobody writes is not worth
 rendering, and the pairing of the two is the thing that breaks.
 """
-from decimal import Decimal
-
 import pytest
 
-from pretix_openpos.models import PosDevice, PosPrice
+from pretix_openpos.models import PosDevice
 
 from .conftest import sell
-
-
-def prices_url(event):
-    return f"/control/event/{event.organizer.slug}/{event.slug}/openpos/prices/"
 
 
 def devices_url(organizer):
@@ -38,23 +32,33 @@ def latest(obj, action_type):
     return obj.all_logentries().filter(action_type=action_type).latest("datetime")
 
 
+# -- the price list that no longer exists ---------------------------------
+#
+# The screen these were written from is gone: a product is worth what pretix
+# says it is worth, at the door as in the shop. The entries are not gone. They
+# sit in the history of every installation that ran an earlier version, and
+# whoever reads that history a year from now is owed a sentence rather than an
+# identifier. So they are written here by hand, which is also exactly how they
+# now reach the renderer: out of the database, with no form behind them.
+
+def price_change(event, changed):
+    event.log_action("pretix_openpos.prices.changed", data={"changed": changed})
+    return latest(event, "pretix_openpos.prices.changed")
+
+
+def moved(item, name, before, after, variation=None, variation_name=None):
+    return {
+        "item": item.pk, "item_name": name,
+        "variation": variation.pk if variation else None,
+        "variation_name": variation_name,
+        "from": before, "to": after,
+    }
+
+
 @pytest.mark.django_db
-def test_a_price_change_says_which_price_and_from_what(backoffice, event, ticket):
-    PosPrice.objects.create(event=event, item=ticket, price=Decimal("10.00"))
+def test_a_price_change_says_which_price_and_from_what(event, ticket):
+    entry = price_change(event, [moved(ticket, "Entrée", "10.00", "8.50")])
 
-    backoffice.post(prices_url(event), {f"price_{ticket.pk}_": "8.50"})
-
-    entry = latest(event, "pretix_openpos.prices.changed")
-    assert entry.parsed_data["changed"] == [
-        {
-            "item": ticket.pk,
-            "item_name": "Entrée",
-            "variation": None,
-            "variation_name": None,
-            "from": "10.00",
-            "to": "8.50",
-        }
-    ]
     shown = entry.display()
     assert "Entrée" in shown
     assert "10.00" in shown and "8.50" in shown
@@ -63,44 +67,58 @@ def test_a_price_change_says_which_price_and_from_what(backoffice, event, ticket
 
 
 @pytest.mark.django_db
-def test_a_first_on_site_price_reads_as_one_rather_than_a_change(
-    backoffice, event, ticket
-):
-    backoffice.post(prices_url(event), {f"price_{ticket.pk}_": "8.50"})
+def test_a_first_on_site_price_reads_as_one_rather_than_a_change(event, ticket):
+    entry = price_change(event, [moved(ticket, "Entrée", None, "8.50")])
 
-    entry = latest(event, "pretix_openpos.prices.changed")
-    assert entry.parsed_data["changed"][0]["from"] is None
     # "None → 8.50" would be the lazy rendering of this and reads as a bug.
     assert "8.50" in entry.display()
     assert "None" not in entry.display()
 
 
 @pytest.mark.django_db
-def test_removing_an_on_site_price_says_the_normal_one_applies_again(
-    backoffice, event, ticket
-):
-    PosPrice.objects.create(event=event, item=ticket, price=Decimal("10.00"))
+def test_removing_an_on_site_price_says_the_normal_one_applies_again(event, ticket):
+    entry = price_change(event, [moved(ticket, "Entrée", "10.00", None)])
 
-    backoffice.post(prices_url(event), {f"price_{ticket.pk}_": ""})
-
-    entry = latest(event, "pretix_openpos.prices.changed")
-    assert entry.parsed_data["changed"][0]["to"] is None
     assert "10.00" in entry.display()
 
 
 @pytest.mark.django_db
-def test_a_variation_is_named_by_its_option_not_just_its_product(
-    backoffice, event, shirt
-):
+def test_a_variation_is_named_by_its_option_not_just_its_product(event, shirt):
     item, small, _large = shirt
 
-    backoffice.post(prices_url(event), {f"price_{item.pk}_{small.pk}": "15.00"})
+    entry = price_change(event, [
+        moved(item, str(item.name), None, "15.00",
+              variation=small, variation_name=str(small.value)),
+    ])
 
-    entry = latest(event, "pretix_openpos.prices.changed")
-    assert entry.parsed_data["changed"][0]["variation"] == small.pk
     # Two options of one product move independently, so the product name alone
     # would name the wrong thing half the time.
     assert str(small.value) in entry.display()
+
+
+@pytest.mark.django_db
+def test_a_save_that_moved_nothing_says_so(event):
+    """Opening the screen and pressing Save wrote one of these every time."""
+    shown = price_change(event, []).display()
+
+    assert "nothing changed" in shown
+    assert "pretix_openpos" not in shown
+
+
+@pytest.mark.django_db
+def test_a_product_deleted_since_is_named_as_one(event):
+    """
+    A season later the item is gone and the entry is all that is left. It has
+    to read as a line about a product, not as a blank.
+    """
+    event.log_action("pretix_openpos.prices.changed", data={"changed": [
+        {"item": 4242, "variation": None, "from": "3.00", "to": "3.50"},
+    ]})
+
+    shown = latest(event, "pretix_openpos.prices.changed").display()
+
+    assert "deleted product" in shown
+    assert "3.00" in shown and "3.50" in shown
 
 
 @pytest.mark.django_db

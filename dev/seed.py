@@ -95,8 +95,15 @@ with scopes_disabled():
 
     full = make_item(tickets, "Plein tarif", "12.00", admission=True)
     reduced = make_item(tickets, "Tarif réduit", "8.00", admission=True)
-    # Only sellable at the door: exactly the case a POS-specific channel is for.
+    # Charging more at the door than in advance is a *product*, not a tariff:
+    # one limited to the POS channel, priced in pretix like everything else.
+    # That is the whole point of the channel, and it is what makes the takings
+    # of a product the takings of a product — sold online or sold at the door,
+    # there is only ever one price behind one name.
     door = make_item(tickets, "Entrée sur place", "15.00", admission=True, pos_only=True)
+    door_reduced = make_item(
+        tickets, "Entrée sur place réduite", "10.00", admission=True, pos_only=True
+    )
 
     beer = make_item(bar, "Bière", "3.00")
     soft = make_item(bar, "Soft", "2.00")
@@ -118,19 +125,8 @@ with scopes_disabled():
     quota, _ = Quota.objects.get_or_create(
         event=event, name="Général", defaults={"size": 500}
     )
-    quota.items.set([full, reduced, door, beer, soft, tshirt, cup, misc])
+    quota.items.set([full, reduced, door, door_reduced, beer, soft, tshirt, cup, misc])
     quota.variations.set(list(tshirt.variations.all()))
-
-    # On-site tariff: pricier at the door than in advance, which is the whole
-    # reason the plugin carries its own price table.
-    from pretix_openpos.models import PosPrice
-
-    PosPrice.objects.update_or_create(
-        event=event, item=full, variation=None, defaults={"price": Decimal("14.00")}
-    )
-    PosPrice.objects.update_or_create(
-        event=event, item=reduced, variation=None, defaults={"price": Decimal("10.00")}
-    )
 
     # The two buttons that only exist once a product is named for them.
     event.settings.set("openpos_custom_item", str(misc.pk))

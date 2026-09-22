@@ -1,0 +1,284 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pretix-openpos — an open-source point of sale for pretix</title>
+<meta name="description" content="Sell tickets and drinks at the door from any tablet or phone with a browser. An open-source point of sale for a self-hosted pretix: a Django plugin and a progressive web app.">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0f131a" media="(prefers-color-scheme: dark)">
+<link rel="canonical" href="https://clabeuhtegrite.github.io/pretix-openpos/">
+<link rel="alternate" hreflang="en" href="https://clabeuhtegrite.github.io/pretix-openpos/">
+<link rel="alternate" hreflang="fr" href="https://clabeuhtegrite.github.io/pretix-openpos/fr/">
+<link rel="alternate" hreflang="es" href="https://clabeuhtegrite.github.io/pretix-openpos/es/">
+<link rel="alternate" hreflang="de" href="https://clabeuhtegrite.github.io/pretix-openpos/de/">
+<link rel="alternate" hreflang="x-default" href="https://clabeuhtegrite.github.io/pretix-openpos/">
+<meta property="og:title" content="pretix-openpos">
+<meta property="og:description" content="An open-source point of sale for pretix, driven by a progressive web app.">
+<meta property="og:type" content="website">
+<link rel="stylesheet" href="assets/openpos.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="wrap">
+    <a class="brand" href="./">pretix<span>-openpos</span></a>
+    <nav class="langs" aria-label="Language">
+      <a href="./" aria-current="true" lang="en">EN</a>
+      <a href="fr/" lang="fr" hreflang="fr">FR</a>
+      <a href="es/" lang="es" hreflang="es">ES</a>
+      <a href="de/" lang="de" hreflang="de">DE</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+
+<div class="wrap hero">
+  <p class="tag">Alpha — running a real bar and a real door since September 2026</p>
+  <h1>A till for pretix that runs in a browser</h1>
+  <p class="lede">
+    Sell tickets and drinks at the door from any tablet or phone. An open-source
+    point of sale for a self-hosted <a href="https://pretix.eu">pretix</a>: a Django
+    plugin and a progressive web app, with no native app to install and no licence
+    per device.
+  </p>
+  <p class="lede">
+    pretix already has an excellent POS product, pretixPOS. It is an Android app
+    backed by a pretix Enterprise plugin, and for a self-hosted installation that
+    licence is the expensive part. This is a smaller, narrower alternative for
+    people who need a till, run pretix themselves, and would rather not pay for one.
+  </p>
+  <div class="cta">
+    <a class="btn primary" href="https://github.com/clabeuhtegrite/pretix-openpos">View on GitHub</a>
+    <a class="btn ghost" href="#install">How to install it</a>
+  </div>
+</div>
+
+<div class="wrap">
+  <figure class="shot" style="margin-bottom:16px">
+    <img src="assets/till-grid.png" alt="The till's product grid on a tablet: categories across the top, priced product tiles, and the basket with its total down the right-hand side." width="2360" height="1640" loading="lazy" decoding="async">
+    <figcaption>The bar till. Tap a product, tap Take payment.</figcaption>
+  </figure>
+  <div class="shots">
+    <figure class="shot">
+      <img src="assets/reader.png" alt="The payment panel asking cash or card, with the amount due and a card reader waiting for the customer." width="2360" height="1640" loading="lazy" decoding="async">
+      <figcaption>Cash or card is asked before anything can be validated. On a till with a reader, choosing card puts the basket on it.</figcaption>
+    </figure>
+    <figure class="shot">
+      <img src="assets/till-dark.png" alt="The same product grid in the dark palette." width="2360" height="1640" loading="lazy" decoding="async">
+      <figcaption>A dark palette for a dim room, a light one for an outdoor bar at two in the afternoon.</figcaption>
+    </figure>
+  </div>
+</div>
+
+<section id="what">
+  <div class="wrap">
+    <h2>What it does</h2>
+    <p class="sub">
+      Everything below is in the software today, covered by tests that run on
+      every push and used at a real event.
+    </p>
+    <div class="grid">
+
+      <div class="card">
+        <h3>Runs in the browser</h3>
+        <p>Safari or Chrome, installed to the home screen. No app store, no device
+        management, no licence per till. Pair a device by scanning the QR code
+        pretix shows for it.</p>
+      </div>
+
+      <div class="card">
+        <h3>Scanning at the door</h3>
+        <p>Continuous camera scanning with a verdict readable at arm's length. It
+        calls pretix' own check-in endpoint, so the rules and every refusal reason
+        come from pretix rather than a reimplementation.</p>
+      </div>
+
+      <div class="card">
+        <h3>A live head count</h3>
+        <p>How many people are inside right now, counted over admission products
+        across every door and till. Tapping it opens a flow chart of tickets
+        expected, admitted, on site and scanned back out.</p>
+      </div>
+
+      <div class="card">
+        <h3>A role per device</h3>
+        <p>A tablet is the bar <em>till</em> or the <em>door</em>, assigned in the
+        back office, and each sells only the product categories it is there for. A
+        door volunteer stepping out of the scanner to sell a ticket no longer lands
+        on the whole catalogue.</p>
+      </div>
+
+      <div class="card">
+        <h3>A card reader the server drives</h3>
+        <p>Pair a SumUp Solo to your account from the back office and give it to a
+        till. Choosing card puts the basket on the reader and waits for the
+        customer. The server prices the basket when it asks for the card and books
+        the order from that same priced basket, so the charge and the order cannot
+        disagree.</p>
+      </div>
+
+      <div class="card">
+        <h3>Cash, change and cup deposits</h3>
+        <p>Change is worked out for you, and the common notes are one tap. A deposit
+        is an ordinary product; the return is a button that takes its price off the
+        basket, so "two beers and I am giving three cups back" is one transaction
+        and one amount to settle.</p>
+      </div>
+
+      <div class="card">
+        <h3>It keeps working offline</h3>
+        <p>A dropout does not stop the till. It keeps selling from the catalogue it
+        cached and keeps scanning against a guest list it carries, then replays the
+        queue in order under the same idempotency keys — a replay never sells twice
+        — and reports what needs a human.</p>
+      </div>
+
+      <div class="card">
+        <h3>An append-only journal</h3>
+        <p>One row per sale, never updated and never deleted, each carrying the hash
+        of the one before it, so editing history after the fact is detectable. With
+        a CSV export, takings per till and per cashier, and an integrity check you
+        can run from cron.</p>
+      </div>
+
+      <div class="card">
+        <h3>Orders land in pretix</h3>
+        <p>Ordinary paid orders on a sales channel of their own, with the cash and
+        card split visible in pretix' own reporting. Tickets are checked in as they
+        are sold, so the customer walks straight in.</p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<section id="safe">
+  <div class="wrap">
+    <h2>The two rules that make it safe to run a till this way</h2>
+    <p class="sub">
+      A till is a browser on a counter. Anyone can open its developer tools. Both
+      of these are enforced on the server, which is what makes them mean something.
+    </p>
+    <div class="rules">
+      <div class="rule">
+        <h3>The till never sends a price</h3>
+        <p>It sends product identifiers and quantities, and the server resolves what
+        that costs. A tampered-with or simply out-of-date app cannot sell a 40 €
+        ticket for 4 €. The free-amount button is the one deliberate exception, and
+        it is fenced in: only on the single product set aside for it, only above
+        zero, and only with a reason attached.</p>
+      </div>
+      <div class="rule">
+        <h3>Every checkout carries an idempotency key</h3>
+        <p>It is minted when the payment panel opens and reused for every retry, so
+        a timeout that actually committed hands back the original order instead of
+        selling the same tickets twice. It is what makes the offline queue safe to
+        replay.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="scope">
+  <div class="wrap">
+    <h2>What it deliberately does not do</h2>
+    <p class="sub">Being clear about this up front will save you an evaluation.</p>
+    <ul class="scope">
+      <li><strong>No fiscal certification.</strong> The journal is designed so that
+      compliance work is possible later, but no claim is made about French, German
+      or Austrian cash-register law. If you are VAT-liable, talk to your accountant
+      first.</li>
+      <li><strong>No receipt printing</strong> and no ticket printing.</li>
+      <li><strong>No Tap to Pay.</strong> Stripe only exposes it through native iOS
+      and Android SDKs, so it is impossible from a web app.</li>
+      <li><strong>No partial refunds</strong> from the till. A sale is cancelled
+      whole, then rung up again corrected; refunding two of three beers is a back
+      office job.</li>
+      <li><strong>No open refund to a card.</strong> SumUp only refunds against a
+      transaction of its own, so a returned cup deposit is paid out of the drawer.
+      Cancelling a card sale is a different matter and is fully automatic.</li>
+      <li><strong>No offline cancellations.</strong> A credit note needs the server,
+      so corrections wait for the network. Selling and scanning do not.</li>
+      <li><strong>No check-in questions.</strong> A product that requires answers at
+      the door is refused with a clear reason rather than half-checked-in. Use
+      pretixSCAN for those.</li>
+      <li><strong>QR codes only</strong> when scanning. Tickets printed with a
+      Code128 or PDF417 barcode have to be typed or read with a keyboard-wedge
+      scanner.</li>
+    </ul>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <h2>Installing it</h2>
+    <p class="sub">
+      You need a self-hosted pretix <strong>2024.7.0 or newer</strong>, Python 3.11+
+      and HTTPS — service workers, the wake lock and home-screen installation all
+      require a secure context. pretix Hosted does not allow custom plugins, so this
+      cannot be used there.
+    </p>
+<pre><code>pip install "pretix-openpos @ git+https://github.com/clabeuhtegrite/pretix-openpos"
+python -m pretix migrate
+python -m pretix rebuild</code></pre>
+    <p class="sub">
+      Not on PyPI yet, so it is installed from the repository. Pin a commit if you would rather not follow <code>main</code>.
+    </p>
+    <p class="sub">
+      If you run pretix in Docker or Kubernetes, the repository's
+      <code>deploy/Dockerfile</code> bakes the plugin into the official image and
+      builds the app's JavaScript inside it, so the bundle and the plugin serving it
+      always carry the same version.
+    </p>
+    <h3>Then, in pretix</h3>
+    <ol class="steps">
+      <li><strong>Turn the plugin on</strong> for the event.</li>
+      <li><strong>Make products sellable at the till</strong> by ticking the
+      <em>Open POS</em> channel on them. A product that exists <em>only</em> on site
+      is one with that channel alone.</li>
+      <li><strong>Price them in pretix</strong>, on the products themselves. The till
+      has no price list of its own. To charge more at the door than in advance, make
+      it a separate product on the Open POS channel — "Door entry", say — so that one
+      name is worth one price and the takings stay readable.</li>
+      <li><strong>Pick the check-in list</strong>, so tickets are checked in as they
+      are sold.</li>
+      <li><strong>Pair a device</strong> in pretix' own device settings and scan the
+      QR code from the app.</li>
+    </ol>
+    <p class="sub">
+      The <a href="https://github.com/clabeuhtegrite/pretix-openpos#readme">README</a>
+      covers every step in full, including the card reader and the optional buttons.
+    </p>
+  </div>
+</section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <p class="note">
+      <strong>Alpha.</strong> The whole flow works and is covered by tests that run
+      on every push — the backend against a real pretix, the till's own code from
+      integer-cent arithmetic up to what a cashier can press, and an end-to-end run
+      against a live stack with several tills writing to one journal at once. It has
+      run a real event and is in production for the association it was written for.
+      It has not been through anybody else's.
+    </p>
+    <p>
+      Licensed under <a href="https://github.com/clabeuhtegrite/pretix-openpos/blob/main/LICENSE">Apache-2.0</a>,
+      which is what <a href="https://docs.pretix.eu/trust/licensing/faq/">pretix recommends for plugins</a>.
+      pretix itself is AGPLv3 with an additional permission, and a plugin running beside
+      it forms a combined work, so what you may do with this code in practice follows
+      from pretix' licence rather than from this one.
+    </p>
+    <p>
+      This project is not affiliated with or endorsed by pretix GmbH.
+      <a href="https://github.com/clabeuhtegrite/pretix-openpos">Source on GitHub</a>.
+    </p>
+  </div>
+</footer>
+
+</body>
+</html>
