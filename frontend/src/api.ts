@@ -422,11 +422,13 @@ export const api = {
   },
 
   /**
-   * How many people are inside, for one check-in list.
+   * How many people are inside, for one check-in list, and what the doors have
+   * scanned tonight.
    *
    * Read from the server rather than counted in the app: several doors scan the
    * same event at once, and tickets also get checked in as they are sold, so a
-   * tally kept in this browser would only ever know about its own scans.
+   * tally kept in this browser would only ever know about its own scans — and
+   * would lose even those every time iOS reloads the page.
    */
   attendance(p: Pairing, listId: number, signal?: AbortSignal): Promise<Attendance> {
     const params = new URLSearchParams({ list: String(listId) });
@@ -475,19 +477,29 @@ export const api = {
    */
   async redeem(
     p: Pairing,
-    { secret, lists, nonce, force = false, datetime }: {
+    { secret, lists, nonce, force = false, datetime, timeoutMs }: {
       secret: string;
       lists: number[];
       nonce: string;
+      /**
+       * Set on a scan replayed from the offline queue: pretix' own way of
+       * saying "this was scanned with no network". It records the entry
+       * whatever it would say now — the person walked in on the answer the
+       * door gave at the time — and marks it as an offline scan, with the time
+       * it arrived, in its check-in history and its export.
+       */
       force?: boolean;
       /** When the scan happened, for one replayed from an offline queue. */
       datetime?: string;
+      /** A door cannot wait as long as a sale can; see CheckinScreen. */
+      timeoutMs?: number;
     },
   ): Promise<RedeemResult> {
     try {
       return await request<RedeemResult>(`/organizers/${p.organizer}/checkinrpc/redeem/`, {
         method: "POST",
         token: p.token,
+        timeoutMs,
         body: {
           lists,
           secret,
@@ -509,5 +521,48 @@ export const api = {
       }
       throw e;
     }
+  },
+
+  /**
+   * Tell pretix about a ticket the door turned away with no network.
+   *
+   * Online, pretix writes every refused scan down itself. Offline, nothing
+   * did: a ticket bought after the last copy of the guest list was refused as
+   * unknown and left no trace anywhere — precisely what somebody trying to
+   * find out whether scans went missing needs to see. This is pretix' own
+   * endpoint for it, the one pretixSCAN uses: the refusal lands in the
+   * check-in history marked as made offline, against the ticket when the code
+   * names one. The event is the scan's own, which is where the list lives.
+   */
+  reportRefusal(
+    p: Pairing,
+    { event, list, secret, reason, explanation, datetime, nonce }: {
+      event: string;
+      list: number;
+      secret: string;
+      reason: string;
+      explanation?: string;
+      datetime: string;
+      nonce: string;
+    },
+  ): Promise<unknown> {
+    return request(
+      `/organizers/${p.organizer}/events/${event}/checkinlists/${list}/failed_checkins/`,
+      {
+        method: "POST",
+        token: p.token,
+        body: {
+          raw_barcode: secret,
+          raw_source_type: "barcode",
+          error_reason: reason,
+          ...(explanation ? { error_explanation: explanation } : {}),
+          datetime,
+          type: "entry",
+          // pretix skips a refusal it already holds under this nonce, so a
+          // reply lost on the way back costs a repeated request, not a row.
+          nonce,
+        },
+      },
+    );
   },
 };

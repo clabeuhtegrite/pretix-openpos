@@ -18,6 +18,20 @@ const SCENES = [
   { name: "montant libre", q: "role=pos", steps: [{ text: "Montant libre" }] },
   { name: "journal", q: "role=pos", steps: [{ click: ".icon-button" }] },
   { name: "porte", q: "role=door", steps: [] },
+  { name: "porte, scans en attente", q: "role=door&scans=3&redeem=fail", steps: [{ wait: 600 }] },
+  {
+    name: "porte, réponse hors ligne",
+    q: "role=door&redeem=fail",
+    steps: [
+      { text: "Chercher un nom" },
+      { fill: [".search-panel input", "Cam"] },
+      { wait: 600 },
+      { click: ".search-hit" },
+      { wait: 600 },
+      { click: ".confirm-admit" },
+    ],
+  },
+  { name: "effectif par appareil", q: "role=door", steps: [{ click: ".attendance-button" }, { wait: 300 }] },
   { name: "réglages", q: "role=pos", steps: [{ click: '[aria-label="settings"]' }] },
   { name: "hors ligne", q: "role=pos&offline=1&queue=3", steps: [] },
 ];
@@ -44,6 +58,7 @@ for (const scheme of ["dark", "light"]) {
     try {
       if (step.text) await page.getByText(step.text, { exact: false }).first().click({ timeout: 3000 });
       if (step.click) await page.locator(step.click).first().click({ timeout: 3000 });
+      if (step.fill) await page.fill(step.fill[0], step.fill[1], { timeout: 3000 });
       if (step.wait) await page.waitForTimeout(step.wait);
       await page.waitForTimeout(150);
     } catch (e) {

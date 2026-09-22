@@ -995,6 +995,33 @@ describe("the queue", () => {
     await waitFor(() => expect(loadQueue()).toEqual([]));
   });
 
+  it("keeps trying while the till believes it is online", async () => {
+    // A drain that failed while a request of the door screen got through: the
+    // till was offline and online again between two renders, and nothing ever
+    // told it to try again. The scans sat on the phone until it was reopened.
+    saveQueue([{
+      kind: "checkin", id: "n1", at: "2026-08-16T22:00:00.000Z",
+      event: "festival", list: 7, secret: "s", name: "Alice",
+    }]);
+    apiMock.redeem.mockRejectedValueOnce(new ApiError(0, "network"));
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      show();
+      await ready();
+      await waitFor(() => expect(apiMock.redeem).toHaveBeenCalledOnce());
+      expect(loadQueue()).toHaveLength(1);
+      apiMock.redeem.mockResolvedValue({ status: "ok" });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15_000);
+      });
+
+      await waitFor(() => expect(loadQueue()).toEqual([]));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("is sent on demand once the server will take it", async () => {
     // The automatic drain had already tried and been refused; this is the
     // button an operator presses when they can see the wifi is back.

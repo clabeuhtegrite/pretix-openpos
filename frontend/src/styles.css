@@ -1359,6 +1359,13 @@ table.takings thead th {
   font-size: 14px;
 }
 
+/* Every door together: the stat, under the line the person scanning is asked
+   about, which is this phone's own. */
+.scanner-counter-evening {
+  margin-top: 2px;
+  font-size: 13px;
+}
+
 /* Side by side: the footer eats into the camera preview, and on a phone in
    portrait every row of it is a row the operator cannot aim with. Wrapping is
    for the door's third button only, below. */
@@ -1578,6 +1585,14 @@ table.takings thead th {
 .attendance-panel table.takings thead th {
   font-size: 11px;
   letter-spacing: 0.02em;
+}
+
+/* Goes to the next line whole: an iPhone's column split « celui-ci » at its
+   hyphen. The space before it stays outside, so the line can break there. */
+.attendance-this {
+  color: var(--text-dim);
+  font-size: 13px;
+  white-space: nowrap;
 }
 
 /* The flow chart. Sizes are in viewBox units, so every label scales with the
@@ -1903,6 +1918,18 @@ table.takings thead th {
 .verdict-note {
   opacity: 0.9;
   font-size: 18px;
+}
+
+/* Answered by the guest list on the phone, not by pretix. Said on the verdict
+   itself, whichever way it went: a door that lost the network mid-queue sees
+   why the answer came without "Checking…", and that the scan is still to be
+   sent. */
+.verdict-offline {
+  font-size: 15px;
+  font-weight: 700;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.2);
 }
 
 /* ---------- install gate ---------- */

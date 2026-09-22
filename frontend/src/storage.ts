@@ -1,5 +1,6 @@
 import type {
-  CartLine, Credit, DeviceDescription, OfflineSnapshot, Pairing, QueueEntry, SyncFailure,
+  CartLine, Credit, DeviceDescription, DoorScans, OfflineSnapshot, Pairing, QueueEntry,
+  SyncFailure,
 } from "./types";
 
 const PAIRING_KEY = "openpos.pairing.v1";
@@ -91,6 +92,33 @@ export function saveCached(kind: "config" | "catalog", event: string, value: unk
     localStorage.setItem(`openpos.${kind}.v1.${event}`, JSON.stringify(value));
   } catch {
     // Not fatal: it only costs the ability to start while offline.
+  }
+}
+
+/** How long "tonight" lasts: from six one morning to six the next. */
+const BUSINESS_DAY_MS = 24 * 3_600_000;
+
+/**
+ * The last count of tonight's scans the server gave this device.
+ *
+ * So a door that iOS reloads while the network is down opens on the evening's
+ * figure rather than on zero, which is the very complaint the server-side count
+ * answers. Kept per event, and only for the night it was counted in: past six
+ * the next morning it describes an evening that is over.
+ */
+export function loadDoorScans(event: string): DoorScans | null {
+  const saved = readJson<DoorScans | null>(`openpos.doorScans.v1.${event}`, null);
+  if (!saved || typeof saved.since !== "string") return null;
+  const since = Date.parse(saved.since);
+  if (!Number.isFinite(since) || Date.now() >= since + BUSINESS_DAY_MS) return null;
+  return saved;
+}
+
+export function saveDoorScans(event: string, scans: DoorScans): void {
+  try {
+    localStorage.setItem(`openpos.doorScans.v1.${event}`, JSON.stringify(scans));
+  } catch {
+    // Costs the figure after a reload with no network, and nothing else.
   }
 }
 

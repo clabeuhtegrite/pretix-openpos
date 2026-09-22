@@ -136,7 +136,9 @@ export const offlineSnapshot = {
   generated: "2026-09-22T20:30:00Z",
   truncated: false,
   tickets: [
-    { secret: "aaaa1111bbbb2222", item: 20, name: "Camille Rey", used: false },
+    // The first name the search offers, so a pick answered offline (?redeem=fail)
+    // lands on a ticket the guest list knows.
+    { secret: "aaaa1111bbbb2222", item: 20, name: "Camille Berthier", used: false },
     { secret: "cccc3333dddd4444", item: 20, name: "Dominique Ferrand", used: true },
     { secret: "eeee5555ffff6666", item: 21, name: "Sacha Lemoine", used: false },
     { secret: "gggg7777hhhh8888", item: 21, name: "", used: false },
@@ -156,6 +158,20 @@ export const attendance = {
     { id: 20, name: "Entrée soirée", inside: 168, entered: 172, expected: 200 },
     { id: 21, name: "Entrée tarif réduit", inside: 46, entered: 48, expected: 70 },
   ],
+  scans: {
+    // The last six o'clock in the morning: "tonight", as the server counts it.
+    since: new Date(
+      new Date().setHours(6, 0, 0, 0) - (new Date().getHours() < 6 ? 86_400_000 : 0),
+    ).toISOString(),
+    device: { admitted: 64, refused: 3, other: 1, offline: 12 },
+    event: { admitted: 196, refused: 7, other: 4, offline: 12 },
+    devices: [
+      { name: "Porte entrée 1", current: false, admitted: 92, refused: 3, other: 2, offline: 0 },
+      { name: "Caisse bar 1", current: true, admitted: 64, refused: 3, other: 1, offline: 12 },
+      { name: "Porte entrée 2", current: false, admitted: 39, refused: 1, other: 1, offline: 0 },
+      { name: null, current: false, admitted: 1, refused: 0, other: 0, offline: 0 },
+    ],
+  },
 };
 
 /**

@@ -10,6 +10,15 @@ const snapshot: OfflineSnapshot = {
   tickets: [
     { secret: "alice-secret", item: 1, name: "Alice", used: false },
     { secret: "bob-secret", item: 2, name: "Bob", used: true },
+    { secret: "blocked-secret", item: 1, name: "Chloé", used: false, blocked: true },
+    {
+      secret: "late-secret",
+      item: 1,
+      name: "Dan",
+      used: false,
+      valid_from: "2026-08-17T20:00:00Z",
+      valid_until: "2026-08-18T02:00:00Z",
+    },
   ],
 };
 
@@ -42,6 +51,24 @@ describe("offlineVerdict", () => {
     );
   });
 
+  it("refuses a ticket pretix has blocked, as pretix does at every door", () => {
+    expect(offlineVerdict(index, 7, "blocked-secret", none).reason).toBe("blocked");
+  });
+
+  it("refuses a ticket outside the moments it is valid between", () => {
+    const at = (iso: string) => offlineVerdict(index, 7, "late-secret", none, Date.parse(iso));
+
+    expect(at("2026-08-17T19:59:00Z").reason).toBe("invalid_time");
+    expect(at("2026-08-18T02:01:00Z").reason).toBe("invalid_time");
+  });
+
+  it("admits a ticket that became valid during the dropout", () => {
+    // The guest list was taken at six; the ticket opens at eight. Checked on
+    // this device's clock when scanned, not when the list was taken.
+    const at = Date.parse("2026-08-17T20:30:00Z");
+    expect(offlineVerdict(index, 7, "late-secret", none, at).status).toBe("ok");
+  });
+
   it("answers nothing without a snapshot", () => {
     expect(offlineVerdict(indexSnapshot(null), 7, "alice-secret", none).reason).toBe(
       "offline_no_snapshot",
@@ -59,6 +86,6 @@ describe("offlineVerdict", () => {
 
 describe("indexSnapshot", () => {
   it("carries the size the footer displays", () => {
-    expect(indexSnapshot(snapshot)?.count).toBe(2);
+    expect(indexSnapshot(snapshot)?.count).toBe(4);
   });
 });

@@ -5,11 +5,13 @@ The endpoint is the one place in the plugin where the work is proportional to
 the size of the event — up to twenty thousand tickets in one answer — so the
 tests here are as much about *how* it reads them as about what it says.
 """
+from datetime import timedelta
 from decimal import Decimal
 
 import pytest
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
+from django.utils.dateparse import parse_datetime
 from django.utils.timezone import now
 from pretix.base.models import Checkin, Order, OrderPosition
 
@@ -79,6 +81,35 @@ def test_an_exit_scan_does_not_mark_a_ticket_used(till, event, ticket, checkin_l
 
     # Someone who stepped outside for a cigarette has to be able to come back in.
     assert tickets[0]["used"] is False
+
+
+@pytest.mark.django_db
+def test_a_blocked_ticket_says_so(till, event, ticket, checkin_list):
+    _order, positions = admit(event, ticket, ["Alice Martin", "Bob Durand"])
+    OrderPosition.objects.filter(pk=positions[0].pk).update(blocked=["admin"])
+
+    tickets = {t["name"]: t for t in till.get("offline", list=checkin_list.pk).json()["tickets"]}
+
+    # pretix refuses it at the door. With no network it used to walk in: the
+    # guest list said nothing about it.
+    assert tickets["Alice Martin"]["blocked"] is True
+    # An ordinary ticket carries nothing more than it did.
+    assert set(tickets["Bob Durand"]) == {"secret", "item", "name", "used"}
+
+
+@pytest.mark.django_db
+def test_a_ticket_valid_for_a_while_carries_its_window(till, event, ticket, checkin_list):
+    _order, positions = admit(event, ticket, ["Alice Martin"])
+    opens, closes = now() + timedelta(hours=1), now() + timedelta(hours=5)
+    OrderPosition.objects.filter(pk=positions[0].pk).update(valid_from=opens, valid_until=closes)
+
+    carried = till.get("offline", list=checkin_list.pk).json()["tickets"][0]
+
+    # The moments rather than a verdict: the app checks them when the ticket
+    # is scanned, which may well be after it has become valid.
+    assert parse_datetime(carried["valid_from"]) == opens
+    assert parse_datetime(carried["valid_until"]) == closes
+    assert "blocked" not in carried
 
 
 @pytest.mark.django_db

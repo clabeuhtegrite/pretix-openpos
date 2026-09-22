@@ -3,9 +3,9 @@
  * looked at rather than only asserted on. Dev-only, never built or shipped.
  *
  * Query params: ?role=pos|door  ?card=terminal  ?theme=light|dark
- *               ?offline=1  ?queue=3  ?testmode=1  ?update=1  ?photos=1
+ *               ?offline=1  ?queue=3  ?scans=3  ?testmode=1  ?update=1  ?photos=1
  *               ?terminal=waiting|paid|failed|stalled|reprice  ?checkout=fail
- *               ?events=one|blocked|mixed  ?load=refused|series
+ *               ?events=one|blocked|mixed  ?load=refused|series  ?redeem=fail
  */
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
@@ -41,6 +41,29 @@ if (q.get("queue")) {
         label: "1× Bière pression 25cl",
       })),
     ),
+  );
+}
+
+// ?scans=N : N scans faits hors ligne attendent d'être envoyés, le dernier
+// étant un billet refusé. Avec ?redeem=fail, ils y restent.
+if (q.get("scans")) {
+  const n = Number(q.get("scans"));
+  const queue = JSON.parse(localStorage.getItem("openpos.queue.v1") ?? "[]");
+  localStorage.setItem(
+    "openpos.queue.v1",
+    JSON.stringify([
+      ...queue,
+      ...Array.from({ length: n }, (_, i) => ({
+        kind: "checkin",
+        id: `s${i}`,
+        at: new Date(Date.now() - (n - i) * 45000).toISOString(),
+        event: fx.pairing.event,
+        list: 7,
+        secret: i === n - 1 ? "zzzz9999yyyy8888" : `aaaa000${i}bbbb000${i}`,
+        name: i === n - 1 ? "" : ["Léa Garnier", "Noé Fabre", "Inès Roussel"][i % 3],
+        ...(i === n - 1 ? { refused: "invalid" } : { admits: true }),
+      })),
+    ]),
   );
 }
 
@@ -166,11 +189,18 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.includes("/checkinrpc/search/"))
     return json({
       results: [
-        { id: 1, order: "ABC12", secret: "s1", attendee_name: "Camille Berthier", seat: null, checkins: [], require_attention: false, order__status: "p" },
+        { id: 1, order: "ABC12", secret: "aaaa1111bbbb2222", attendee_name: "Camille Berthier", seat: null, checkins: [], require_attention: false, order__status: "p" },
         { id: 2, order: "ABC13", secret: "s2", attendee_name: "Jean-Baptiste de La Tour du Pin", seat: null, checkins: [{ list: 7 }], require_attention: false, order__status: "p" },
         { id: 3, order: "ABC14", secret: "s3", attendee_name: "Camille Bertrand", seat: null, checkins: [], require_attention: true, order__status: "p" },
       ],
     });
+  // ?redeem=fail : le réseau lâche sous le scan, le reste répond.
+  if (url.includes("/checkinrpc/redeem/") && q.get("redeem") === "fail")
+    throw new TypeError("harness: the network died under the scan");
+  if (url.includes("/failed_checkins/")) {
+    if (q.get("redeem") === "fail") throw new TypeError("harness: still no network");
+    return json({}, 201);
+  }
   if (url.includes("/checkinrpc/redeem/"))
     return json({ status: "ok", position: { order: "ABC12", item: 20, attendee_name: "Camille Berthier" }, list: { id: 7, name: "Porte" } });
 

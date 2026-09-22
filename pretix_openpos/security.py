@@ -52,6 +52,11 @@ class OpenPosSecurityProfile(AllowListSecurityProfile):
         # than a POS-specific endpoint: it already carries the rules engine,
         # revoked/blocked secrets, and the exact semantics pretixSCAN relies on.
         ("POST", "api-v1:checkinrpc.redeem"),
+        # A refusal given with no network, sent once there is one — pretix'
+        # own way of hearing about it, and the one pretixSCAN uses. Online,
+        # pretix writes every refused scan down itself; without this, a door
+        # that was offline left no trace of the tickets it turned away.
+        ("POST", "api-v1:checkinlist-failed_checkins"),
         # Finding a ticket by name. Tickets carry a QR and nothing a human could
         # retype, so when the code will not scan the only way through is to look
         # the holder up.

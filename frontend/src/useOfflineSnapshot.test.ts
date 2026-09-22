@@ -10,7 +10,7 @@ vi.mock("./api", async (importOriginal) => {
 
 import { loadSnapshot, saveSnapshot } from "./storage";
 import type { OfflineSnapshot, Pairing } from "./types";
-import { SNAPSHOT_REFRESH_MS, useOfflineSnapshot } from "./useOfflineSnapshot";
+import { SNAPSHOT_MIN_GAP_MS, SNAPSHOT_REFRESH_MS, useOfflineSnapshot } from "./useOfflineSnapshot";
 
 /**
  * The guest list a till carries for a dropout.
@@ -104,6 +104,41 @@ describe("the guest list carried for a dropout", () => {
     rerender({ active: true });
 
     await waitFor(() => expect(offlineSnapshot).toHaveBeenCalledOnce());
+  });
+
+  it("is not pulled again for a flicker of the network", async () => {
+    // One failed request answered at once by one that got through reads as
+    // the network coming back. On a network dropping writes but not reads
+    // that alternates as fast as the requests go, and each pull is every
+    // ticket sold.
+    const { rerender } = renderHook(
+      ({ active }) => useOfflineSnapshot(pairing, 7, active),
+      { initialProps: { active: true } },
+    );
+    await waitFor(() => expect(offlineSnapshot).toHaveBeenCalledOnce());
+
+    for (let i = 0; i < 5; i++) {
+      rerender({ active: false });
+      rerender({ active: true });
+    }
+
+    expect(offlineSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it("is pulled again when the network comes back a while later", async () => {
+    const { rerender } = renderHook(
+      ({ active }) => useOfflineSnapshot(pairing, 7, active),
+      { initialProps: { active: true } },
+    );
+    await waitFor(() => expect(offlineSnapshot).toHaveBeenCalledOnce());
+    rerender({ active: false });
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SNAPSHOT_MIN_GAP_MS);
+    });
+    rerender({ active: true });
+
+    await waitFor(() => expect(offlineSnapshot).toHaveBeenCalledTimes(2));
   });
 
   it("follows the door to another list", async () => {

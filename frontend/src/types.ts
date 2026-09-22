@@ -296,6 +296,45 @@ export interface Attendance {
   /** Scans of products that do not admit anyone, hence not in any figure above. */
   non_admission_entered: number;
   items: AttendanceItem[];
+  /** What the doors have scanned tonight. Absent from a server older than it. */
+  scans?: DoorScans;
+}
+
+/** Scans made tonight, counted by the server from pretix' own check-ins. */
+export interface ScanFigures {
+  /** Let in on a product that admits somebody. */
+  admitted: number;
+  /** Turned away, whatever the reason. */
+  refused: number;
+  /** Recorded, for a product that lets nobody in. */
+  other: number;
+  /** Of the admitted: scanned with no network and sent afterwards. */
+  offline: number;
+}
+
+/** One device's line in the evening's scans. */
+export interface DoorDevice extends ScanFigures {
+  /** Null for scans made from the back office, which come from no device. */
+  name: string | null;
+  /** The device asking. */
+  current: boolean;
+}
+
+/**
+ * The scanner's counter, as the server counts it.
+ *
+ * It used to be kept by the app, and it went back to zero whenever iOS reloaded
+ * the page; pretix writes every scan down anyway, so that is where it is read.
+ */
+export interface DoorScans {
+  /** Six this morning in the event's timezone: what "tonight" means here. */
+  since: string;
+  /** Null when the caller is not a device. */
+  device: ScanFigures | null;
+  /** Every door together. */
+  event: ScanFigures;
+  /** Busiest first. */
+  devices: DoorDevice[];
 }
 
 /** One line of a sale, as the journal froze it at the time. */
@@ -371,6 +410,11 @@ export interface OfflineTicket {
   name: string;
   /** Already admitted when the snapshot was taken. */
   used: boolean;
+  /** Blocked in pretix, which refuses it at every door. Absent when not. */
+  blocked?: boolean;
+  /** Valid only from, or until, this moment. Absent when the ticket has no such limit. */
+  valid_from?: string;
+  valid_until?: string;
 }
 
 export interface OfflineSnapshot {
@@ -406,7 +450,13 @@ export interface QueuedSale {
   label: string;
 }
 
-/** A ticket admitted at the door with no network, waiting to be recorded. */
+/**
+ * A scan answered at the door with no network, waiting to reach pretix.
+ *
+ * Refusals too, since online pretix writes every refused scan down itself: a
+ * door that was offline used to leave no trace of the tickets it turned away,
+ * which is exactly what somebody looking for lost scans afterwards needs.
+ */
 export interface QueuedCheckin {
   kind: "checkin";
   /** The nonce pretix deduplicates on, minted at the moment of the scan. */
@@ -416,6 +466,15 @@ export interface QueuedCheckin {
   list: number;
   secret: string;
   name: string;
+  /** Set when the door said no: pretix' reason code for the refusal. */
+  refused?: string;
+  /** Words to go with a refusal pretix has no code of its own for. */
+  explanation?: string;
+  /**
+   * False for a product that lets nobody in. Absent from entries queued before
+   * it was recorded, which were all counted as people let in.
+   */
+  admits?: boolean;
 }
 
 export type QueueEntry = QueuedSale | QueuedCheckin;
@@ -430,14 +489,16 @@ export interface SyncFailure {
 /** What a sync run did, for the operator to read afterwards. */
 export interface SyncReport {
   sales: number;
+  /** Scans sent, the refusals among them. */
   checkins: number;
   failed: number;
   /**
-   * Entries left in the queue because they belong to another event.
+   * Sales left in the queue because they belong to another event.
    *
    * Not a failure and not a refusal: this till was switched, and they will go
    * when it is switched back. Counted so the badge that keeps showing them has
-   * something to say for itself.
+   * something to say for itself. Scans are never left behind: pretix takes a
+   * scan for whichever event its list belongs to.
    */
   stranded: number;
   /** Sales the server would have priced differently from what was charged. */

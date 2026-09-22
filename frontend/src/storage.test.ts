@@ -2,12 +2,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   BASKET_KEEPS_FOR_MS, clearBasket, clearPairing, clearSnapshot, enqueue, loadBasket,
-  loadCached, loadCashier, loadFailures, loadPairing, loadQueue, loadSnapshot,
-  loadUpdateAttempt, requestPersistence, saveBasket, saveCached, saveCashier, saveFailures,
-  savePairing, saveQueue, saveSnapshot, saveUpdateAttempt,
+  loadCached, loadCashier, loadDoorScans, loadFailures, loadPairing, loadQueue, loadSnapshot,
+  loadUpdateAttempt, requestPersistence, saveBasket, saveCached, saveCashier, saveDoorScans,
+  saveFailures, savePairing, saveQueue, saveSnapshot, saveUpdateAttempt,
 } from "./storage";
 import { fillStorage } from "./test/setup";
-import type { CartLine, OfflineSnapshot, Pairing, QueuedSale, SyncFailure } from "./types";
+import type {
+  CartLine, DoorScans, OfflineSnapshot, Pairing, QueuedSale, SyncFailure,
+} from "./types";
 
 /**
  * The till's only durable memory. Everything a cashier has taken money for
@@ -131,6 +133,51 @@ describe("the cached catalogue and configuration", () => {
     fillStorage();
 
     expect(() => saveCached("catalog", "festival", { categories: [] })).not.toThrow();
+  });
+});
+
+describe("the door's last count", () => {
+  function counted(sinceHoursAgo: number): DoorScans {
+    return {
+      since: new Date(Date.now() - sinceHoursAgo * 3_600_000).toISOString(),
+      device: { admitted: 41, refused: 2, other: 0, offline: 3 },
+      event: { admitted: 180, refused: 5, other: 1, offline: 7 },
+      devices: [],
+    };
+  }
+
+  it("survives a reload, so the counter does not start again from zero", () => {
+    const tonight = counted(3);
+    saveDoorScans("festival", tonight);
+
+    expect(loadDoorScans("festival")).toEqual(tonight);
+  });
+
+  it("is kept per event", () => {
+    saveDoorScans("festival", counted(3));
+
+    expect(loadDoorScans("gala")).toBeNull();
+  });
+
+  it("is forgotten once the evening it counted is over", () => {
+    // Six the next morning: tonight's figure would be last night's.
+    saveDoorScans("festival", counted(25));
+
+    expect(loadDoorScans("festival")).toBeNull();
+  });
+
+  it("is ignored when it does not say which evening it counted", () => {
+    localStorage.setItem("openpos.doorScans.v1.festival", JSON.stringify({ since: "never" }));
+    expect(loadDoorScans("festival")).toBeNull();
+
+    localStorage.setItem("openpos.doorScans.v1.festival", JSON.stringify({ device: null }));
+    expect(loadDoorScans("festival")).toBeNull();
+  });
+
+  it("costs only the figure after a reload when it cannot be written", () => {
+    fillStorage();
+
+    expect(() => saveDoorScans("festival", counted(1))).not.toThrow();
   });
 });
 
