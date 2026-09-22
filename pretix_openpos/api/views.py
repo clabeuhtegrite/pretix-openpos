@@ -23,7 +23,7 @@ from rest_framework.response import Response
 from .. import __version__
 from ..channels import POS_CHANNEL, PosSalesChannelType
 from ..invoicing import pos_invoices_enabled
-from ..models import PosCategory, PosDevice, PosPrice, PosSale, PosTerminalPayment
+from ..models import PosCategory, PosDevice, PosSale, PosTerminalPayment
 from ..payment import CARD, CASH
 from ..sumup import SumUpAccount, SumUpError, still_running, succeeded
 from ..webhook import webhook_url
@@ -64,27 +64,23 @@ def get_pos_channel(organizer):
     return channel
 
 
-def pos_price_overrides(event):
-    """Map of ``(item_id, variation_id)`` to the on-site price."""
-    return {
-        (p.item_id, p.variation_id): p.price
-        for p in PosPrice.objects.filter(event=event)
-    }
-
-
-def resolve_price(overrides, item, variation=None, subevent=None) -> Decimal:
+def resolve_price(item, variation=None, subevent=None) -> Decimal:
     """
-    On-site price for a product, falling back to the webshop price.
+    What a product costs, priced by pretix and by nothing else.
 
-    Mirrors pretix' own resolution order — the date's own price, then the
-    variation price, then the item price — and layers the till tariff on top of
-    it. The tariff has no notion of a date, deliberately: a door sells at the
-    door price whichever evening of a series it is, and giving it one would
-    mean an organiser maintaining a price list per date to change one beer.
+    The date's own price, then the variation price, then the item price: pretix'
+    own resolution order, with nothing layered on top. The till used to carry a
+    price list of its own, so that one product could be worth one thing online
+    and another at the door. That is exactly what made the takings impossible to
+    read afterwards — the same product, two prices, no way to tell from a line
+    which one was charged.
+
+    A door that charges more than the webshop sells a *different* product: one
+    limited to the ``openpos`` sales channel and priced in pretix like
+    everything else. Then a product is worth what pretix says it is worth,
+    whichever counter rang it up, and the two figures reconcile by themselves.
     """
     if variation is not None:
-        if (item.pk, variation.pk) in overrides:
-            return overrides[(item.pk, variation.pk)]
         if subevent is not None:
             per_date = subevent.var_price_overrides.get(variation.pk)
             if per_date is not None:
@@ -92,8 +88,6 @@ def resolve_price(overrides, item, variation=None, subevent=None) -> Decimal:
         if variation.default_price is not None:
             return variation.default_price
         return item.default_price
-    if (item.pk, None) in overrides:
-        return overrides[(item.pk, None)]
     if subevent is not None:
         per_date = subevent.item_price_overrides.get(item.pk)
         if per_date is not None:
@@ -366,7 +360,7 @@ class ResolvedLine:
 
 
 def resolve_line(
-    line, *, sellable, overrides, custom_item, deposit, settled, subevent=None,
+    line, *, sellable, custom_item, deposit, settled, subevent=None,
     off_limits=frozenset(),
 ):
     """
@@ -435,7 +429,7 @@ def resolve_line(
         # one place a line's price is decided — rather than at each caller.
         sent_price = Decimal(str(sent_price))
 
-    tariff = resolve_price(overrides, item, variation, subevent)
+    tariff = resolve_price(item, variation, subevent)
     if is_refund:
         # A deposit handed back is worth exactly what the deposit costs,
         # negated here rather than sent: the till names the product, the server
@@ -637,11 +631,10 @@ class OpenPosViewSet(viewsets.ViewSet):
         deposit = deposit_item(event)
         if deposit is not None and deposit.category_id in off_limits:
             deposit = None
-        # Only when there is something to price: the tariff is one query, and
-        # most events run neither button.
-        deposit_price = (
-            resolve_price(pos_price_overrides(event), deposit) if deposit else None
-        )
+        # The till is told the figure rather than working one out: the deposit
+        # is an ordinary product, and its return has to be worth exactly what
+        # taking it was worth.
+        deposit_price = resolve_price(deposit) if deposit else None
         return Response(
             {
                 # The plugin's version, which is also the version the bundle is
@@ -735,7 +728,6 @@ class OpenPosViewSet(viewsets.ViewSet):
         # Raises for a series with nothing on, which is a 400 here rather than
         # a refusal at the payment: the volunteer meets it while setting up.
         subevent = selling_subevent(event)
-        overrides = pos_price_overrides(event)
         quota_cache = {}
         custom = custom_sale_item(event)
 
@@ -779,9 +771,7 @@ class OpenPosViewSet(viewsets.ViewSet):
                         {
                             "id": variation.pk,
                             "name": str(variation.value),
-                            "price": str(
-                                resolve_price(overrides, item, variation, subevent)
-                            ),
+                            "price": str(resolve_price(item, variation, subevent)),
                             "available": quota_availability(
                                 for_date(variation.quotas.all(), subevent), quota_cache
                             ),
@@ -790,7 +780,7 @@ class OpenPosViewSet(viewsets.ViewSet):
                 if not entry["variations"]:
                     continue
             else:
-                entry["price"] = str(resolve_price(overrides, item, None, subevent))
+                entry["price"] = str(resolve_price(item, None, subevent))
                 entry["available"] = quota_availability(
                     for_date(item.quotas.all(), subevent), quota_cache
                 )
@@ -887,7 +877,6 @@ class OpenPosViewSet(viewsets.ViewSet):
                 )
 
         channel = get_pos_channel(event.organizer)
-        overrides = pos_price_overrides(event)
         offline = data.get("offline")
         # The money is already out of the customer's hands: replayed from a
         # till that was cut off, or taken by the card reader a moment ago.
@@ -945,7 +934,6 @@ class OpenPosViewSet(viewsets.ViewSet):
             resolved = resolve_line(
                 line,
                 sellable=sellable,
-                overrides=overrides,
                 custom_item=custom_item,
                 deposit=deposit,
                 settled=settled,
@@ -1391,7 +1379,6 @@ class OpenPosViewSet(viewsets.ViewSet):
         )
 
         channel = get_pos_channel(event.organizer)
-        overrides = pos_price_overrides(event)
         custom_item = custom_sale_item(event)
         deposit = deposit_item(event)
         subevent = selling_subevent(event)
@@ -1410,7 +1397,6 @@ class OpenPosViewSet(viewsets.ViewSet):
             resolved = resolve_line(
                 line,
                 sellable=sellable,
-                overrides=overrides,
                 custom_item=custom_item,
                 deposit=deposit,
                 settled=False,

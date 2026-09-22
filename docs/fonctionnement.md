@@ -15,7 +15,7 @@ Le produit est en deux morceaux qui ne partagent aucun code :
 
 | Morceau | Où il vit | Ce qu'il fait |
 |---|---|---|
-| **Plugin pretix** (`pretix_openpos/`) | Dans le process pretix | Canal de vente, tarif sur place, API caisse, journal, écrans back-office |
+| **Plugin pretix** (`pretix_openpos/`) | Dans le process pretix | Canal de vente, API caisse, journal, écrans back-office |
 | **PWA** (`frontend/`) | Dans le navigateur de la tablette | Catalogue, panier, pavé numérique, scan, relevé |
 
 La PWA est compilée par Vite dans le répertoire statique du plugin
@@ -119,16 +119,18 @@ de tous les événements visibles ; celui-ci réduit à :
 - les huit endpoints Open POS ;
 - `checkinrpc.redeem` et `checkinrpc.search` pour le scan à la porte.
 
-### 2.4 Deux modèles
+### 2.4 Le journal
 
 [models.py](../pretix_openpos/models.py).
 
-**`PosPrice`** — le tarif sur place. pretix résout les prix par
-`Item.default_price` → `ItemVariation.default_price` → `SubEventItem` et n'a
-aucune notion de prix par canal de vente ; le tarif guichet doit donc vivre
-ici. Une ligne par produit (ou par variante). Deux contraintes uniques partielles
-plutôt qu'un `unique_together` : la plupart des bases considèrent les `NULL`
-comme distincts et accepteraient donc des doublons au niveau produit.
+Le plugin ne tient **aucun prix**. Un produit vaut ce que pretix dit qu'il vaut,
+à la porte comme dans la boutique. Le plugin a porté pendant un temps une table
+de prix à lui, un tarif guichet par produit, et c'est précisément ce qui rendait
+la recette illisible : un même produit, deux prix, et rien sur une ligne vendue
+pour dire lequel avait été facturé. Vendre plus cher à la porte est désormais un
+*produit*, limité au canal `openpos` et tarifé dans pretix comme les autres — ce
+qui fait que la recette d'un produit est la recette d'un produit, quel que soit
+le poste qui l’a encaissé. Voir §3.2 pour la mise en place.
 
 **`PosSale`** — le journal, en ajout seul. Une ligne par vente, jamais modifiée,
 jamais supprimée : `save()` sur une ligne existante et `delete()` lèvent une
@@ -152,7 +154,7 @@ Deux modèles de réglage s'y ajoutent, chacun décrit là où il sert :
 **`PosDevice`** dit à quoi sert un appareil (§2.7) et **`PosCategory`** dit
 quel poste vend une catégorie (§2.7bis).
 
-### 2.5 Sept écrans de back-office
+### 2.5 Six écrans de back-office
 
 [views.py](../pretix_openpos/views.py), [arrivals.py](../pretix_openpos/arrivals.py),
 [devices.py](../pretix_openpos/devices.py) et
@@ -162,7 +164,6 @@ quel poste vend une catégorie (§2.7bis).
 | URL | Écran | Permission exigée |
 |---|---|---|
 | `/control/event/<org>/<ev>/openpos/` | Réglages (liste de contrôle d'accès) | `event.settings.general:write` |
-| `…/openpos/prices/` | Prix sur place | `event.items:write` |
 | `…/openpos/categories/` | Qui vend quoi : la catégorie réservée au bar ou à la porte | `event.items:write` |
 | `…/openpos/sales/` | Journal des ventes + relevé | `event.orders:read` |
 | `/control/organizer/<org>/openpos/arrivals/` | Affluence à l'entrée, tous événements passés | `event.orders:read` sur ≥ 1 événement |
@@ -174,13 +175,6 @@ caisse est appairée une fois, un lecteur appartient à l'association, et
 « à quelle heure les gens arrivent-ils ? » est une question qui porte sur toutes
 les soirées passées. Les deux écrans matériels sont gardés par la permission des
 devices de pretix — qui peut appairer une caisse peut dire à quoi elle sert.
-
-L'écran *Prix sur place* est un tableau, pas un formset : un champ par ligne
-vendable, et un champ vide signifie « facturer le prix en ligne ». Il est **tout
-ou rien** — le formulaire est lu en entier avant que quoi que ce soit ne soit
-écrit, donc un prix mal saisi n'enregistre aucun des autres et la page revient
-avec ce qui a été tapé, pas avec ce que la base contient encore. La virgule est
-acceptée comme séparateur décimal.
 
 L'écran Affluence est strictement en lecture — un histogramme des
 scans d'entrée réussis par heure locale de l'événement, le pic et le creux, et
@@ -352,9 +346,11 @@ Deux pièges :
 2. **Rendre les produits vendables au guichet** — sur chaque produit, sous
    *Disponibilité*, cocher le canal **Open POS**. Un produit qui n'existe *que*
    sur place se crée en ne cochant que ce canal.
-3. **Fixer les prix sur place** — *Open POS → Prix sur place*. Un champ laissé
-   vide = même prix que la boutique en ligne. Vider un champ déjà rempli
-   supprime la surcharge.
+3. **Tarifer les produits** — dans pretix, sur le produit lui-même. La caisse
+   facture ce prix-là, sans exception. Pour vendre plus cher à la porte qu'en
+   prévente, créer un **produit à part** coché sur le seul canal Open POS
+   (« Entrée sur place », par exemple) plutôt que de chercher un second prix :
+   la recette reste lisible, un nom valant un prix.
 4. **Choisir la liste de contrôle d'accès** — *Open POS → Réglages*. Les billets
    vendus sont pointés sur cette liste immédiatement. Laisser vide pour vendre
    sans pointer.
@@ -495,7 +491,7 @@ envoyée qu'une fois le paiement validé. Le §5quinquies décrit la séquence.
                       Variante inconnue/inactive → 400. Produit à variantes sans
                       variante → 400.
 
-3.  Tarification      resolve_price() : surcharge PosPrice, sinon prix variante,
+3.  Tarification      resolve_price() : prix de la date, sinon prix variante,
                       sinon prix produit. Le total est calculé ici, et nulle part ailleurs.
 
 4.  Contrôle          expected_total ≠ total → 400 avec code "price_changed" et le
@@ -1295,7 +1291,7 @@ Deux exceptions, et elles sont étroites :
   billet à 10 centimes avec une note explicative.
 
 Le retour de consigne, lui, n'en est pas une : la caisse dit qu'une ligne est un
-retour, le serveur en tire le prix du tarif sur place et le passe en négatif.
+retour, le serveur en tire le prix du produit et le passe en négatif.
 
 ### 6.2 …mais il ne peut pas facturer autre chose que ce qui a été annoncé
 
@@ -1348,12 +1344,11 @@ vente hors de pretix. La date la plus proche est utilisée — c'est une
 approximation, et une approximation qu'on peut corriger vaut mieux qu'une vente
 introuvable.
 
-Le tarif sur place, lui, ignore les dates, délibérément : une porte vend au prix
-de la porte quelle que soit la soirée de la série, et lui donner une date
-obligerait à tenir un tarif par date pour changer le prix d'une bière. L'ordre
-de résolution est donc : tarif sur place, puis prix de la date, puis prix de la
-variante, puis prix du produit. La date vendue est écrite sur chaque ligne du
-journal, avec son nom du moment.
+L'ordre de résolution est celui de pretix, sans rien par-dessus : prix de la
+date, puis prix de la variante, puis prix du produit. Une série tarifée soirée
+par soirée est donc vendue au prix de la soirée en cours, à la caisse comme dans
+la boutique. La date vendue est écrite sur chaque ligne du journal, avec son nom
+du moment.
 
 ### 6.3 L'idempotence
 
@@ -1586,10 +1581,10 @@ un débit orphelin a d'autant plus besoin d'être vu qu'il date d'avant.
 La page vérifie la chaîne depuis un point de contrôle plutôt que de re-hacher
 tout le journal à chaque affichage ; l'audit intégral, depuis la première
 écriture, se lance avec `python -m pretix openpos_verify_journal` (une ligne
-par événement, code de sortie non nul si une chaîne ne colle pas). Sur le
-cluster, un CronJob le lance chaque nuit — voir `deploy/` dans le dépôt
-`homelab-k8s` — parce qu'une chaîne cassée découverte le jour où quelqu'un doute
-du journal est découverte trop tard.
+par événement, code de sortie non nul si une chaîne ne colle pas). À lancer
+chaque nuit, par cron ou par un CronJob selon l'hébergement, parce qu'une chaîne
+cassée découverte le jour où quelqu'un doute du journal est découverte trop
+tard.
 
 **Paiements carte sans vente.** La même page liste les paiements posés sur un
 lecteur sans qu'aucune vente n'ait jamais été enregistrée en face. C'est la seule
@@ -1667,7 +1662,7 @@ Base : `/api/v1`. Authentification : `Authorization: Device <token>`.
 | `POST` | `/device/initialize` | Appairage (endpoint pretix natif) |
 | `GET` | `/organizers/<org>/openpos/` | Événements vendables par cette caisse |
 | `GET` | `/organizers/<org>/events/<ev>/openpos/config/` | Événement, device, listes de contrôle, produits d'admission, coupures, boutons montant libre et consigne |
-| `GET` | `…/openpos/catalog/` | Catalogue par catégorie, prix sur place, stock restant |
+| `GET` | `…/openpos/catalog/` | Catalogue par catégorie, prix, stock restant |
 | `POST` | `…/openpos/checkout/` | Encaissement |
 | `GET` | `…/openpos/summary/` | Relevé du jour |
 | `GET` | `…/openpos/attendance/?list=<id>` | Présents sur place, sur une liste de contrôle |

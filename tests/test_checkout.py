@@ -9,7 +9,7 @@ from decimal import Decimal
 import pytest
 from pretix.base.models import Checkin, Order
 
-from pretix_openpos.models import PosPrice, PosSale
+from pretix_openpos.models import PosSale
 from pretix_openpos.payment import CARD, CASH
 
 from .conftest import sell
@@ -38,15 +38,6 @@ def test_a_till_cannot_name_its_own_price(till, ticket):
 
 
 @pytest.mark.django_db
-def test_the_on_site_tariff_replaces_the_online_price(till, event, ticket):
-    PosPrice.objects.create(event=event, item=ticket, price=Decimal("8.00"))
-
-    body = sell(till, [{"item": ticket.pk, "count": 1}]).json()
-
-    assert body["order"]["total"] == "8.00"
-
-
-@pytest.mark.django_db
 def test_a_retry_under_the_same_key_hands_back_the_first_sale(till, event, ticket):
     first = sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="steady-key-1")
     second = sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="steady-key-1")
@@ -71,7 +62,8 @@ def test_a_different_key_is_a_different_sale(till, event, ticket):
 
 @pytest.mark.django_db
 def test_a_price_that_moved_under_the_basket_stops_the_sale(till, event, ticket):
-    PosPrice.objects.create(event=event, item=ticket, price=Decimal("12.00"))
+    ticket.default_price = Decimal("12.00")
+    ticket.save(update_fields=["default_price"])
 
     response = sell(till, [{"item": ticket.pk, "count": 1}], expected_total="10.00")
 

@@ -59,7 +59,17 @@ class OpenPosLogEntryType(NoOpShredderMixin, LogEntryType):
 
 @log_entry_types.new()
 class PricesChanged(NoOpShredderMixin, EventLogEntryType):
-    """The on-site price list, line by line."""
+    """
+    The on-site price list, line by line.
+
+    The price list itself is gone — a product is worth what pretix says it is
+    worth, at the door as in the shop — but these entries are not. They are in
+    the database of every installation that ran an earlier version, they are the
+    only remaining record of what a till charged before the change, and dropping
+    this class would turn each of them back into a raw action type with its
+    contents not shown. So it stays, and it is the one thing here that describes
+    a feature that no longer exists.
+    """
 
     action_type = "pretix_openpos.prices.changed"
 

@@ -110,28 +110,6 @@ def test_a_price_set_for_one_date_is_the_one_charged(organizer, channel, device)
 
 
 @pytest.mark.django_db
-def test_the_till_tariff_still_wins_over_the_date(organizer, channel, device):
-    """
-    The on-site price has no notion of a date, deliberately. A door sells at
-    the door price whichever evening of a series it is, and giving the tariff
-    one would mean maintaining a price list per date to change one beer.
-    """
-    from pretix.base.models.items import SubEventItem
-
-    from pretix_openpos.models import PosPrice
-
-    event = series_event(organizer)
-    tonight = a_date(event, "Ce soir", now() - timedelta(hours=1))
-    item = an_item(event, channel, tonight, price=10)
-    SubEventItem.objects.create(subevent=tonight, item=item, price=Decimal("14.00"))
-    PosPrice.objects.create(event=event, item=item, price=Decimal("8.00"))
-
-    body = sell(Till(device, event), [{"item": item.pk, "count": 1}]).json()
-
-    assert body["order"]["total"] == "8.00"
-
-
-@pytest.mark.django_db
 def test_a_door_sells_before_it_opens(organizer, channel, device):
     event = series_event(organizer)
     # Doors in two hours, and the till is already ringing up a pre-sale.

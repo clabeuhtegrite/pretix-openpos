@@ -2,8 +2,8 @@
 
 export const pairing = {
   token: "tok",
-  organizer: "collectif-ano",
-  event: "soiree-19-09",
+  organizer: "demo-club",
+  event: "soiree-automne",
   serial: "TILL-BAR-1",
   deviceName: "Caisse bar 1",
 };
@@ -11,9 +11,9 @@ export const pairing = {
 export const config = (over: Record<string, unknown> = {}) => ({
   version: "0.11.0",
   event: {
-    slug: "soiree-19-09",
-    organizer: "collectif-ano",
-    name: "Soirée du 19 septembre",
+    slug: "soiree-automne",
+    organizer: "demo-club",
+    name: "Soirée d'automne",
     currency: "EUR",
     testmode: false,
     timezone: "Europe/Paris",

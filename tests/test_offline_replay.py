@@ -14,7 +14,7 @@ import pytest
 from django.utils.timezone import now
 from pretix.base.models import Order
 
-from pretix_openpos.models import PosPrice, PosSale
+from pretix_openpos.models import PosSale
 
 from .conftest import sell
 
@@ -37,7 +37,8 @@ def offline_sale(till, positions, at=None, charged=None, **kwargs):
 
 @pytest.mark.django_db
 def test_the_order_is_created_at_what_the_customer_actually_paid(till, event, ticket):
-    PosPrice.objects.create(event=event, item=ticket, price=Decimal("12.00"))
+    ticket.default_price = Decimal("12.00")
+    ticket.save(update_fields=["default_price"])
 
     body = offline_sale(till, [{"item": ticket.pk, "count": 1, "price": "10.00"}]).json()
 
@@ -48,7 +49,8 @@ def test_the_order_is_created_at_what_the_customer_actually_paid(till, event, ti
 
 @pytest.mark.django_db
 def test_a_price_that_moved_during_the_dropout_is_reported(till, event, ticket):
-    PosPrice.objects.create(event=event, item=ticket, price=Decimal("12.00"))
+    ticket.default_price = Decimal("12.00")
+    ticket.save(update_fields=["default_price"])
 
     body = offline_sale(till, [{"item": ticket.pk, "count": 1, "price": "10.00"}]).json()
 

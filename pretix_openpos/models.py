@@ -5,56 +5,10 @@ from django.core.cache import cache
 from django.db import IntegrityError, models, transaction
 from django.utils.timezone import now
 from django.utils.translation import gettext_lazy as _
-from pretix.base.models import Device, Event, Item, ItemCategory, ItemVariation, Order
+from pretix.base.models import Device, Event, ItemCategory, Order
 
 #: previous_hash of the very first sale of an event.
 GENESIS_HASH = "0" * 64
-
-
-class PosPrice(models.Model):
-    """
-    On-site price of a product, overriding the webshop price.
-
-    pretix resolves prices through Item.default_price -> ItemVariation.default_price
-    -> SubEventItem and has no notion of a per-sales-channel price, so the till
-    tariff has to live here. The POS API is the only thing that reads it, and it
-    is the sole authority on what a position costs at the door: the PWA never
-    sends a price, it only sends product identifiers and quantities.
-    """
-
-    event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name="openpos_prices")
-    item = models.ForeignKey(Item, on_delete=models.CASCADE, related_name="openpos_prices")
-    variation = models.ForeignKey(
-        ItemVariation, null=True, blank=True, on_delete=models.CASCADE, related_name="openpos_prices"
-    )
-    price = models.DecimalField(
-        max_digits=13, decimal_places=2, verbose_name=_("On-site price"),
-        help_text=_("Price charged at the till, replacing the online price."),
-    )
-
-    class Meta:
-        verbose_name = _("On-site price")
-        verbose_name_plural = _("On-site prices")
-        constraints = [
-            # A partial constraint per nullability, because most databases treat
-            # NULLs as distinct and would happily accept duplicate item-level rows
-            # under a plain unique_together.
-            models.UniqueConstraint(
-                fields=["item", "variation"],
-                condition=models.Q(variation__isnull=False),
-                name="openpos_price_unique_variation",
-            ),
-            models.UniqueConstraint(
-                fields=["item"],
-                condition=models.Q(variation__isnull=True),
-                name="openpos_price_unique_item",
-            ),
-        ]
-
-    def __str__(self):
-        if self.variation_id:
-            return f"{self.item} – {self.variation}: {self.price}"
-        return f"{self.item}: {self.price}"
 
 
 class PosSale(models.Model):

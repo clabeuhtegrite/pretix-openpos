@@ -1,7 +1,6 @@
 import csv
-from collections import OrderedDict
 from datetime import date, datetime, timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 
 from django.contrib import messages
 from django.db import transaction
@@ -19,7 +18,7 @@ from pretix.control.views.event import EventSettingsFormView, EventSettingsViewM
 
 from .api.views import BUSINESS_DAY_STARTS_AT
 from .forms import OpenPosSettingsForm
-from .models import PosCategory, PosDevice, PosPrice, PosSale
+from .models import PosCategory, PosDevice, PosSale
 
 
 class SettingsView(EventSettingsViewMixin, EventSettingsFormView):
@@ -35,178 +34,6 @@ class SettingsView(EventSettingsViewMixin, EventSettingsFormView):
                 "organizer": self.request.event.organizer.slug,
                 "event": self.request.event.slug,
             },
-        )
-
-
-class PricesView(EventPermissionRequiredMixin, TemplateView):
-    """
-    Edit the on-site tariff.
-
-    Rendered as a plain table rather than a formset: there is one number input
-    per sellable line and an empty box simply means "charge the online price",
-    which is both the default and the thing an organizer most often wants to go
-    back to.
-    """
-
-    template_name = "pretix_openpos/prices.html"
-    # Namespaced permission names, not the legacy can_* attributes: an unknown
-    # string is simply never in the permission set, so it locks out every team
-    # that is not all-powerful while looking like it works to an admin.
-    permission = "event.items:write"
-
-    def _rows(self):
-        """Every sellable line of the event, with its current override."""
-        overrides = {
-            (p.item_id, p.variation_id): p
-            for p in PosPrice.objects.filter(event=self.request.event)
-        }
-        rows = OrderedDict()
-        items = (
-            self.request.event.items.all()
-            .select_related("category")
-            .prefetch_related("variations")
-            .order_by("category__position", "category_id", "position", "pk")
-        )
-        for item in items:
-            variations = [v for v in item.variations.all()]
-            if variations:
-                for variation in variations:
-                    key = f"{item.pk}_{variation.pk}"
-                    override = overrides.get((item.pk, variation.pk))
-                    rows[key] = {
-                        "key": key,
-                        "item": item,
-                        "variation": variation,
-                        "label": f"{item.name} – {variation.value}",
-                        "online_price": (
-                            variation.default_price
-                            if variation.default_price is not None
-                            else item.default_price
-                        ),
-                        "pos_price": override.price if override else None,
-                    }
-            else:
-                key = f"{item.pk}_"
-                override = overrides.get((item.pk, None))
-                rows[key] = {
-                    "key": key,
-                    "item": item,
-                    "variation": None,
-                    "label": str(item.name),
-                    "online_price": item.default_price,
-                    "pos_price": override.price if override else None,
-                }
-        return rows
-
-    @staticmethod
-    def _change(row, before, after):
-        """One moved line, readable years later without the database."""
-        variation = row["variation"]
-        return {
-            "item": row["item"].pk,
-            "item_name": str(row["item"].name),
-            "variation": variation.pk if variation else None,
-            "variation_name": str(variation.value) if variation else None,
-            "from": None if before is None else str(before),
-            "to": None if after is None else str(after),
-        }
-
-    def get_context_data(self, submitted=None, **kwargs):
-        ctx = super().get_context_data(**kwargs)
-        rows = list(self._rows().values())
-        if submitted is not None:
-            # A refused form is re-rendered from what the organiser typed, not
-            # from the database: nothing was written, and showing the stored
-            # tariff instead would quietly throw away every other edit they made
-            # alongside the one that was wrong.
-            for row in rows:
-                row["pos_price"] = submitted.get(f"price_{row['key']}", "")
-        ctx["rows"] = rows
-        ctx["currency"] = self.request.event.currency
-        return ctx
-
-    def post(self, request, *args, **kwargs):
-        """
-        Read the whole form, then write it — in that order, and never mixed.
-
-        The two halves used to be one loop inside a transaction that was still
-        committed when errors were reported, so a single mistyped price saved
-        every other line while telling the organiser nothing had been saved.
-        Parsing everything first makes the page mean what it says: either the
-        tariff is what the form shows, or it is exactly what it was.
-        """
-        rows = self._rows()
-        errors = []
-        #: (row, price or None) — None meaning "charge the online price".
-        parsed = []
-
-        for key, row in rows.items():
-            raw = (request.POST.get(f"price_{key}") or "").strip().replace(",", ".")
-
-            if raw == "":
-                parsed.append((row, None))
-                continue
-
-            try:
-                price = Decimal(raw).quantize(Decimal("0.01"))
-            except (InvalidOperation, ValueError):
-                errors.append(_("{label}: “{value}” is not a valid price.").format(
-                    label=row["label"], value=raw
-                ))
-                continue
-            if price < Decimal("0.00"):
-                errors.append(_("{label}: the price cannot be negative.").format(label=row["label"]))
-                continue
-            parsed.append((row, price))
-
-        if errors:
-            for error in errors:
-                messages.error(request, error)
-            # Nothing has been written, so the form is re-rendered from what the
-            # organiser typed rather than from the database — which still holds
-            # the old tariff and would silently discard the rest of their edits.
-            return self.render_to_response(
-                self.get_context_data(submitted=request.POST)
-            )
-
-        # Both sides of every line that moved, not a count of them. A history
-        # that says "6 products were changed" answers nothing anyone asks of
-        # it: the question is always which product, from what, to what, and by
-        # the time it is asked the price list has moved on again. The names go
-        # in too, because an item renamed or deleted next season would leave
-        # the entry pointing at nothing.
-        changed = []
-        with transaction.atomic():
-            for row, price in parsed:
-                item, variation = row["item"], row["variation"]
-                before = row["pos_price"]
-                if price is None:
-                    deleted, _details = PosPrice.objects.filter(
-                        event=request.event, item=item, variation=variation
-                    ).delete()
-                    if deleted:
-                        changed.append(self._change(row, before, None))
-                    continue
-
-                obj, created = PosPrice.objects.update_or_create(
-                    event=request.event, item=item, variation=variation,
-                    defaults={"price": price},
-                )
-                if created or before != price:
-                    changed.append(self._change(row, before, price))
-
-        request.event.log_action(
-            "pretix_openpos.prices.changed", user=request.user, data={"changed": changed}
-        )
-        messages.success(request, _("The on-site prices have been saved."))
-        return redirect(
-            reverse(
-                "plugins:pretix_openpos:prices",
-                kwargs={
-                    "organizer": request.event.organizer.slug,
-                    "event": request.event.slug,
-                },
-            )
         )
 
 

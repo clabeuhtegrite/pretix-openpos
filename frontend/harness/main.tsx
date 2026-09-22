@@ -136,8 +136,8 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   if (/\/organizers\/[^/]+\/openpos\/(\?|$)/.test(url))
     return json({
       results: [
-        { slug: "soiree-19-09", organizer: "collectif-ano", name: "Soirée du 19 septembre", currency: "EUR", testmode: false, date_from: null },
-        { slug: "soiree-17-10", organizer: "collectif-ano", name: "Soirée du 17 octobre", currency: "EUR", testmode: false, date_from: null },
+        { slug: "soiree-automne", organizer: "demo-club", name: "Soirée d'automne", currency: "EUR", testmode: false, date_from: null },
+        { slug: "soiree-hiver", organizer: "demo-club", name: "Soirée d'hiver", currency: "EUR", testmode: false, date_from: null },
       ],
     });
   if (url.includes("/checkinrpc/search/"))

@@ -137,7 +137,7 @@ with scopes_disabled():
         base = f"/control/event/{event.organizer.slug}/{event.slug}/openpos/"
         for label, path, permission in (
             ("settings", base, "event.settings.general:write"),
-            ("prices", base + "prices/", "event.items:write"),
+            ("categories", base + "categories/", "event.items:write"),
             ("sales", base + "sales/", "event.orders:read"),
         ):
             check(f"{label} renders for an admin", client.get(path).status_code == 200)
@@ -156,7 +156,7 @@ with scopes_disabled():
         team.members.add(volunteer)
         for label, path, permission in (
             ("settings", base, "event.settings.general:write"),
-            ("prices", base + "prices/", "event.items:write"),
+            ("categories", base + "categories/", "event.items:write"),
             ("sales", base + "sales/", "event.orders:read"),
         ):
             team.limit_event_permissions = {permission: True}

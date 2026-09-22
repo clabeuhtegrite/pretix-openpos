@@ -1,41 +1,29 @@
-# Publishing the image the cluster actually runs.
-#
-# Until now this image existed only on 192.168.1.37:5000, a MetalLB address on
-# the home LAN, and the only way to put it there was `docker build` + `docker
-# push` from a machine on that network. No CI runner can reach it, so every
-# release needed a laptop, a VPN and a `docker login` — and the cluster's
-# homelab-k8s repo says so in as many words (docs/12 §12.9).
-#
-# The way out is not to give CI the LAN. It is to publish the image somewhere
-# CI can reach and the cluster already knows how to read. The cluster runs a
-# mirror-reconcile CronJob that copies declared upstreams into .37 with
-# `skopeo copy --all`, byte for byte, so the internal digest equals the
-# upstream one. Seven images already arrive that way, four of them from
-# ghcr.io. Publishing here turns this image into the eighth, and the hand-push
-# disappears.
+# Publishing the production image to ghcr.io.
 #
 # TWO TAGS, AND THEY ARE NOT INTERCHANGEABLE.
 #
 #   <version>-pretix<base>   immutable, one per build, never moved. This is the
 #                            provenance record and what a rollback names.
 #   pretix<base>             the channel. It MOVES to the newest build on that
-#                            pretix base, and it is the tag the cluster's
-#                            manifest declares as its upstream.
+#                            pretix base.
 #
-# The channel is what makes the deployment safe, and the reason is worth
-# stating because it is the whole design. mirror-reconcile pre-seeds the digest
-# its declared upstream tag serves *today*, every 30 minutes, before anything
-# in the cluster asks for it. With a moving channel tag the new image is
-# therefore already on .37 by the time Renovate opens the digest bump, so
-# merging that bump is an ordinary rollout. With an immutable tag in that slot
-# the upstream only changes in the same commit that pins it, nothing can be
-# pre-seeded, and the pod would sit in ImagePullBackOff until the next
-# reconcile pass — on a deployment whose strategy is Recreate, that is the
-# ticketing system down, not a rollout that waits.
+# The channel exists for installations that mirror this image into a registry of
+# their own — a cluster on a private network, an air-gapped site — and then pin
+# it by digest. Such a mirror copies what its declared upstream tag serves
+# *today*, on a timer, before anything asks for the image. With a moving channel
+# tag the new build is therefore already in the local registry by the time the
+# digest is pinned, and the rollout is ordinary. With an immutable tag in that
+# slot the upstream only changes in the same commit that pins it, nothing can be
+# copied ahead of time, and the pod sits in ImagePullBackOff until the next pass
+# of the mirror — which, on a deployment whose strategy is Recreate, is the
+# ticketing system down rather than a rollout that waits.
 #
 # The base version stays in the tag on purpose. A pretix base change is a
 # different channel, so it cannot arrive as a silent digest bump: it takes an
-# edit to the manifest, which is exactly the deliberate gesture §12.9 asks for.
+# edit to the manifest, which is the deliberate gesture it should be.
+#
+# Set the repository variable MIRROR_REGISTRY (Settings -> Secrets and variables
+# -> Actions -> Variables) to have the run summary spell out the line to pin.
 name: Publish production image
 
 on:
@@ -198,8 +186,8 @@ jobs:
           echo "channel at ${{ steps.push.outputs.digest }}."
 
       # What a human needs next, in the form they need it. The manifest line is
-      # printed whole because it is pasted into homelab-k8s by hand, on both
-      # containers, and a mistyped digest is an outage rather than a typo.
+      # printed whole because it gets pasted into a deployment manifest by hand,
+      # and a mistyped digest is an outage rather than a typo.
       - name: Summary
         run: |
           {
@@ -211,17 +199,18 @@ jobs:
             echo "| channel | \`${{ steps.id.outputs.channel }}\` |"
             echo "| digest | \`${{ steps.push.outputs.digest }}\` |"
             echo
-            echo "The cluster's mirror-reconcile copies the channel onto"
-            echo "\`192.168.1.37:5000\` within 30 minutes. Renovate then opens the"
-            echo "digest bump against homelab-k8s; merging it is the deploy."
-            echo
-            echo "To pin it by hand instead, on **both** containers of"
-            echo "\`apps/tools/pretix/deployment.yaml\`:"
-            echo
-            echo '```yaml'
-            echo "          image: 192.168.1.37:5000/pretix-openpos:pretix${{ steps.id.outputs.base }}@${{ steps.push.outputs.digest }} # mirror: ${{ steps.id.outputs.channel }}"
-            echo '```'
-            echo
-            echo "> Merge only once the digest is on \`.37\` — \`strategy: Recreate\`"
-            echo "> kills the running pod before the new one pulls."
+            if [ -n "$MIRROR" ]; then
+              echo "Once your mirror has copied the channel, pin this digest:"
+              echo
+              echo '```yaml'
+              echo "          image: $MIRROR/pretix-openpos:pretix${{ steps.id.outputs.base }}@${{ steps.push.outputs.digest }} # mirror: ${{ steps.id.outputs.channel }}"
+              echo '```'
+              echo
+              echo "> Pin it only once the digest is actually in the mirror."
+              echo "> \`strategy: Recreate\` kills the running pod before the new"
+              echo "> one pulls, so a digest that is not there yet is downtime"
+              echo "> rather than a rollout that waits."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          MIRROR: ${{ vars.MIRROR_REGISTRY }}
