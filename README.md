@@ -245,7 +245,7 @@ If you run pretix in Docker or Kubernetes, [`deploy/Dockerfile`](deploy/Dockerfi
 bakes the plugin into the official image:
 
 ```bash
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.21.1 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.22.0 .
 ```
 
 The PWA bundle is built inside the image, from the tree you are building, so the
@@ -398,7 +398,7 @@ script in `dev/` at it. It is not redundant with the two suites above: it
 exercises what only exists in a whole running system — the journal's savepoint
 handling under concurrent tills, which is forgiving on SQLite and unforgiving on
 PostgreSQL; the back-office pages rendered through a real session; the arrivals
-histogram over three seeded events; and the offline replay over real HTTP.
+pages over three seeded events; and the offline replay over real HTTP.
 
 ```bash
 dev/integration.sh                       # boots, runs, tears down

@@ -8,8 +8,8 @@
 # These four are not redundant with the unit suites. They exercise what only
 # exists in a whole running system: the journal's savepoint handling under
 # concurrent tills, which is forgiving on SQLite and unforgiving on PostgreSQL;
-# the back-office pages rendered through a real session; the arrivals histogram
-# over three seeded events; and the offline replay over real HTTP.
+# the back-office pages rendered through a real session; the arrivals pages over
+# three seeded events; and the offline replay over real HTTP.
 #
 # Used by CI and by hand, the same way, so a failure on a laptop is the failure
 # CI saw. Leaves nothing behind: the stack is torn down on the way out, whether
@@ -114,7 +114,7 @@ echo "==> back office: the pages a cash sale must not turn into a 500"
 $COMPOSE exec -T pretix python -m pretix shell < dev/backoffice_test.py
 
 echo
-echo "==> arrivals: the histogram, and every scan it must ignore"
+echo "==> arrivals: the histogram, every scan it must ignore, and one evening"
 $COMPOSE exec -T pretix python -m pretix shell < dev/arrivals_test.py
 
 echo

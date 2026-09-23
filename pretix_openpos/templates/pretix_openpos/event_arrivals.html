@@ -1,0 +1,327 @@
+{% extends "pretixcontrol/event/base.html" %}
+{% load i18n %}
+{% load static %}
+{% block title %}{% trans "Arrivals" %}{% endblock %}
+{% block content %}
+    {% comment %}A real stylesheet, not a <style> block: the control panel's
+    CSP has no 'unsafe-inline' for styles, and a blocked block turns every SVG
+    rect default-black.{% endcomment %}
+    <link rel="stylesheet" type="text/css" href="{% static "pretix_openpos/arrivals.css" %}">
+
+    <h1>{% trans "Arrivals" %}</h1>
+
+    {% if subevents or lists|length > 1 %}
+        {% comment %}A button rather than a select that submits itself: the
+        control panel's CSP runs no inline script.{% endcomment %}
+        <form method="get" action="" class="form-inline op-filter">
+            {% if subevents %}
+                <label for="op-subevent">{% trans "Date" context "arrivals" %}</label>
+                <select name="subevent" id="op-subevent" class="form-control">
+                    {% if not subevent %}<option value="" selected>—</option>{% endif %}
+                    {% for date in subevents %}
+                        <option value="{{ date.pk }}" {% if date == subevent %}selected{% endif %}>{{ date }}</option>
+                    {% endfor %}
+                </select>
+            {% endif %}
+            {% if lists|length > 1 %}
+                <label for="op-list">{% trans "Check-in list" context "arrivals" %}</label>
+                <select name="list" id="op-list" class="form-control">
+                    {% for option in lists %}
+                        <option value="{{ option.pk }}" {% if option == clist %}selected{% endif %}>{{ option.name }}</option>
+                    {% endfor %}
+                </select>
+            {% endif %}
+            <button type="submit" class="btn btn-default">{% trans "Show" context "arrivals" %}</button>
+        </form>
+    {% endif %}
+
+    {% if not clist %}
+        <div class="alert alert-info">
+            {% trans "This event has no check-in list, so nobody can be counted in." %}
+        </div>
+    {% else %}
+        <p class="text-muted">
+            {% blocktrans trimmed with list=clist.name %}
+                Admission tickets on the check-in list “{{ list }}”, counted as the door screen
+                counts them: every door and every till. A ticket sold at a till counts from the
+                moment it was sold, which is when the till lets its buyer in.
+            {% endblocktrans %}
+            {% blocktrans trimmed with time=computed_at|time:"H:i" %}Updated at {{ time }}.{% endblocktrans %}
+            <a href="">{% trans "Refresh" context "arrivals" %}</a>
+        </p>
+
+        <div class="op-tiles">
+            <div class="panel panel-default op-tile"><div class="panel-body">
+                <div class="op-num">{{ figures.entered }}</div>
+                <div class="op-name">{% trans "Admitted" context "arrivals" %}</div>
+                <div class="op-cap">
+                    {% if figures.expected %}
+                        {% blocktrans trimmed count expected=figures.expected with percent=entered_percent %}
+                            of {{ expected }} ticket expected · {{ percent }} %
+                        {% plural %}
+                            of {{ expected }} tickets expected · {{ percent }} %
+                        {% endblocktrans %}
+                    {% else %}
+                        {% trans "no admission ticket sold" %}
+                    {% endif %}
+                </div>
+            </div></div>
+            <div class="panel panel-default op-tile"><div class="panel-body">
+                <div class="op-num">{{ figures.not_arrived }}</div>
+                <div class="op-name">
+                    {% if over %}{% trans "No-shows" %}{% else %}{% trans "Not arrived yet" %}{% endif %}
+                </div>
+                <div class="op-cap">
+                    {% if figures.expected %}
+                        {% blocktrans trimmed with percent=missing_percent %}{{ percent }} % of the tickets{% endblocktrans %}
+                    {% else %}
+                        —
+                    {% endif %}
+                </div>
+            </div></div>
+            <div class="panel panel-default op-tile"><div class="panel-body">
+                <div class="op-num op-num-time">{{ rush.label|default:"—" }}</div>
+                <div class="op-name">{% trans "Busiest quarter of an hour" %}</div>
+                <div class="op-cap">
+                    {% if rush %}
+                        {% if rush.date %}{{ rush.date|date:"l j F" }} ·{% endif %}
+                        {% blocktrans trimmed count count=rush.count %}
+                            {{ count }} arrival in a quarter of an hour
+                        {% plural %}
+                            {{ count }} arrivals in a quarter of an hour
+                        {% endblocktrans %}
+                    {% else %}
+                        {% trans "nobody has come in yet" %}
+                    {% endif %}
+                </div>
+            </div></div>
+            <div class="panel panel-default op-tile"><div class="panel-body">
+                <div class="op-num">{{ refused }}</div>
+                <div class="op-name">{% trans "Refused" context "arrivals" %}</div>
+                <div class="op-cap">
+                    {% if reasons %}
+                        {% with top=reasons.0 %}
+                            {% blocktrans trimmed with count=top.count reason=top.label %}
+                                including {{ count }} “{{ reason }}”
+                            {% endblocktrans %}
+                        {% endwith %}
+                    {% else %}
+                        {% trans "no ticket turned away at the door" %}
+                    {% endif %}
+                </div>
+            </div></div>
+            {% if room %}
+                <div class="panel panel-default op-tile"><div class="panel-body">
+                    <div class="op-num">{{ figures.inside }}</div>
+                    <div class="op-name">{% trans "On site" context "arrivals" %}</div>
+                    <div class="op-cap">
+                        {% blocktrans trimmed count exited=figures.exited with fullest=room.count time=room.at %}
+                            {{ exited }} scanned out · {{ fullest }} at the fullest, at {{ time }}
+                        {% plural %}
+                            {{ exited }} scanned out · {{ fullest }} at the fullest, at {{ time }}
+                        {% endblocktrans %}
+                    </div>
+                </div></div>
+            {% endif %}
+        </div>
+
+        {% for night in nights %}
+            <div class="panel panel-default op-arrivals">
+                <div class="panel-heading">
+                    {% if night.minutes == 15 %}
+                        {% trans "Arrivals by quarter of an hour" %}
+                    {% else %}
+                        {% trans "Arrivals by half hour" %}
+                    {% endif %}
+                    · {{ night.date|date:"l j F" }}
+                </div>
+                <div class="panel-body">
+                    {% if split %}
+                        <ul class="op-legend">
+                            <li><span class="op-key op-key-ahead"></span>{{ sold.ahead }} <strong>{{ night.ahead }}</strong></li>
+                            <li><span class="op-key op-key-till"></span>{{ sold.till }} <strong>{{ night.till }}</strong></li>
+                        </ul>
+                    {% endif %}
+                    <svg viewBox="0 0 {{ night.chart.width }} {{ night.chart.height }}" role="img" aria-labelledby="op-night-{{ forloop.counter }}">
+                        <title id="op-night-{{ forloop.counter }}">{% blocktrans trimmed count count=night.total with date=night.date|date:"l j F" %}
+                            {{ count }} arrival on {{ date }}, over time
+                        {% plural %}
+                            {{ count }} arrivals on {{ date }}, over time
+                        {% endblocktrans %}</title>
+                        {% for tick in night.chart.yticks %}
+                            <line class="op-grid" x1="{{ night.chart.plot_left }}" x2="{{ night.chart.plot_right }}" y1="{{ tick.y }}" y2="{{ tick.y }}"/>
+                            <text class="op-ticklabel" x="{{ night.chart.ylabel_x }}" y="{{ tick.y }}" dy="3" text-anchor="end">{{ tick.label }}</text>
+                        {% endfor %}
+                        {% for bar in night.chart.bars %}
+                            <g class="op-band">
+                                <title>{{ bar.title }}</title>
+                                <rect class="op-wash" x="{{ bar.band_x }}" y="{{ night.chart.plot_top }}" width="{{ bar.band_w }}" height="{{ night.chart.plot_h }}"/>
+                                {% for piece in bar.pieces %}
+                                    <path class="op-bar op-bar-{{ piece.kind }}" d="{{ piece.d }}"/>
+                                {% endfor %}
+                                {% if bar.count %}
+                                    <text class="{% if bar.is_rush %}op-peaklabel{% else %}op-hoverlabel{% endif %}" x="{{ bar.cx }}" y="{{ bar.label_y }}" text-anchor="middle">{{ bar.count }}</text>
+                                {% endif %}
+                            </g>
+                        {% endfor %}
+                        <line class="op-axis" x1="{{ night.chart.plot_left }}" x2="{{ night.chart.plot_right }}" y1="{{ night.chart.baseline }}" y2="{{ night.chart.baseline }}"/>
+                        {% for tick in night.chart.xticks %}
+                            <text class="op-xlabel" x="{{ tick.x }}" y="{{ night.chart.xlabel_y }}" text-anchor="middle">{{ tick.label }}</text>
+                        {% endfor %}
+                    </svg>
+                    <details>
+                        <summary>{% trans "Show as a table" %}</summary>
+                        <table class="table table-condensed op-quarters-table">
+                            <thead>
+                            <tr>
+                                <th>{% trans "Time" context "arrivals" %}</th>
+                                {% if split %}
+                                    <th class="text-right">{{ sold.ahead }}</th>
+                                    <th class="text-right">{{ sold.till }}</th>
+                                {% endif %}
+                                <th class="text-right">{% trans "Arrivals" %}</th>
+                                <th class="text-right">{% trans "Total so far" %}</th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                            {% for row in night.rows %}
+                                <tr>
+                                    <td>{{ row.label }}</td>
+                                    {% if split %}
+                                        <td class="text-right">{{ row.ahead }}</td>
+                                        <td class="text-right">{{ row.till }}</td>
+                                    {% endif %}
+                                    <td class="text-right">{{ row.total }}</td>
+                                    <td class="text-right">{{ row.cumulative }}</td>
+                                </tr>
+                            {% endfor %}
+                            </tbody>
+                        </table>
+                    </details>
+                </div>
+            </div>
+        {% empty %}
+            <div class="alert alert-info">
+                {% trans "Nobody has been let in yet, so there is nothing to chart." %}
+            </div>
+        {% endfor %}
+
+        {% if items %}
+            <div class="panel panel-default">
+                <div class="panel-heading">{% trans "By product" context "arrivals" %}</div>
+                <table class="table table-condensed">
+                    <thead>
+                    <tr>
+                        <th>{% trans "Product" context "arrivals" %}</th>
+                        {% if room %}<th class="text-right">{% trans "On site" context "arrivals" %}</th>{% endif %}
+                        <th class="text-right">{% trans "Admitted" context "arrivals" %}</th>
+                        <th class="text-right">{% trans "Expected" context "arrivals" %}</th>
+                        <th class="text-right">%</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    {% for item in items %}
+                        <tr>
+                            <td>{{ item.name }}</td>
+                            {% if room %}<td class="text-right">{{ item.inside }}</td>{% endif %}
+                            <td class="text-right"><strong>{{ item.entered }}</strong></td>
+                            <td class="text-right">{{ item.expected }}</td>
+                            <td class="text-right">{% if item.percent is not None %}{{ item.percent }} %{% else %}—{% endif %}</td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% endif %}
+
+        <div class="row">
+            <div class="col-md-7">
+                <div class="panel panel-default">
+                    <div class="panel-heading">{% trans "Scans for this event, by device" %}</div>
+                    <table class="table table-condensed">
+                        <thead>
+                        <tr>
+                            <th>{% trans "Device" context "arrivals" %}</th>
+                            <th class="text-right">{% trans "Admitted" context "arrivals" %}</th>
+                            <th class="text-right">{% trans "Refused" context "arrivals" %}</th>
+                            <th class="text-right">{% trans "Offline" context "arrivals" %}</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        {% for device in scans.devices %}
+                            <tr>
+                                <td>
+                                    {% if device.id %}
+                                        <a href="{% url "control:event.orders.checkins" organizer=request.organizer.slug event=request.event.slug %}?device={{ device.id }}">{{ device.name }}</a>
+                                    {% else %}
+                                        {% trans "Back office" context "arrivals" %}
+                                    {% endif %}
+                                </td>
+                                <td class="text-right"><strong>{{ device.admitted }}</strong></td>
+                                <td class="text-right">{{ device.refused }}</td>
+                                <td class="text-right">{{ device.offline }}</td>
+                            </tr>
+                        {% empty %}
+                            <tr><td colspan="4" class="text-muted">{% trans "No ticket has been scanned for this event yet." %}</td></tr>
+                        {% endfor %}
+                        </tbody>
+                        {% if scans.devices|length > 1 %}
+                            <tfoot>
+                            <tr>
+                                <th>{% trans "Every door" %}</th>
+                                <th class="text-right">{{ scans.event.admitted }}</th>
+                                <th class="text-right">{{ scans.event.refused }}</th>
+                                <th class="text-right">{{ scans.event.offline }}</th>
+                            </tr>
+                            </tfoot>
+                        {% endif %}
+                    </table>
+                    <div class="panel-body op-note">
+                        {% trans "Offline: let in with no network, sent afterwards. pretix marks them as offline scans." %}
+                        {% trans "A ticket sold at a till is not a scan, and is not counted here." %}
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-5">
+                <div class="panel panel-default">
+                    <div class="panel-heading">{% trans "Refusals by reason" %}</div>
+                    <table class="table table-condensed">
+                        <thead>
+                        <tr>
+                            <th>{% trans "Reason" context "arrivals" %}</th>
+                            <th class="text-right">{% trans "Scans" context "arrivals" %}</th>
+                        </tr>
+                        </thead>
+                        <tbody>
+                        {% for reason in reasons %}
+                            <tr>
+                                <td>
+                                    {% if reason.reason %}
+                                        <a href="{% url "control:event.orders.checkins" organizer=request.organizer.slug event=request.event.slug %}?status={{ reason.reason|urlencode }}">{{ reason.label }}</a>
+                                    {% else %}
+                                        {{ reason.label }}
+                                    {% endif %}
+                                </td>
+                                <td class="text-right">{{ reason.count }}</td>
+                            </tr>
+                        {% empty %}
+                            <tr><td colspan="2" class="text-muted">{% trans "No ticket turned away." %}</td></tr>
+                        {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <p class="text-muted op-note">
+            {% if figures.non_admission_entered %}
+                {% blocktrans trimmed count count=figures.non_admission_entered %}
+                    {{ count }} scan of a product that admits nobody is left out.
+                {% plural %}
+                    {{ count }} scans of products that admit nobody are left out.
+                {% endblocktrans %}
+            {% endif %}
+            <a href="{% url "control:event.orders.checkinlists.show" organizer=request.organizer.slug event=request.event.slug list=clist.pk %}">{% trans "See the list in pretix" %}</a>
+        </p>
+    {% endif %}
+{% endblock %}

@@ -18,7 +18,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: pretix-openpos\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-09-23 12:30+0000\n"
+"POT-Creation-Date: 2026-09-23 12:49+0000\n"
 "PO-Revision-Date: 2026-09-22 09:51+0000\n"
 "Last-Translator: clabeuhtegrite\n"
 "Language-Team: French\n"
@@ -81,11 +81,11 @@ msgstr "Le montant reçu ne s’applique qu’aux paiements en espèces."
 msgid "“{value}” is not an amount."
 msgstr "« {value} » n’est pas un montant."
 
-#: api/serializers.py:287 api/views.py:2508 drawers.py:387 drawers.py:396
+#: api/serializers.py:287 api/views.py:2422 drawers.py:387 drawers.py:396
 msgid "Count the drawer before closing it."
 msgstr "Comptez la caisse avant de la fermer."
 
-#: api/views.py:417
+#: api/views.py:331
 msgid ""
 "Nothing is on tonight. This event is a series, and the till sells for the "
 "date that is on — add one for tonight, or check that it is switched on."
@@ -94,49 +94,49 @@ msgstr ""
 "la date qui a lieu — ajoutez-en une pour ce soir, ou vérifiez qu’elle est "
 "activée."
 
-#: api/views.py:544
+#: api/views.py:458
 #, python-brace-format
 msgid "Product {id} is not on sale at the till."
 msgstr "Le produit {id} n’est pas en vente à la caisse."
 
-#: api/views.py:557
+#: api/views.py:471
 #, python-brace-format
 msgid "This till does not sell {category}."
 msgstr "Cette caisse ne vend pas {category}."
 
-#: api/views.py:571
+#: api/views.py:485
 #, python-brace-format
 msgid "Unknown option for product {name}."
 msgstr "Déclinaison inconnue pour le produit {name}."
 
-#: api/views.py:575
+#: api/views.py:489
 #, python-brace-format
 msgid "Product {name} requires an option to be chosen."
 msgstr "Le produit {name} demande de choisir une déclinaison."
 
-#: api/views.py:596
+#: api/views.py:510
 msgid "This product is not the one deposits are taken on."
 msgstr "Ce produit n’est pas celui sur lequel les consignes sont prises."
 
-#: api/views.py:601
+#: api/views.py:515
 msgid "Free amounts can only be sold on the product set aside for them."
 msgstr ""
 "Les montants libres ne peuvent être vendus que sur le produit prévu pour eux."
 
-#: api/views.py:605
+#: api/views.py:519
 msgid "A free amount has to be more than nothing."
 msgstr "Un montant libre doit être supérieur à zéro."
 
-#: api/views.py:903
+#: api/views.py:817
 #, python-brace-format
 msgid "Open POS is not enabled for the event {slug}."
 msgstr "Open POS n’est pas activé sur l’événement {slug}."
 
-#: api/views.py:1098
+#: api/views.py:1012
 msgid "Uncategorised"
 msgstr "Sans catégorie"
 
-#: api/views.py:1179
+#: api/views.py:1093
 msgid ""
 "This till has a card reader assigned, so a card payment has to be validated "
 "by the reader. Take this payment on the reader, or in cash."
@@ -144,25 +144,25 @@ msgstr ""
 "Cette caisse a un lecteur attribué : un paiement par carte doit être validé "
 "par le lecteur. Encaissez sur le lecteur, ou en espèces."
 
-#: api/views.py:1376
+#: api/views.py:1290
 #, python-brace-format
 msgid "Prices changed: this basket now comes to {total}, not {expected}."
 msgstr ""
 "Les prix ont changé : ce panier fait maintenant {total}, et non {expected}."
 
-#: api/views.py:1393
+#: api/views.py:1307
 msgid "Nothing is due: this transaction pays money out."
 msgstr "Rien n’est dû : cette opération sort de l’argent."
 
-#: api/views.py:1397
+#: api/views.py:1311
 msgid "The amount received is less than the total due."
 msgstr "Le montant reçu est inférieur au total dû."
 
-#: api/views.py:1597
+#: api/views.py:1511
 msgid "No card reader is assigned to this till."
 msgstr "Aucun lecteur n’est attribué à cette caisse."
 
-#: api/views.py:1653
+#: api/views.py:1567
 msgid ""
 "The card reader is taking another payment. Wait for it to finish, or take "
 "this basket in cash."
@@ -170,56 +170,56 @@ msgstr ""
 "Le lecteur encaisse un autre paiement. Attendez la fin, ou prenez ce panier "
 "en espèces."
 
-#: api/views.py:1746
+#: api/views.py:1660
 #, python-brace-format
 msgid "{name} is sold out."
 msgstr "{name} est épuisé."
 
-#: api/views.py:1769
+#: api/views.py:1683
 msgid "Nothing is due on this basket. Settle it in cash."
 msgstr "Rien n’est dû sur ce panier. Réglez-le en espèces."
 
-#: api/views.py:1849 api/views.py:1872
+#: api/views.py:1763 api/views.py:1786
 msgid "No card payment was started for this basket."
 msgstr "Aucun paiement par carte n’a été lancé pour ce panier."
 
-#: api/views.py:1906 api/views.py:2551
+#: api/views.py:1820 api/views.py:2461
 msgid "Unknown check-in list."
 msgstr "Liste de contrôle inconnue."
 
-#: api/views.py:2051
+#: api/views.py:1965
 msgid "No such entry in this event's journal."
 msgstr "Cette écriture n’existe pas dans le journal de cet événement."
 
-#: api/views.py:2056
+#: api/views.py:1970
 msgid "This sale was made on another till and can only be corrected there."
 msgstr ""
 "Cette vente a été faite sur une autre caisse et ne peut être corrigée que là-"
 "bas."
 
-#: api/views.py:2059
+#: api/views.py:1973
 msgid "This journal entry is not a sale."
 msgstr "Cette écriture du journal n’est pas une vente."
 
-#: api/views.py:2061
+#: api/views.py:1975
 msgid "This sale has already been cancelled."
 msgstr "Cette vente a déjà été annulée."
 
-#: api/views.py:2063
+#: api/views.py:1977
 msgid "The order behind this sale no longer exists."
 msgstr "La commande derrière cette vente n’existe plus."
 
-#: api/views.py:2068
+#: api/views.py:1982
 #, python-brace-format
 msgid "pretix will not let this order be cancelled: {status}."
 msgstr "pretix refuse l’annulation de cette commande : {status}."
 
-#: api/views.py:2386 drawers.py:100
+#: api/views.py:2300 drawers.py:100
 msgid "No cash drawer is assigned to this till."
 msgstr "Aucune caisse espèces n’est attribuée à cet appareil."
 
-#: apps.py:13 apps.py:25 apps.py:28 apps.py:29 channels.py:12 security.py:18
-#: signals.py:104 templates/pretix_openpos/settings.html:4
+#: apps.py:13 apps.py:25 apps.py:28 apps.py:29 apps.py:30 channels.py:12
+#: security.py:18 signals.py:106 templates/pretix_openpos/settings.html:4
 #: templates/pretix_openpos/settings.html:6
 msgid "Open POS"
 msgstr "Open POS"
@@ -236,15 +236,46 @@ msgstr ""
 msgid "Settings"
 msgstr "Réglages"
 
-#: apps.py:28 signals.py:93 templates/pretix_openpos/categories.html:3
+#: apps.py:28 signals.py:94 templates/pretix_openpos/categories.html:3
 #: templates/pretix_openpos/categories.html:5
 msgid "Who sells what"
 msgstr "Qui vend quoi"
 
-#: apps.py:29 signals.py:94 templates/pretix_openpos/drawer_session.html:129
+#: apps.py:29 signals.py:95 templates/pretix_openpos/drawer_session.html:129
 #: templates/pretix_openpos/sales.html:25
 msgid "Sales"
 msgstr "Ventes"
+
+#: apps.py:30 signals.py:96 signals.py:131
+#: templates/pretix_openpos/arrivals.html:4
+#: templates/pretix_openpos/arrivals.html:12
+#: templates/pretix_openpos/event_arrivals.html:4
+#: templates/pretix_openpos/event_arrivals.html:12
+#: templates/pretix_openpos/event_arrivals.html:184
+msgid "Arrivals"
+msgstr "Arrivées"
+
+#: arrivals.py:181
+msgctxt "arrivals"
+msgid "Bought ahead"
+msgstr "Prévente"
+
+#: arrivals.py:182 templates/pretix_openpos/arrivals.html:27
+msgctxt "arrivals"
+msgid "Sold on site"
+msgstr "Vendus sur place"
+
+#: arrivals.py:205
+#, python-format
+msgid "%(count)s arrival"
+msgid_plural "%(count)s arrivals"
+msgstr[0] "%(count)s arrivée"
+msgstr[1] "%(count)s arrivées"
+
+#: attendance.py:155
+msgctxt "refusal"
+msgid "Other reason"
+msgstr "Autre motif"
 
 #: channels.py:13
 msgid "On-site sales made at the till through the Open POS cash register."
@@ -962,7 +993,7 @@ msgstr "Caisse espèces"
 msgid "Till device"
 msgstr "Appareil de caisse"
 
-#: models.py:559 signals.py:146 templates/pretix_openpos/categories.html:18
+#: models.py:559 signals.py:148 templates/pretix_openpos/categories.html:18
 #: templates/pretix_openpos/devices.html:3
 #: templates/pretix_openpos/devices.html:5
 msgid "Till devices"
@@ -1012,7 +1043,7 @@ msgstr "Catégorie à la caisse"
 msgid "Categories at the till"
 msgstr "Catégories à la caisse"
 
-#: models.py:849 signals.py:171 templates/pretix_openpos/drawer.html:8
+#: models.py:849 signals.py:173 templates/pretix_openpos/drawer.html:8
 #: templates/pretix_openpos/drawers.html:5
 #: templates/pretix_openpos/drawers.html:7
 msgid "Cash drawers"
@@ -1106,12 +1137,7 @@ msgstr ""
 msgid "Point of sale for pretix"
 msgstr "Caisse pour pretix"
 
-#: signals.py:129 templates/pretix_openpos/arrivals.html:4
-#: templates/pretix_openpos/arrivals.html:12
-msgid "Arrivals"
-msgstr "Arrivées"
-
-#: signals.py:157 templates/pretix_openpos/sumup.html:4
+#: signals.py:159 templates/pretix_openpos/sumup.html:4
 #: templates/pretix_openpos/sumup.html:6
 msgid "Card readers"
 msgstr "Lecteurs de carte"
@@ -1209,96 +1235,133 @@ msgstr "Le lecteur a été retiré."
 
 #: templates/pretix_openpos/arrivals.html:14
 msgid ""
-"Successful entry scans across all past events of this organizer, by hour of "
-"day — each event counted on its own local clock. Automatic check-ins and "
-"test-mode orders are left out, so this is people actually walking through "
-"the door."
+"Who came in at each event, and at what time people arrive across every "
+"evening that is over."
 msgstr ""
-"Scans d’entrée réussis sur tous les événements passés de cet organisateur, "
-"par heure de la journée — chaque événement compté à son heure locale. Les "
-"pointages automatiques et les commandes en mode test sont exclus : ce sont "
-"donc des gens qui ont réellement franchi la porte."
+"Qui est entré à chaque événement, et à quelle heure les gens arrivent sur "
+"l’ensemble des soirées passées."
 
-#: templates/pretix_openpos/arrivals.html:19
+#: templates/pretix_openpos/arrivals.html:18
+msgid "Per event"
+msgstr "Par événement"
+
+#: templates/pretix_openpos/arrivals.html:22
+msgctxt "arrivals"
+msgid "Event"
+msgstr "Événement"
+
+#: templates/pretix_openpos/arrivals.html:23
+#: templates/pretix_openpos/event_arrivals.html:20
+msgctxt "arrivals"
+msgid "Date"
+msgstr "Date"
+
+#: templates/pretix_openpos/arrivals.html:24
+#: templates/pretix_openpos/event_arrivals.html:58
+#: templates/pretix_openpos/event_arrivals.html:219
+#: templates/pretix_openpos/event_arrivals.html:247
+msgctxt "arrivals"
+msgid "Admitted"
+msgstr "Entrés"
+
+#: templates/pretix_openpos/arrivals.html:25
+#: templates/pretix_openpos/event_arrivals.html:220
+msgctxt "arrivals"
+msgid "Expected"
+msgstr "Attendus"
+
+#: templates/pretix_openpos/arrivals.html:28
+#: templates/pretix_openpos/event_arrivals.html:86
+msgid "Busiest quarter of an hour"
+msgstr "Plus forte affluence"
+
+#: templates/pretix_openpos/arrivals.html:36
+msgid "on now"
+msgstr "en cours"
+
+#: templates/pretix_openpos/arrivals.html:40
+msgid "no check-in list"
+msgstr "pas de liste d’enregistrement"
+
+#: templates/pretix_openpos/arrivals.html:52
+msgid "No event has begun yet."
+msgstr "Aucun événement n’a encore commencé."
+
+#: templates/pretix_openpos/arrivals.html:58
+msgid "Hour of arrival, every evening that is over"
+msgstr "Heure d’arrivée, toutes soirées passées confondues"
+
+#: templates/pretix_openpos/arrivals.html:60
+msgid ""
+"Every entry at every past event of this organizer, at a door or at a till, "
+"by hour of day — each event counted on its own local clock. Automatic check-"
+"ins and test-mode orders are left out, so this is people actually walking "
+"through the door."
+msgstr ""
+"Toutes les entrées des événements passés de cet organisateur, aux portes "
+"comme aux caisses, par heure de la journée — chaque événement compté à son "
+"heure locale. Les pointages automatiques et les commandes en mode test sont "
+"exclus : ce sont donc des gens qui ont réellement franchi la porte."
+
+#: templates/pretix_openpos/arrivals.html:65
 msgid "There are no past events yet. Come back once the first one is over."
 msgstr ""
 "Il n’y a pas encore d’événement passé. Revenez une fois le premier terminé."
 
-#: templates/pretix_openpos/arrivals.html:23
-msgid ""
-"No entry scans have been recorded for any past event, so there is nothing to "
-"chart yet."
+#: templates/pretix_openpos/arrivals.html:69
+msgid "Nobody has come in at any past event yet, so there is nothing to chart."
 msgstr ""
-"Aucun scan d’entrée n’a été enregistré sur un événement passé : il n’y a "
-"encore rien à représenter."
+"Personne n’est encore entré à un événement passé : il n’y a rien à "
+"représenter."
 
-#: templates/pretix_openpos/arrivals.html:30
-msgid "entry scans"
-msgstr "scans d’entrée"
+#: templates/pretix_openpos/arrivals.html:76
+msgctxt "arrivals"
+msgid "entries"
+msgstr "entrées"
 
-#: templates/pretix_openpos/arrivals.html:36
+#: templates/pretix_openpos/arrivals.html:82
 msgid "past events"
 msgstr "événements passés"
 
-#: templates/pretix_openpos/arrivals.html:43
+#: templates/pretix_openpos/arrivals.html:89
 #, python-format
-msgid "busiest hour · %(count)s scan (%(share)s %%)"
-msgid_plural "busiest hour · %(count)s scans (%(share)s %%)"
-msgstr[0] "heure la plus chargée · %(count)s scan (%(share)s %%)"
-msgstr[1] "heure la plus chargée · %(count)s scans (%(share)s %%)"
+msgid "busiest hour · %(count)s entry (%(share)s %%)"
+msgid_plural "busiest hour · %(count)s entries (%(share)s %%)"
+msgstr[0] "heure la plus chargée · %(count)s entrée (%(share)s %%)"
+msgstr[1] "heure la plus chargée · %(count)s entrées (%(share)s %%)"
 
-#: templates/pretix_openpos/arrivals.html:56
+#: templates/pretix_openpos/arrivals.html:102
 #, python-format
-msgid "quietest active hour · %(count)s scan"
-msgid_plural "quietest active hour · %(count)s scans"
-msgstr[0] "heure active la plus calme · %(count)s scan"
-msgstr[1] "heure active la plus calme · %(count)s scans"
+msgid "quietest active hour · %(count)s entry"
+msgid_plural "quietest active hour · %(count)s entries"
+msgstr[0] "heure active la plus calme · %(count)s entrée"
+msgstr[1] "heure active la plus calme · %(count)s entrées"
 
-#: templates/pretix_openpos/arrivals.html:69
-msgid "Entry scans by hour of day"
-msgstr "Scans d’entrée par heure de la journée"
+#: templates/pretix_openpos/arrivals.html:115
+msgid "Entries by hour of day"
+msgstr "Entrées par heure de la journée"
 
-#: templates/pretix_openpos/arrivals.html:72
-msgid "Entry scans by hour of day, all past events"
-msgstr "Scans d’entrée par heure de la journée, tous événements passés"
+#: templates/pretix_openpos/arrivals.html:118
+msgid "Entries by hour of day, all past events"
+msgstr "Entrées par heure de la journée, tous événements passés"
 
-#: templates/pretix_openpos/arrivals.html:95
+#: templates/pretix_openpos/arrivals.html:141
+#: templates/pretix_openpos/event_arrivals.html:175
 msgid "Show as a table"
 msgstr "Afficher sous forme de tableau"
 
-#: templates/pretix_openpos/arrivals.html:99
+#: templates/pretix_openpos/arrivals.html:145
 msgid "Hour"
 msgstr "Heure"
 
-#: templates/pretix_openpos/arrivals.html:100
-#: templates/pretix_openpos/arrivals.html:125
-msgid "Entry scans"
-msgstr "Scans d’entrée"
+#: templates/pretix_openpos/arrivals.html:146
+msgctxt "arrivals"
+msgid "Entries"
+msgstr "Entrées"
 
-#: templates/pretix_openpos/arrivals.html:101
+#: templates/pretix_openpos/arrivals.html:147
 msgid "Share"
 msgstr "Part"
-
-#: templates/pretix_openpos/arrivals.html:119
-msgid "Per event"
-msgstr "Par événement"
-
-#: templates/pretix_openpos/arrivals.html:123
-msgid "Event"
-msgstr "Événement"
-
-#: templates/pretix_openpos/arrivals.html:124
-#: templates/pretix_openpos/sales.html:99
-#: templates/pretix_openpos/sales.html:157
-#: templates/pretix_openpos/sales.html:205
-#: templates/pretix_openpos/sales.html:267
-#: templates/pretix_openpos/sales.html:461
-msgid "Date"
-msgstr "Date"
-
-#: templates/pretix_openpos/arrivals.html:126
-msgid "Busiest hour"
-msgstr "Heure la plus chargée"
 
 #: templates/pretix_openpos/categories.html:8
 msgid ""
@@ -1877,6 +1940,212 @@ msgstr ""
 "href=\"%(url)s\">Appareils de caisse</a>. Deux tablettes d’un même bar "
 "peuvent partager une caisse."
 
+#: templates/pretix_openpos/event_arrivals.html:29
+msgctxt "arrivals"
+msgid "Check-in list"
+msgstr "Liste d’enregistrement"
+
+#: templates/pretix_openpos/event_arrivals.html:36
+msgctxt "arrivals"
+msgid "Show"
+msgstr "Afficher"
+
+#: templates/pretix_openpos/event_arrivals.html:42
+msgid "This event has no check-in list, so nobody can be counted in."
+msgstr ""
+"Cet événement n’a pas de liste d’enregistrement : personne ne peut y être "
+"compté."
+
+#: templates/pretix_openpos/event_arrivals.html:46
+#, python-format
+msgid ""
+"Admission tickets on the check-in list “%(list)s”, counted as the door "
+"screen counts them: every door and every till. A ticket sold at a till "
+"counts from the moment it was sold, which is when the till lets its buyer in."
+msgstr ""
+"Billets d’entrée de la liste « %(list)s », comptés comme sur l’écran de la "
+"porte : toutes portes et caisses confondues. Un billet vendu en caisse "
+"compte à l’heure de sa vente, celle où la caisse fait entrer son acheteur."
+
+#: templates/pretix_openpos/event_arrivals.html:51
+#, python-format
+msgid "Updated at %(time)s."
+msgstr "Mis à jour à %(time)s."
+
+#: templates/pretix_openpos/event_arrivals.html:52
+msgctxt "arrivals"
+msgid "Refresh"
+msgstr "Actualiser"
+
+#: templates/pretix_openpos/event_arrivals.html:61
+#, python-format
+msgid "of %(expected)s ticket expected · %(percent)s %%"
+msgid_plural "of %(expected)s tickets expected · %(percent)s %%"
+msgstr[0] "sur %(expected)s billet attendu · %(percent)s %%"
+msgstr[1] "sur %(expected)s billets attendus · %(percent)s %%"
+
+#: templates/pretix_openpos/event_arrivals.html:67
+msgid "no admission ticket sold"
+msgstr "aucun billet d’entrée vendu"
+
+#: templates/pretix_openpos/event_arrivals.html:74
+msgid "No-shows"
+msgstr "Pas venus"
+
+#: templates/pretix_openpos/event_arrivals.html:74
+msgid "Not arrived yet"
+msgstr "Pas encore arrivés"
+
+#: templates/pretix_openpos/event_arrivals.html:78
+#, python-format
+msgid "%(percent)s %% of the tickets"
+msgstr "%(percent)s %% des billets"
+
+#: templates/pretix_openpos/event_arrivals.html:90
+#, python-format
+msgid "%(count)s arrival in a quarter of an hour"
+msgid_plural "%(count)s arrivals in a quarter of an hour"
+msgstr[0] "%(count)s arrivée en un quart d’heure"
+msgstr[1] "%(count)s arrivées en un quart d’heure"
+
+#: templates/pretix_openpos/event_arrivals.html:96
+msgid "nobody has come in yet"
+msgstr "personne n’est encore entré"
+
+#: templates/pretix_openpos/event_arrivals.html:102
+#: templates/pretix_openpos/event_arrivals.html:248
+msgctxt "arrivals"
+msgid "Refused"
+msgstr "Refusés"
+
+#: templates/pretix_openpos/event_arrivals.html:106
+#, python-format
+msgid "including %(count)s “%(reason)s”"
+msgstr "dont %(count)s « %(reason)s »"
+
+#: templates/pretix_openpos/event_arrivals.html:111
+msgid "no ticket turned away at the door"
+msgstr "aucun billet refusé à la porte"
+
+#: templates/pretix_openpos/event_arrivals.html:118
+#: templates/pretix_openpos/event_arrivals.html:218
+msgctxt "arrivals"
+msgid "On site"
+msgstr "Sur place"
+
+#: templates/pretix_openpos/event_arrivals.html:120
+#, python-format
+msgid "%(exited)s scanned out · %(fullest)s at the fullest, at %(time)s"
+msgid_plural "%(exited)s scanned out · %(fullest)s at the fullest, at %(time)s"
+msgstr[0] "%(exited)s ressorti · au plus fort %(fullest)s, à %(time)s"
+msgstr[1] "%(exited)s ressortis · au plus fort %(fullest)s, à %(time)s"
+
+#: templates/pretix_openpos/event_arrivals.html:134
+msgid "Arrivals by quarter of an hour"
+msgstr "Arrivées par quart d’heure"
+
+#: templates/pretix_openpos/event_arrivals.html:136
+msgid "Arrivals by half hour"
+msgstr "Arrivées par demi-heure"
+
+#: templates/pretix_openpos/event_arrivals.html:148
+#, python-format
+msgid "%(count)s arrival on %(date)s, over time"
+msgid_plural "%(count)s arrivals on %(date)s, over time"
+msgstr[0] "%(count)s arrivée le %(date)s, au fil de la soirée"
+msgstr[1] "%(count)s arrivées le %(date)s, au fil de la soirée"
+
+#: templates/pretix_openpos/event_arrivals.html:179
+msgctxt "arrivals"
+msgid "Time"
+msgstr "Heure"
+
+#: templates/pretix_openpos/event_arrivals.html:185
+msgid "Total so far"
+msgstr "Cumul"
+
+#: templates/pretix_openpos/event_arrivals.html:207
+msgid "Nobody has been let in yet, so there is nothing to chart."
+msgstr "Personne n’est encore entré : il n’y a rien à représenter."
+
+#: templates/pretix_openpos/event_arrivals.html:213
+msgctxt "arrivals"
+msgid "By product"
+msgstr "Par produit"
+
+#: templates/pretix_openpos/event_arrivals.html:217
+msgctxt "arrivals"
+msgid "Product"
+msgstr "Produit"
+
+#: templates/pretix_openpos/event_arrivals.html:242
+msgid "Scans for this event, by device"
+msgstr "Scans de l’événement, par appareil"
+
+#: templates/pretix_openpos/event_arrivals.html:246
+msgctxt "arrivals"
+msgid "Device"
+msgstr "Appareil"
+
+#: templates/pretix_openpos/event_arrivals.html:249
+msgctxt "arrivals"
+msgid "Offline"
+msgstr "Hors ligne"
+
+#: templates/pretix_openpos/event_arrivals.html:259
+msgctxt "arrivals"
+msgid "Back office"
+msgstr "Back-office"
+
+#: templates/pretix_openpos/event_arrivals.html:267
+msgid "No ticket has been scanned for this event yet."
+msgstr "Aucun billet n’a encore été scanné pour cet événement."
+
+#: templates/pretix_openpos/event_arrivals.html:273
+msgid "Every door"
+msgstr "Toutes les portes"
+
+#: templates/pretix_openpos/event_arrivals.html:282
+msgid ""
+"Offline: let in with no network, sent afterwards. pretix marks them as "
+"offline scans."
+msgstr ""
+"Hors ligne : entrés sans réseau, envoyés ensuite. pretix les marque comme "
+"scans hors ligne."
+
+#: templates/pretix_openpos/event_arrivals.html:283
+msgid "A ticket sold at a till is not a scan, and is not counted here."
+msgstr "Un billet vendu en caisse n’est pas un scan et n’est pas compté ici."
+
+#: templates/pretix_openpos/event_arrivals.html:289
+msgid "Refusals by reason"
+msgstr "Refus par motif"
+
+#: templates/pretix_openpos/event_arrivals.html:293
+msgctxt "arrivals"
+msgid "Reason"
+msgstr "Motif"
+
+#: templates/pretix_openpos/event_arrivals.html:294
+msgctxt "arrivals"
+msgid "Scans"
+msgstr "Scans"
+
+#: templates/pretix_openpos/event_arrivals.html:310
+msgid "No ticket turned away."
+msgstr "Aucun billet refusé."
+
+#: templates/pretix_openpos/event_arrivals.html:320
+#, python-format
+msgid "%(count)s scan of a product that admits nobody is left out."
+msgid_plural "%(count)s scans of products that admit nobody are left out."
+msgstr[0] "%(count)s scan d’un produit sans entrée n’est pas compté."
+msgstr[1] "%(count)s scans de produits sans entrée ne sont pas comptés."
+
+#: templates/pretix_openpos/event_arrivals.html:326
+msgid "See the list in pretix"
+msgstr "Voir la liste dans pretix"
+
 #: templates/pretix_openpos/payment_control.html:10
 #: templates/pretix_openpos/sales.html:464
 msgid "Cashier"
@@ -1949,6 +2218,14 @@ msgstr ""
 "ressaisissez la vente. Un paiement « toujours en attente » a été laissé "
 "ouvert par une caisse qui a cessé d’interroger — vérifiez dans SumUp s’il "
 "est passé avant de faire l’un ou l’autre."
+
+#: templates/pretix_openpos/sales.html:99
+#: templates/pretix_openpos/sales.html:157
+#: templates/pretix_openpos/sales.html:205
+#: templates/pretix_openpos/sales.html:267
+#: templates/pretix_openpos/sales.html:461
+msgid "Date"
+msgstr "Date"
 
 #: templates/pretix_openpos/sales.html:101
 msgid "State"
@@ -2412,3 +2689,23 @@ msgstr[1] ""
 #: views.py:803
 msgid "Every sale pretix cancelled is already in the journal."
 msgstr "Toutes les ventes annulées dans pretix sont déjà au journal."
+
+#, python-format
+#~ msgid "busiest hour · %(count)s scan (%(share)s %%)"
+#~ msgid_plural "busiest hour · %(count)s scans (%(share)s %%)"
+#~ msgstr[0] "heure la plus chargée · %(count)s scan (%(share)s %%)"
+#~ msgstr[1] "heure la plus chargée · %(count)s scans (%(share)s %%)"
+
+#, python-format
+#~ msgid "quietest active hour · %(count)s scan"
+#~ msgid_plural "quietest active hour · %(count)s scans"
+#~ msgstr[0] "heure active la plus calme · %(count)s scan"
+#~ msgstr[1] "heure active la plus calme · %(count)s scans"
+
+#, python-brace-format
+#~ msgid ""
+#~ "The drawer “{name}” has been opened before, so its history stays. Rename "
+#~ "it instead."
+#~ msgstr ""
+#~ "La caisse espèces « {name} » a déjà été ouverte : son historique reste. "
+#~ "Renommez-la plutôt."

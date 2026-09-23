@@ -93,3 +93,90 @@
 .op-tile .op-cap {
     color: #777;
 }
+
+/* -- One event's arrivals ------------------------------------------------ */
+
+/* Four tiles in a row on a laptop, five when people are scanned out, two per
+   row on a phone. Flex rather than the grid's columns, because the fifth tile
+   comes and goes with the data. */
+.op-tiles {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0 16px;
+}
+
+.op-tiles .op-tile {
+    flex: 1 1 170px;
+}
+
+.op-tiles .op-name {
+    font-weight: 600;
+}
+
+.op-tiles .op-cap {
+    font-size: 12px;
+}
+
+.op-filter {
+    margin-bottom: 16px;
+}
+
+.op-filter label {
+    margin-right: 6px;
+}
+
+.op-filter select {
+    margin-right: 14px;
+}
+
+/* The two ways a ticket was sold. Checked as a pair for colour blindness and
+   against the white panel: pretix's own purple, and an orange far from it for
+   every kind of colour vision. Fixed rather than read from the brand colour,
+   so an organizer's own theme cannot bring the two together. */
+.op-arrivals .op-bar-ahead,
+.op-arrivals .op-bar-all {
+    fill: #8e44b3;
+}
+
+.op-arrivals .op-bar-till {
+    fill: #eb6834;
+}
+
+.op-legend {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 8px;
+    color: #555;
+}
+
+.op-legend li {
+    display: inline-block;
+    margin-right: 18px;
+}
+
+.op-key {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    margin-right: 6px;
+    vertical-align: -1px;
+}
+
+.op-key-ahead {
+    background: #8e44b3;
+}
+
+.op-key-till {
+    background: #eb6834;
+}
+
+.op-arrivals .op-quarters-table {
+    max-width: 560px;
+    margin-top: 10px;
+}
+
+.op-note {
+    color: #777;
+    font-size: 12px;
+}

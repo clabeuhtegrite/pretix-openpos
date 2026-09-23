@@ -42,6 +42,12 @@ urlpatterns = [
         views.CatchUpView.as_view(),
         name="sales.catch_up",
     ),
+    # One evening's arrivals, next to its takings: who came in, and when.
+    re_path(
+        r"^control/event/(?P<organizer>[^/]+)/(?P<event>[^/]+)/openpos/arrivals/$",
+        arrivals.EventArrivalsView.as_view(),
+        name="event_arrivals",
+    ),
     # Organizer-level, unlike the screens above: "when do people arrive?" is a
     # question about all past events at once, not about any single one.
     re_path(

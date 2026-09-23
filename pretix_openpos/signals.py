@@ -7,6 +7,7 @@ from pretix.base.signals import (
 )
 from pretix.control.signals import nav_event, nav_organizer
 
+from .arrivals import EventArrivalsView
 from .channels import PosSalesChannelType
 from .drawer_views import can_read_drawers
 from .payment import OpenPosCardProvider, OpenPosCashProvider
@@ -67,13 +68,13 @@ def openpos_order_reactivated(sender, order, **kwargs):
 @receiver(nav_event, dispatch_uid="openpos_nav_event")
 def openpos_nav_event(sender, request=None, **kwargs):
     """
-    The event's two Open POS screens, in the event's own sidebar.
+    The event's Open POS screens, in the event's own sidebar.
 
     They used to be declared only as ``navigation_links`` on the plugin, and
     pretix shows those nowhere but in the "Go to" menu of the plugin's card,
-    under Settings → Plugins. That is a settings page, and one of the two is the
-    journal an organiser opens at the end of every evening, with the drawer
-    counted.
+    under Settings → Plugins. That is a settings page, and two of them are what
+    an organiser opens at the end of every evening: the journal, with the
+    drawer counted, and who came in.
 
     Each link is shown to whoever may open the page behind it, asked with the
     permission that page's own view enforces rather than a copy of it: a link
@@ -92,6 +93,7 @@ def openpos_nav_event(sender, request=None, **kwargs):
         for label, name, view in (
             (_("Who sells what"), "categories", CategoriesView),
             (_("Sales"), "sales", SalesView),
+            (_("Arrivals"), "event_arrivals", EventArrivalsView),
         )
         if request.user.has_event_permission(
             request.organizer, request.event, view.permission, request=request

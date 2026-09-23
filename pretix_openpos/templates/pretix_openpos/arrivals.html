@@ -10,7 +10,53 @@
 
     <h1>{% trans "Arrivals" %}</h1>
     <p class="text-muted">
-        {% trans "Successful entry scans across all past events of this organizer, by hour of day — each event counted on its own local clock. Automatic check-ins and test-mode orders are left out, so this is people actually walking through the door." %}
+        {% trans "Who came in at each event, and at what time people arrive across every evening that is over." %}
+    </p>
+
+    <div class="panel panel-default">
+        <div class="panel-heading">{% trans "Per event" %}</div>
+        <table class="table table-condensed table-hover">
+            <thead>
+            <tr>
+                <th>{% trans "Event" context "arrivals" %}</th>
+                <th>{% trans "Date" context "arrivals" %}</th>
+                <th class="text-right">{% trans "Admitted" context "arrivals" %}</th>
+                <th class="text-right">{% trans "Expected" context "arrivals" %}</th>
+                <th class="text-right">%</th>
+                <th class="text-right">{% trans "Sold on site" context "arrivals" %}</th>
+                <th class="text-right">{% trans "Busiest quarter of an hour" %}</th>
+            </tr>
+            </thead>
+            <tbody>
+            {% for row in evening_rows %}
+                <tr>
+                    <td>
+                        <a href="{% url "plugins:pretix_openpos:event_arrivals" organizer=request.organizer.slug event=row.event.slug %}{% if row.subevent %}?subevent={{ row.subevent.pk }}{% endif %}">{{ row.subevent.name|default:row.event.name }}</a>
+                        {% if not row.over %}<span class="label label-success">{% trans "on now" %}</span>{% endif %}
+                    </td>
+                    <td>{% if row.subevent %}{{ row.subevent.date_from|date:"SHORT_DATE_FORMAT" }}{% else %}{{ row.event.date_from|date:"SHORT_DATE_FORMAT" }}{% endif %}</td>
+                    {% if row.expected is None %}
+                        <td colspan="5" class="text-muted">{% trans "no check-in list" %}</td>
+                    {% else %}
+                        <td class="text-right"><strong>{{ row.entered }}</strong></td>
+                        <td class="text-right">{{ row.expected }}</td>
+                        <td class="text-right">{% if row.percent is not None %}{{ row.percent }} %{% else %}—{% endif %}</td>
+                        <td class="text-right">{{ row.till }}</td>
+                        <td class="text-right">
+                            {% if row.rush %}{{ row.rush }} <span class="text-muted">· {{ row.rush_count }}</span>{% else %}—{% endif %}
+                        </td>
+                    {% endif %}
+                </tr>
+            {% empty %}
+                <tr><td colspan="7" class="text-muted">{% trans "No event has begun yet." %}</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <h3>{% trans "Hour of arrival, every evening that is over" %}</h3>
+    <p class="text-muted">
+        {% trans "Every entry at every past event of this organizer, at a door or at a till, by hour of day — each event counted on its own local clock. Automatic check-ins and test-mode orders are left out, so this is people actually walking through the door." %}
     </p>
 
     {% if not events_count %}
@@ -19,14 +65,14 @@
         </div>
     {% elif not total %}
         <div class="alert alert-info">
-            {% trans "No entry scans have been recorded for any past event, so there is nothing to chart yet." %}
+            {% trans "Nobody has come in at any past event yet, so there is nothing to chart." %}
         </div>
     {% else %}
         <div class="row op-arrivals">
             <div class="col-sm-3 col-xs-6">
                 <div class="panel panel-default op-tile"><div class="panel-body">
                     <div class="op-num">{{ total }}</div>
-                    <div class="op-cap">{% trans "entry scans" %}</div>
+                    <div class="op-cap">{% trans "entries" context "arrivals" %}</div>
                 </div></div>
             </div>
             <div class="col-sm-3 col-xs-6">
@@ -40,9 +86,9 @@
                     <div class="op-num op-num-time">{{ peak.label }}</div>
                     <div class="op-cap">
                         {% blocktrans trimmed count count=peak.count with share=peak.share %}
-                            busiest hour · {{ count }} scan ({{ share }} %)
+                            busiest hour · {{ count }} entry ({{ share }} %)
                         {% plural %}
-                            busiest hour · {{ count }} scans ({{ share }} %)
+                            busiest hour · {{ count }} entries ({{ share }} %)
                         {% endblocktrans %}
                     </div>
                 </div></div>
@@ -53,9 +99,9 @@
                         <div class="op-num op-num-time">{{ quiet.label }}</div>
                         <div class="op-cap">
                             {% blocktrans trimmed count count=quiet.count %}
-                                quietest active hour · {{ count }} scan
+                                quietest active hour · {{ count }} entry
                             {% plural %}
-                                quietest active hour · {{ count }} scans
+                                quietest active hour · {{ count }} entries
                             {% endblocktrans %}
                         </div>
                     </div></div>
@@ -65,10 +111,10 @@
 
         <div class="op-arrivals">
             <div class="panel panel-default">
-                <div class="panel-heading">{% trans "Entry scans by hour of day" %}</div>
+                <div class="panel-heading">{% trans "Entries by hour of day" %}</div>
                 <div class="panel-body">
                     <svg viewBox="0 0 {{ chart.width }} {{ chart.height }}" role="img" aria-labelledby="op-arrivals-svg-title">
-                        <title id="op-arrivals-svg-title">{% trans "Entry scans by hour of day, all past events" %}</title>
+                        <title id="op-arrivals-svg-title">{% trans "Entries by hour of day, all past events" %}</title>
                         {% for tick in chart.yticks %}
                             <line class="op-grid" x1="{{ chart.plot_left }}" x2="{{ chart.plot_right }}" y1="{{ tick.y }}" y2="{{ tick.y }}"/>
                             <text class="op-ticklabel" x="{{ chart.ylabel_x }}" y="{{ tick.y }}" dy="3" text-anchor="end">{{ tick.label }}</text>
@@ -96,7 +142,7 @@
                             <thead>
                             <tr>
                                 <th>{% trans "Hour" %}</th>
-                                <th class="text-right">{% trans "Entry scans" %}</th>
+                                <th class="text-right">{% trans "Entries" context "arrivals" %}</th>
                                 <th class="text-right">{% trans "Share" %}</th>
                             </tr>
                             </thead>
@@ -114,31 +160,6 @@
                 </div>
             </div>
 
-            <div class="panel panel-default">
-                <div class="panel-heading">{% trans "Per event" %}</div>
-                <table class="table table-condensed table-hover">
-                    <thead>
-                    <tr>
-                        <th>{% trans "Event" %}</th>
-                        <th>{% trans "Date" %}</th>
-                        <th class="text-right">{% trans "Entry scans" %}</th>
-                        <th class="text-right">{% trans "Busiest hour" %}</th>
-                    </tr>
-                    </thead>
-                    <tbody>
-                    {% for row in event_rows %}
-                        <tr>
-                            <td>
-                                <a href="{% url "control:event.index" organizer=request.organizer.slug event=row.event.slug %}">{{ row.event.name }}</a>
-                            </td>
-                            <td>{{ row.event.date_from|date:"SHORT_DATE_FORMAT" }}</td>
-                            <td class="text-right">{{ row.count }}</td>
-                            <td class="text-right">{{ row.peak|default:"—" }}</td>
-                        </tr>
-                    {% endfor %}
-                    </tbody>
-                </table>
-            </div>
         </div>
     {% endif %}
 {% endblock %}
