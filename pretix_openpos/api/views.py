@@ -3,7 +3,7 @@ from datetime import datetime, time, timedelta
 from decimal import Decimal
 
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Exists, F, OuterRef, Q, Sum
+from django.db.models import Count, Exists, F, OuterRef, Q
 from django.utils.timezone import make_aware, now
 from django.utils.translation import gettext_lazy as _
 from django_scopes import scopes_disabled
@@ -162,8 +162,9 @@ BUSINESS_DAY_STARTS_AT = time(6, 0)
 
 def start_of_business_day(event, at=None):
     """
-    The moment the takings count from: 6 am on the day that night began.
+    The start of the night ``at`` belongs to: 6 am on the day that night began.
 
+    What sorts the takings into evenings, and a series' sales into its dates.
     ``at`` is the moment being asked about, defaulting to this one. A sale
     replayed the next morning has to be placed in the night it was rung up in,
     not the one it arrives in.
@@ -2147,103 +2148,56 @@ class OpenPosViewSet(viewsets.ViewSet):
     @action(detail=False, methods=["get"], url_path="summary", url_name="summary")
     def summary(self, request, **kwargs):
         """
-        Running total for the current till day, for the calling till and overall.
+        What the event has taken, for the calling till and overall, in detail.
 
-        This is the lightweight alternative to a full cash session: no opening
-        float, no blind count, just what has gone through since the day began —
-        at six in the morning, so a night that crosses midnight stays one figure
-        — for a volunteer to reconcile the drawer at the end of it.
+        The event, not the day. A till day that began at six in the morning
+        was the first answer to an evening crossing midnight, and it was still
+        the wrong unit: the question at closing time is what the evening took,
+        and the evening is the event — or, in a series, the date the till is
+        selling, which :func:`evening_subevent` picks exactly as every sale
+        does. A reversal lands on the evening of the sale it reverses, since it
+        copies that sale's lines, so correcting last week's order corrects last
+        week's figures and leaves tonight's alone.
+
+        Figures only, and not a cash session: no float, no count, no drawer.
+        What each drawer should hold is the till session's job. This is the
+        event as a whole, broken down every way it is read — by payment type,
+        by category and product, with the deposits apart, by device, and by
+        evening when the event spans several — from one pass over the journal.
         """
+        from ..takings import journal_rows, summarise
+
         event = request.event
         device = request.auth if isinstance(request.auth, Device) else None
+        subevent = evening_subevent(event)
 
-        since = start_of_business_day(event)
-        sales = PosSale.objects.filter(event=event, datetime__gte=since)
-
-        # Reversals written tonight of sales rung up on an earlier day.
-        #
-        # Their money nets off below and that is RIGHT: the cash physically left
-        # this drawer tonight, so the figure to count against still has to
-        # include it. What was wrong was that it did so invisibly — a volunteer
-        # saw a takings line quietly short by thirty euros with nothing on
-        # screen to say why, and no way to tell it from a miscount. So the
-        # arithmetic is left alone and the amount is reported beside it.
-        earlier_seqs = set(
-            PosSale.objects.filter(event=event, datetime__lt=since).values_list(
-                "seq", flat=True
-            )
-        )
-
-        def from_earlier_days(qs):
-            rows = qs.filter(
-                kind=PosSale.KIND_CANCELLATION, cancels_seq__in=earlier_seqs
-            )
-            amount = rows.aggregate(total=Sum("total"))["total"] or Decimal("0.00")
-            return {
-                "count": rows.count(),
-                # Negative, like the rows themselves: this is money that left.
-                "total": str(amount.quantize(Decimal("0.01"))),
-            }
-
-        def totals(qs):
-            # Two aggregate queries per bucket, instead of fetching every row
-            # of the night to add it up in Python.
-            kinds = {
-                row["kind"]: row["n"]
-                for row in qs.order_by().values("kind").annotate(n=Count("pk"))
-            }
-            amounts = {
-                # Quantized because SQLite hands Sum() back with the trailing
-                # zeros gone — "50" where PostgreSQL says "50.00" — and this
-                # string is API surface.
-                row["payment_type"]: (row["amount"] or Decimal("0.00")).quantize(Decimal("0.01"))
-                for row in qs.order_by().values("payment_type").annotate(amount=Sum("total"))
-            }
-            result = {
-                # Sales, not journal lines: a cancellation is not a sale, and
-                # counting it as one would say six when four customers were
-                # served. Its money is another matter — see below.
-                "count": kinds.get(PosSale.KIND_SALE, 0),
-                "cancellations": kinds.get(PosSale.KIND_CANCELLATION, 0),
-                # Same reasoning: a returned cup is not a sale, and the money
-                # it took out of the drawer is already netted off below.
-                "deposit_refunds": kinds.get(PosSale.KIND_DEPOSIT_REFUND, 0),
-            }
-            grand = Decimal("0.00")
-            for payment_type in (PosSale.PAYMENT_CASH, PosSale.PAYMENT_CARD):
-                # Cancellations and deposit refunds carry a negative total, so
-                # the amounts net out here on their own: this is what the
-                # drawer should hold.
-                amount = amounts.get(payment_type, Decimal("0.00"))
-                result[payment_type] = str(amount)
-                grand += amount
-            result["total"] = str(grand)
-            # Included in the figures above rather than excluded from them, and
-            # named so the volunteer counting the drawer knows what they are
-            # counting. Absent when there are none, which is most nights.
-            earlier = from_earlier_days(qs)
-            result["earlier_days"] = earlier if earlier["count"] else None
-            return result
-
-        # Test-mode money never existed, so it must not be in the figure a
-        # volunteer reconciles the drawer against. It stays in the journal —
-        # which is append-only and survives the orders being purged — and is
-        # reported separately rather than silently dropped.
-        real = sales.filter(testmode=False)
-        # Computed rather than probed with a prior exists(): totals() already
-        # counts the rows per kind, so the emptiness is in the answer it hands
-        # back and a second round trip to ask about it buys nothing.
-        test = totals(sales.filter(testmode=True))
-        had_test = bool(
-            test["count"] or test["cancellations"] or test["deposit_refunds"]
+        report = summarise(
+            event,
+            journal_rows(PosSale.objects.filter(event=event), subevent),
+            device=device,
+            night_of=lambda moment: start_of_business_day(event, moment).date(),
         )
 
         return Response(
             {
-                "since": since.isoformat(),
-                "device": totals(real.filter(device=device)) if device else None,
-                "event": totals(real),
-                "testmode": test if had_test else None,
+                "scope": {
+                    "event": str(event.name),
+                    "series": event.has_subevents,
+                    "subevent": (
+                        {
+                            "id": subevent.pk,
+                            "name": str(subevent.name),
+                            "date_from": subevent.date_from.isoformat(),
+                        }
+                        if subevent is not None
+                        else None
+                    ),
+                },
+                # Kept for a till still running the build before this one,
+                # until it is next opened: it prints this as "since".
+                "since": report["first"] or now().isoformat(),
+                "computed_at": now().isoformat(),
+                **report,
             }
         )
 

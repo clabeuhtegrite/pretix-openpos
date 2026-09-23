@@ -35,6 +35,7 @@ Paramètres d'URL, cumulables :
 | `update=1` | le serveur annonce une version plus récente |
 | `events=one` / `blocked` / `mixed` | les événements que l’appareil atteint : le seul où il est ; plus un sans Open POS ; deux ouverts plus un sans Open POS (défaut : deux ouverts) |
 | `load=refused` / `series` | l’événement de l’appareil ne s’ouvre pas : Open POS désactivé dessus, ou une série sans date ce soir |
+| `takings=empty` / `nights` / `series` | la recette de l’événement (Réglages → Détail de la recette) : rien de vendu ; un festival sur deux soirées, avec une vente du back-office ; une date d’une série (défaut : une soirée complète) |
 
 `browser=1` est nécessaire : sans lui l'app affiche l'écran d'installation.
 

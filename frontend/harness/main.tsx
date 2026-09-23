@@ -6,6 +6,7 @@
  *               ?offline=1  ?queue=3  ?scans=3  ?testmode=1  ?update=1  ?photos=1
  *               ?terminal=waiting|paid|failed|stalled|reprice  ?checkout=fail
  *               ?events=one|blocked|mixed  ?load=refused|series  ?redeem=fail
+ *               ?takings=empty|nights|series
  */
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
@@ -134,7 +135,9 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   // ?photos=1 met des photos sur un produit sur deux.
   if (url.includes("/openpos/catalog/"))
     return stuck(url) ?? json(q.get("photos") ? fx.withPhotos(fx.catalog) : fx.catalog);
-  if (url.includes("/openpos/summary/")) return json(fx.summary);
+  // ?takings= : empty (rien de vendu), nights (deux soirées), series (une date).
+  if (url.includes("/openpos/summary/"))
+    return json(fx.summary(q.get("takings"), !!q.get("testmode")));
   if (url.includes("/openpos/history/")) return json({ device: fx.pairing.serial, ...fx.history });
   if (url.includes("/openpos/attendance/")) return json(fx.attendance);
   if (url.includes("/openpos/offline/")) return json(fx.offlineSnapshot);

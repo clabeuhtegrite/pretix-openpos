@@ -507,28 +507,92 @@ export interface SyncReport {
 }
 
 export interface Takings {
+  /** Sales, not journal rows: a cancellation or a returned cup is not a customer served. */
   count: number;
-  /** Reversals recorded in the same window; their money is already netted off. */
+  /** Sales reversed; their money is already netted off. */
   cancellations: number;
-  /** Deposits handed back; same story, and equally not a sale. */
-  deposit_refunds?: number;
-  /**
-   * Reversals made in this window of sales rung up on an EARLIER day.
-   *
-   * Their money is netted off the figures below and belongs there — the cash
-   * left this drawer tonight. Named separately because a takings line quietly
-   * short by thirty euros is indistinguishable from a miscount, and the
-   * volunteer counting is the person least able to go and find out. Null on
-   * an ordinary evening.
-   */
-  earlier_days?: { count: number; total: string } | null;
+  /** What those reversals gave back, negative, already in `cash` and `card`. */
+  cancelled_total: string;
+  /** Returns of cups over the counter; same story, and equally not a sale. */
+  deposit_refunds: number;
   cash: string;
   card: string;
   total: string;
 }
 
+/** One product sold, net of what was reversed. */
+export interface TakingsProduct {
+  /** Null only on a line written by hand, never by the till. */
+  item: number | null;
+  variation: number | null;
+  name: string;
+  variation_name: string | null;
+  count: number;
+  total: string;
+}
+
+/** The products of one category, in the shop's order. */
+export interface TakingsCategory {
+  /** Null, and nameless, for the products that have no category. */
+  id: number | null;
+  name: string | null;
+  count: number;
+  total: string;
+  items: TakingsProduct[];
+}
+
+export interface TakingsDevice extends Takings {
+  /** Null for what was written from the back office, which is no device. */
+  name: string | null;
+  serial: string | null;
+  /** The device asking. */
+  current: boolean;
+}
+
+export interface TakingsNight extends Takings {
+  /** The evening, as YYYY-MM-DD: it runs from six in the morning to six the next. */
+  date: string;
+}
+
+/**
+ * The cup deposits, kept out of the products.
+ *
+ * A deposit is money held for whoever brings the cup back, not something the
+ * evening sold; `total` is what is still held.
+ */
+export interface TakingsDeposits {
+  taken: { count: number; total: string };
+  returned: { count: number; total: string };
+  total: string;
+}
+
+/**
+ * What the event has taken, as the server reads it from the journal.
+ *
+ * The event and not the day: for a plain event, everything it ever sold at a
+ * till; for a series, the date being sold. Every section adds up to
+ * `event.total` — the categories, the deposits and `unallocated` between them.
+ */
 export interface SummaryResponse {
-  since: string;
+  scope: {
+    event: string;
+    series: boolean;
+    /** The date of the series these figures are for; null for a plain event. */
+    subevent: { id: number; name: string; date_from: string } | null;
+  };
+  computed_at: string;
   device: Takings | null;
   event: Takings;
+  testmode: Takings | null;
+  categories: TakingsCategory[];
+  deposits: TakingsDeposits | null;
+  /** Money on journal entries that list no product; null on any journal a till wrote. */
+  unallocated: string | null;
+  /** Every device that sold, the biggest first, and the back office last. */
+  devices: TakingsDevice[];
+  /** One line per evening; only worth showing when there are several. */
+  nights: TakingsNight[];
+  /** The first and last sale, by the clock. */
+  first: string | null;
+  last: string | null;
 }

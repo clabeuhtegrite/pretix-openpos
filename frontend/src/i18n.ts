@@ -86,9 +86,10 @@ export const MESSAGES = {
     "done.order": "Order",
     "done.next": "Next customer",
     "done.checkinFailed": "Check-in failed — let the customer in manually.",
-    "summary.title": "Takings today",
-    "summary.thisTill": "This till",
-    "summary.allTills": "All tills",
+    "summary.title": "Takings for the event",
+    "summary.thisTill": "This device",
+    "summary.allTills": "All devices",
+    "summary.detail": "Detail of the takings",
     "summary.sales": "Sales",
     "summary.cash": "Cash",
     "summary.card": "Card",
@@ -197,9 +198,10 @@ export const MESSAGES = {
     "offline.badgeOffline": "Offline · {n}",
     "offline.badgePending": "{n} to send",
     "offline.badgeFailed": "{n} refused",
-    "summary.since": "Since {time} — a till day runs from one morning to the next.",
-    "summary.queued":
-      "Not counted above: {n} sale(s) this till has not been able to send yet, {amount} of them in cash.",
+    "summary.queued.one":
+      "Not counted yet: {n} sale this device has not been able to send, {amount} of it in cash.",
+    "summary.queued.other":
+      "Not counted yet: {n} sales this device has not been able to send, {amount} of them in cash.",
     "summary.failed": "The server could not be asked for the takings.",
     "summary.retry": "Try again",
     "offline.nothingPending": "Nothing waiting to be sent.",
@@ -277,10 +279,35 @@ export const MESSAGES = {
     "history.creditNote": "Credit note {number}",
     "history.alreadyCancelled": "This sale has already been cancelled.",
     "history.notCancellable": "This entry cannot be cancelled from the till.",
-    "summary.cancellations": "{n} cancellations are already netted off these figures.",
-    "summary.depositRefunds": "{n} deposits handed back are already netted off these figures.",
-    "summary.earlierDays":
-      "{amount} of this was paid back tonight on {n} sale(s) from an earlier day. The drawer really is short by that much.",
+    "takings.title": "Takings for the event",
+    "takings.allDates": "all dates of the series",
+    "takings.loading": "Loading…",
+    "takings.empty": "Nothing has been sold at a till for this event yet.",
+    "takings.scope": "Everything the tills sold for this event, cancellations taken off.",
+    "takings.scopeSeries":
+      "Everything the tills sold for this date, cancellations taken off. Each date of the series has takings of its own.",
+    "takings.byProduct": "By product",
+    "takings.product": "Product",
+    "takings.quantity": "Qty",
+    "takings.amount": "Amount",
+    "takings.uncategorised": "No category",
+    "takings.unallocated": "{amount} of the total comes from journal entries that name no product.",
+    "takings.deposits": "Deposits",
+    "takings.depositsTaken": "Taken",
+    "takings.depositsReturned": "Handed back",
+    "takings.depositsBalance": "Balance",
+    "takings.depositsExplain":
+      "Kept apart from the products: a deposit is owed to whoever brings the cup back.",
+    "takings.byDevice": "By device",
+    "takings.byNight": "By evening",
+    "takings.byNightExplain": "An evening runs from six in the morning to six the next morning.",
+    "takings.salesCount.one": "{n} sale",
+    "takings.salesCount.other": "{n} sales",
+    "takings.cancelled.one": "{n} sale cancelled, {amount}: already taken off every figure here.",
+    "takings.cancelled.other": "{n} sales cancelled, {amount}: already taken off every figure here.",
+    "takings.testmode.one": "Test mode, counted nowhere: {n} sale, {amount}.",
+    "takings.testmode.other": "Test mode, counted nowhere: {n} sales, {amount}.",
+    "takings.updated": "Worked out at {time}.",
     "settings.event": "Event",
     "settings.eventHelp": "Switching events empties the basket.",
     "settings.eventOnly":
@@ -379,9 +406,10 @@ export const MESSAGES = {
     "done.order": "Commande",
     "done.next": "Client suivant",
     "done.checkinFailed": "Check-in échoué — faites entrer le client manuellement.",
-    "summary.title": "Recettes du jour",
-    "summary.thisTill": "Cette caisse",
-    "summary.allTills": "Toutes les caisses",
+    "summary.title": "Recette de l’événement",
+    "summary.thisTill": "Cet appareil",
+    "summary.allTills": "Tous les appareils",
+    "summary.detail": "Détail de la recette",
     "summary.sales": "Ventes",
     "summary.cash": "Espèces",
     "summary.card": "Carte",
@@ -491,10 +519,11 @@ export const MESSAGES = {
     "offline.badgeOffline": "Hors ligne · {n}",
     "offline.badgePending": "{n} à envoyer",
     "offline.badgeFailed": "{n} refusé·e·s",
-    "summary.since": "Depuis {time} — une journée de caisse va d'un matin à l'autre.",
-    "summary.queued":
-      "Non compté ci-dessus : {n} vente(s) que cette caisse n'a pas encore pu envoyer, dont {amount} en espèces.",
-    "summary.failed": "Le serveur n'a pas pu être interrogé pour le relevé.",
+    "summary.queued.one":
+      "Pas encore comptée : {n} vente que cet appareil n’a pas pu envoyer, dont {amount} en espèces.",
+    "summary.queued.other":
+      "Pas encore comptées : {n} ventes que cet appareil n’a pas pu envoyer, dont {amount} en espèces.",
+    "summary.failed": "Le serveur n’a pas pu être interrogé pour la recette.",
     "summary.retry": "Réessayer",
     "offline.nothingPending": "Rien en attente d’envoi.",
     "offline.stranded":
@@ -571,10 +600,35 @@ export const MESSAGES = {
     "history.creditNote": "Avoir {number}",
     "history.alreadyCancelled": "Cette vente a déjà été annulée.",
     "history.notCancellable": "Cette écriture ne peut pas être annulée depuis la caisse.",
-    "summary.cancellations": "{n} annulations sont déjà déduites de ces montants.",
-    "summary.depositRefunds": "{n} consignes rendues sont déjà déduites de ces montants.",
-    "summary.earlierDays":
-      "{amount} ont été rendus ce soir sur {n} vente(s) d’un autre jour. Le tiroir est bien inférieur d’autant.",
+    "takings.title": "Recette de l’événement",
+    "takings.allDates": "toutes les dates de la série",
+    "takings.loading": "Chargement…",
+    "takings.empty": "Rien n’a encore été vendu en caisse pour cet événement.",
+    "takings.scope": "Tout ce que les caisses ont vendu pour cet événement, annulations déduites.",
+    "takings.scopeSeries":
+      "Tout ce que les caisses ont vendu pour cette date, annulations déduites. Chaque date de la série a sa propre recette.",
+    "takings.byProduct": "Par produit",
+    "takings.product": "Produit",
+    "takings.quantity": "Qté",
+    "takings.amount": "Montant",
+    "takings.uncategorised": "Sans catégorie",
+    "takings.unallocated": "{amount} du total viennent d’écritures du journal qui ne nomment aucun produit.",
+    "takings.deposits": "Consignes",
+    "takings.depositsTaken": "Prises",
+    "takings.depositsReturned": "Rendues",
+    "takings.depositsBalance": "Solde",
+    "takings.depositsExplain":
+      "À part des produits : une consigne est due à qui rapporte le gobelet.",
+    "takings.byDevice": "Par appareil",
+    "takings.byNight": "Par soirée",
+    "takings.byNightExplain": "Une soirée va de 6 h du matin à 6 h le lendemain.",
+    "takings.salesCount.one": "{n} vente",
+    "takings.salesCount.other": "{n} ventes",
+    "takings.cancelled.one": "{n} vente annulée, {amount} : déjà déduite de tous les montants ici.",
+    "takings.cancelled.other": "{n} ventes annulées, {amount} : déjà déduites de tous les montants ici.",
+    "takings.testmode.one": "Mode test, compté nulle part : {n} vente, {amount}.",
+    "takings.testmode.other": "Mode test, compté nulle part : {n} ventes, {amount}.",
+    "takings.updated": "Calculée à {time}.",
     "settings.event": "Événement",
     "settings.eventHelp": "Changer d’événement vide le panier.",
     "settings.eventOnly":
@@ -615,6 +669,26 @@ export function t(key: MessageKey, params?: Record<string, string | number>): st
     }
   }
   return message;
+}
+
+/** The messages that come as a pair, `.one` and `.other`, named without the suffix. */
+type PluralKey = {
+  [K in MessageKey]: K extends `${infer Base}.one` ? Base : never;
+}[MessageKey];
+
+const pluralRules = new Intl.PluralRules(language);
+
+/**
+ * A message whose wording follows a count: "1 vente", "3 ventes".
+ *
+ * French and English do not agree about nought — "0 vente", "0 sales" — which
+ * is what Intl.PluralRules knows and an `n === 1` gets wrong in one language
+ * or the other. The strings this replaced said "vente(s)", which is a form to
+ * fill in rather than a sentence. `{n}` is the count.
+ */
+export function tn(key: PluralKey, n: number, params?: Record<string, string | number>): string {
+  const form = pluralRules.select(n) === "one" ? "one" : "other";
+  return t(`${key}.${form}` as MessageKey, { n, ...params });
 }
 
 export const locale = language;

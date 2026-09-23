@@ -1864,6 +1864,209 @@ table.takings thead th {
   line-height: 1.4;
 }
 
+/*
+ * ---------- takings ----------
+ *
+ * Wider than every other panel. On a tablet held sideways — the bar — the
+ * products take the left and everything else sits beside them, so the list a
+ * category long does not push the devices and the deposits three screens down.
+ * On a phone held upright — the door — it is one column, read top to bottom.
+ */
+.takings-panel {
+  width: min(1000px, 100%);
+}
+
+.takings-panel h2 {
+  margin-bottom: 4px;
+}
+
+.takings-scope {
+  color: var(--text-dim);
+  margin-bottom: 16px;
+}
+
+/* The figures people ask for, before any detail. The total takes a row of its
+   own on a phone, and the lead on a tablet; cash and card share the rest, two
+   across at most, because "1 391,50 €" three across a phone is cut off. */
+.takings-figures {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.takings-figure {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.takings-figure.is-total {
+  grid-column: 1 / -1;
+}
+
+.takings-figure-label {
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.takings-figure-value {
+  font-size: 19px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.takings-figure.is-total .takings-figure-value {
+  font-size: clamp(34px, 10vw, 46px);
+  font-weight: 900;
+  line-height: 1.1;
+  color: var(--success-text);
+}
+
+.takings-figure-caption {
+  color: var(--text-dim);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.takings-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  column-gap: 36px;
+}
+
+@media (min-width: 900px) {
+  .takings-figures {
+    grid-template-columns: minmax(0, 2fr) repeat(2, minmax(0, 1fr));
+  }
+
+  .takings-figure.is-total {
+    grid-column: auto;
+  }
+
+  .takings-figure-value {
+    font-size: 24px;
+  }
+
+  .takings-columns {
+    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  }
+}
+
+/* Four figures across a phone would be too tight for the amounts, so the
+   tables here are tighter than the takings one they borrow from. */
+.takings-panel table.takings {
+  font-size: 15px;
+}
+
+.takings-panel table.takings th,
+.takings-panel table.takings td {
+  padding: 8px 6px;
+}
+
+.takings-panel table.takings thead th {
+  font-size: 11px;
+}
+
+/* The quantity: as narrow as its digits, so the name keeps the room. */
+.takings-panel table.takings th:nth-child(2),
+.takings-panel table.takings td:nth-child(2) {
+  width: 3.5em;
+}
+
+.takings-panel table.takings td:last-child {
+  white-space: nowrap;
+}
+
+/* A category heads its products, in the same row shape so its figures line up
+   with theirs, and the products sit under it, indented. */
+.takings-category th,
+.takings-category td {
+  padding-top: 16px;
+  font-weight: 800;
+}
+
+.takings-products tbody:first-of-type .takings-category th,
+.takings-products tbody:first-of-type .takings-category td {
+  padding-top: 8px;
+}
+
+.takings-products tbody tr:not(.takings-category) td:first-child {
+  padding-left: 16px;
+}
+
+.takings-panel table.takings tfoot th,
+.takings-panel table.takings tfoot td {
+  border-bottom: none;
+}
+
+.takings-lines {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.takings-line {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.takings-line-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+
+.takings-line-name {
+  font-weight: 700;
+}
+
+.takings-line-meta {
+  color: var(--text-dim);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.takings-line-meta > span {
+  white-space: nowrap;
+}
+
+.takings-line-total {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.takings-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+@media (min-width: 900px) {
+  .takings-actions {
+    flex-direction: row;
+    justify-content: flex-end;
+  }
+
+  .takings-actions .btn {
+    width: auto;
+    min-width: 200px;
+  }
+}
+
 /* ---------- check-in verdict ---------- */
 
 .verdict {
@@ -2009,7 +2212,8 @@ table.takings thead th {
       calc(12px + env(safe-area-inset-bottom)) calc(12px + env(safe-area-inset-left));
   }
 
-  .attendance-panel {
+  .attendance-panel,
+  .takings-panel {
     padding: 18px 14px;
   }
 

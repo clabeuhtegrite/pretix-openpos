@@ -117,7 +117,10 @@ it was written for. Read the scope section before deciding it fits.
   the basket so the corrected order is rung up as a new sale.
 - An **append-only journal**, hash-chained so that editing history after the
   fact is detectable.
-- Per-till and per-cashier takings for the day.
+- **Takings for the event**, on the till and in the back office: cash and
+  card, per till and per cashier, product by product under each category,
+  deposits apart and cancellations netted off. In a series, the takings of
+  the date the till is selling.
 
 ## What it deliberately does not do
 
@@ -222,7 +225,7 @@ If you run pretix in Docker or Kubernetes, [`deploy/Dockerfile`](deploy/Dockerfi
 bakes the plugin into the official image:
 
 ```bash
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.18.1 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.19.0 .
 ```
 
 The PWA bundle is built inside the image, from the tree you are building, so the
