@@ -6,6 +6,7 @@
  *               ?offline=1  ?queue=3  ?scans=3  ?testmode=1  ?update=1  ?photos=1
  *               ?terminal=waiting|paid|failed|stalled|reprice  ?checkout=fail
  *               ?events=one|blocked|mixed  ?load=refused|series  ?redeem=fail
+ *               ?drawer=closed|open|stale|counted|moved
  */
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
@@ -85,6 +86,61 @@ const conf = fx.config({
   ...(q.get("update") ? { version: "99.0.0" } : {}),
 });
 
+// ?drawer= : la caisse espèces de cet appareil, et ce qu'elle a vécu ce soir.
+// « closed » fermée (la dernière soirée s'est finie sur un écart d'un euro) ;
+// « open » ouverte, avec une entrée et une sortie ; « stale » ouverte depuis un
+// autre jour ; « counted » comptée, prête à fermer ; « moved » comptée, puis
+// une vente est passée. Les boutons de l'app la font vraiment changer d'état.
+type DrawerStub = {
+  drawer: typeof fx.drawerInfo;
+  session: ReturnType<typeof fx.drawerSession> | null;
+  last_closed: ReturnType<typeof fx.lastClosed> | null;
+};
+const drawerMode = q.get("drawer");
+const counted = (current: boolean) => ({
+  seq: 4, kind: "count", datetime: new Date(Date.now() - 4 * 60000).toISOString(),
+  amount: "311.50", reason: "", cashier: "Alex", device: "Caisse bar 1",
+  expected: "312.50", difference: "-1.00", current,
+});
+let drawer: DrawerStub | null = drawerMode
+  ? {
+      drawer: fx.drawerInfo,
+      session:
+        drawerMode === "closed"
+          ? null
+          : drawerMode === "stale"
+            ? { ...fx.drawerSession(), stale: true, movements: [], opened_at: new Date(Date.now() - 4 * 86400000).toISOString() }
+            : {
+                ...fx.drawerSession(),
+                count: drawerMode === "counted" ? counted(true) : drawerMode === "moved" ? counted(false) : null,
+              },
+      last_closed: drawerMode === "closed" ? fx.lastClosed() : null,
+    }
+  : null;
+let drawerSeq = 10;
+const drawerBrief = () =>
+  drawer && {
+    id: drawer.drawer.id,
+    name: drawer.drawer.name,
+    open: drawer.session !== null,
+    stale: drawer.session?.stale ?? false,
+  };
+const drawerCash = () => {
+  // Ce que la caisse devrait contenir : fond, ventes espèces, entrées, sorties.
+  const session = drawer?.session;
+  if (!session) return 0;
+  const moves = session.movements.reduce(
+    (sum, m) => sum + (m.kind === "in" ? 1 : -1) * Number(m.amount),
+    0,
+  );
+  return Number(session.opening_float) + Number(fx.drawerSales) + moves;
+};
+const entry = (kind: string, amount: string | null, extra: Record<string, unknown> = {}) => ({
+  seq: ++drawerSeq, kind, datetime: new Date().toISOString(), amount, reason: "",
+  cashier: "Alex", device: fx.pairing.deviceName, ...extra,
+});
+const bodyOf = (init?: RequestInit) => JSON.parse(String(init?.body ?? "{}"));
+
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), {
     status,
@@ -130,11 +186,67 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   // Ce que l'appareil dit de lui à pretix quand sa version a changé. pretix
   // répond par la fiche de l'appareil, que la caisse ne lit pas.
   if (url.includes("/device/update")) return json({ unique_serial: fx.pairing.serial });
-  if (url.includes("/openpos/config/")) return stuck(url) ?? json(conf);
+  if (url.includes("/openpos/config/")) return stuck(url) ?? json({ ...conf, drawer: drawerBrief() });
+  if (url.includes("/openpos/drawer/") && drawer) {
+    const body = bodyOf(init);
+    if (url.includes("/drawer/open/")) {
+      const opened = entry("open", body.amount);
+      drawer = {
+        ...drawer,
+        session: { ...fx.drawerSession(), opened_at: opened.datetime, opening_float: body.amount, movements: [], count: null },
+        last_closed: null,
+      };
+      return json({ ...drawer, entry: opened });
+    }
+    if (url.includes("/drawer/movement/") && drawer.session) {
+      const moved = entry(body.kind, body.amount, { reason: body.reason });
+      drawer.session = { ...drawer.session, movements: [...drawer.session.movements, moved], count: null };
+      return json({ ...drawer, entry: moved });
+    }
+    if (url.includes("/drawer/count/") && drawer.session) {
+      const expected = drawerCash();
+      const made = entry("count", body.amount, {
+        expected: expected.toFixed(2),
+        difference: (Number(body.amount) - expected).toFixed(2),
+      });
+      drawer.session = { ...drawer.session, count: { ...made, current: true } };
+      return json({ ...drawer, entry: made });
+    }
+    if (url.includes("/drawer/close/") && drawer.session) {
+      const count = drawer.session.count as null | { amount: string; difference: string };
+      const closing = entry("close", count ? count.amount : null, { reason: body.reason ?? "" });
+      drawer = {
+        ...drawer,
+        last_closed: {
+          id: drawer.session.id,
+          opened_at: drawer.session.opened_at,
+          closed_at: closing.datetime,
+          cashier: "Alex",
+          amount: count ? count.amount : null,
+          expected: drawerCash().toFixed(2),
+          difference: count ? count.difference : null,
+        } as ReturnType<typeof fx.lastClosed>,
+        session: null,
+      };
+      return json({ ...drawer, entry: closing });
+    }
+    return json(drawer);
+  }
   // ?photos=1 met des photos sur un produit sur deux.
   if (url.includes("/openpos/catalog/"))
     return stuck(url) ?? json(q.get("photos") ? fx.withPhotos(fx.catalog) : fx.catalog);
-  if (url.includes("/openpos/summary/")) return json(fx.summary);
+  // Une caisse avec une caisse espèces ne voit ni ses espèces ni son total.
+  if (url.includes("/openpos/summary/"))
+    return json(
+      drawer
+        ? {
+            ...fx.summary,
+            device: { ...fx.summary.device, cash: null, total: null },
+            event: { ...fx.summary.event, cash: null, total: null },
+            drawer: { name: drawer.drawer.name },
+          }
+        : fx.summary,
+    );
   if (url.includes("/openpos/history/")) return json({ device: fx.pairing.serial, ...fx.history });
   if (url.includes("/openpos/attendance/")) return json(fx.attendance);
   if (url.includes("/openpos/offline/")) return json(fx.offlineSnapshot);
@@ -161,6 +273,12 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if (url.includes("/openpos/terminal/cancel/")) return json({ status: "cancelled" });
   if (url.includes("/openpos/checkout/")) {
+    const sale = bodyOf(init);
+    if (sale.payment_type === "cash" && drawer && (!drawer.session || drawer.session.stale))
+      return json({
+        drawer: ["La caisse espèces de cet appareil n’est pas ouverte. Ouvrez-la sur un fond compté avant d’encaisser ou de rendre des espèces."],
+        code: "drawer_closed",
+      }, 400);
     // ?checkout=fail : la carte a été débitée et la vente ne s'enregistre pas.
     // C'est l'écran que personne ne voit jamais et qu'il faut pouvoir regarder.
     if (q.get("checkout") === "fail")

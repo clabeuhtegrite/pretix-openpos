@@ -1,8 +1,8 @@
 import { markReachable, markUnreachable } from "./connectivity";
 import type {
-  Attendance, AttendeeMatch, CancelResult, Catalog, DeviceDescription, History,
-  InitializeResponse, OfflineSnapshot, Pairing, PosConfig, PosEventList, RedeemResult,
-  SaleResult, SummaryResponse, TerminalPayment,
+  Attendance, AttendeeMatch, CancelResult, Catalog, DeviceDescription, DrawerAnswer,
+  DrawerState, History, InitializeResponse, OfflineSnapshot, Pairing, PosConfig, PosEventList,
+  RedeemResult, SaleResult, SummaryResponse, TerminalPayment,
 } from "./types";
 
 const BASE = "/api/v1";
@@ -264,6 +264,23 @@ export function deviceDescription(): DeviceDescription {
   };
 }
 
+/** A cash count as it travels: the total, and how it was made up when counted note by note. */
+export interface CountPayload {
+  idempotency_key: string;
+  amount: string;
+  /** `{"20.00": 3, "0.50": 4}`; left out when only the total was typed. */
+  denominations?: Record<string, number>;
+  cashier?: string;
+}
+
+function drawerPost(p: Pairing, action: string, body: unknown): Promise<DrawerAnswer> {
+  return request(`/organizers/${p.organizer}/events/${p.event}/openpos/drawer/${action}/`, {
+    method: "POST",
+    body,
+    token: p.token,
+  });
+}
+
 export const api = {
   /** Exchange a one-shot pairing code for a long-lived device token. */
   initialize(initializationToken: string): Promise<InitializeResponse> {
@@ -413,6 +430,60 @@ export const api = {
       body: { idempotency_key: idempotencyKey },
       token: p.token,
     });
+  },
+
+  /**
+   * This till's cash drawer: whether it is open, and what happened to it tonight.
+   *
+   * Never what it should hold: that figure only comes back from a count, once
+   * the count is written down.
+   */
+  drawer(p: Pairing, signal?: AbortSignal): Promise<DrawerState> {
+    return request(`/organizers/${p.organizer}/events/${p.event}/openpos/drawer/`, {
+      token: p.token,
+      signal,
+    });
+  },
+
+  /** Open the drawer on the float just counted into it. */
+  drawerOpen(p: Pairing, payload: CountPayload): Promise<DrawerAnswer> {
+    return drawerPost(p, "open", payload);
+  },
+
+  /** Money put into the open drawer, or taken out of it, other than by a sale. */
+  drawerMovement(
+    p: Pairing,
+    payload: {
+      idempotency_key: string;
+      kind: "in" | "out";
+      amount: string;
+      reason: string;
+      cashier?: string;
+    },
+  ): Promise<DrawerAnswer> {
+    return drawerPost(p, "movement", payload);
+  },
+
+  /** A blind count. The answer carries what the drawer should have held. */
+  drawerCount(p: Pairing, payload: CountPayload): Promise<DrawerAnswer> {
+    return drawerPost(p, "count", payload);
+  },
+
+  /**
+   * End the evening on the count just made — or on none, which the server only
+   * accepts for a drawer left open since an earlier day.
+   */
+  drawerClose(
+    p: Pairing,
+    payload: {
+      idempotency_key: string;
+      count_seq?: number | null;
+      uncounted?: boolean;
+      reason?: string;
+      cashier?: string;
+    },
+  ): Promise<DrawerAnswer> {
+    return drawerPost(p, "close", payload);
   },
 
   summary(p: Pairing): Promise<SummaryResponse> {

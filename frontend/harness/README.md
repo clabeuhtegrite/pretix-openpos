@@ -35,6 +35,7 @@ Paramètres d'URL, cumulables :
 | `update=1` | le serveur annonce une version plus récente |
 | `events=one` / `blocked` / `mixed` | les événements que l’appareil atteint : le seul où il est ; plus un sans Open POS ; deux ouverts plus un sans Open POS (défaut : deux ouverts) |
 | `load=refused` / `series` | l’événement de l’appareil ne s’ouvre pas : Open POS désactivé dessus, ou une série sans date ce soir |
+| `drawer=closed` / `open` / `stale` / `counted` / `moved` | une caisse espèces est attribuée à l’appareil : fermée, ouverte avec une entrée et une sortie, ouverte depuis un autre jour, comptée et prête à fermer, comptée puis une vente passée ; l’ouvrir, la compter et la fermer dans l’app la font vraiment changer d’état |
 
 `browser=1` est nécessaire : sans lui l'app affiche l'écran d'installation.
 

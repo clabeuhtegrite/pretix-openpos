@@ -473,3 +473,32 @@ describe("money paid back on another day's sale", () => {
     expect(screen.queryByText(/earlier day|autre jour/)).toBeNull();
   });
 });
+
+describe("a till with a cash drawer", () => {
+  // Its cash is counted blind when the drawer closes, so the figure the count
+  // would be checked against is not handed out one tap away from the count.
+  const blind: SummaryResponse = {
+    since: "2026-08-16T04:00:00Z",
+    device: { count: 12, cancellations: 0, cash: null, card: "80.00", total: null },
+    event: { count: 30, cancellations: 0, cash: null, card: "200.00", total: null },
+    drawer: { name: "Bar" },
+  };
+
+  it("shows a dash where the cash and the total would be, and says why", async () => {
+    summary.mockResolvedValue(blind);
+    const { container } = show();
+
+    expect(await screen.findByText(t("summary.drawerHidden", { name: "Bar" }))).toBeDefined();
+    const table = container.querySelector("table.takings") as HTMLElement;
+    expect(within(table).getAllByText("—")).toHaveLength(4);
+    expect(within(table).getByText(formatMoney(8000, "EUR"))).toBeDefined();
+    expect(within(table).queryByText(formatMoney(0, "EUR"))).toBeNull();
+  });
+
+  it("says nothing of a drawer on a till that has none", async () => {
+    show();
+
+    await screen.findByText(t("summary.thisTill"));
+    expect(screen.queryByText(t("summary.drawerHidden", { name: "Bar" }))).toBeNull();
+  });
+});

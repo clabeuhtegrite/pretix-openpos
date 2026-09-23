@@ -90,6 +90,7 @@ export const catalog = {
 };
 
 export const summary = {
+  since: new Date(new Date().setHours(6, 0, 0, 0)).toISOString(),
   device: { count: 41, cash: "218.50", card: "96.00", total: "314.50", cancellations: 1, deposit_refunds: 7 },
   event: { count: 128, cash: "742.00", card: "410.50", total: "1152.50", cancellations: 3, deposit_refunds: 19 },
 };
@@ -206,3 +207,54 @@ export function withPhotos(source: typeof catalog): typeof catalog {
     })),
   };
 }
+
+/** The notes and coins the server lists for EUR, largest first. */
+const euro = [
+  ...["200", "100", "50", "20", "10", "5"].map((v) => ({ value: `${v}.00`, kind: "note" as const })),
+  ...["2.00", "1.00", "0.50", "0.20", "0.10", "0.05", "0.02", "0.01"].map((value) => ({
+    value,
+    kind: "coin" as const,
+  })),
+];
+
+export const drawerInfo = {
+  id: 3,
+  name: "Bar",
+  opening_float: "150.00",
+  currency: "EUR",
+  denominations: euro,
+};
+
+/** Cash sold into the drawer tonight, as the server would add it up. */
+export const drawerSales = "312.50";
+
+const tonight = (hours: number, minutes = 0) => {
+  const at = new Date();
+  at.setHours(hours, minutes, 0, 0);
+  // Before six in the morning it is still last night's evening.
+  if (new Date().getHours() < 6 && hours >= 12) at.setDate(at.getDate() - 1);
+  return at.toISOString();
+};
+
+export const drawerSession = () => ({
+  id: 9,
+  opened_at: tonight(18, 2),
+  opened_by: "Alex",
+  opening_float: "150.00",
+  stale: false,
+  movements: [
+    { seq: 2, kind: "in", datetime: tonight(20, 15), amount: "50.00", reason: "Complément de monnaie", cashier: "Alex", device: "Caisse bar 1" },
+    { seq: 3, kind: "out", datetime: tonight(22, 40), amount: "200.00", reason: "Mise au coffre", cashier: "Sam", device: "Caisse bar 2" },
+  ],
+  count: null as null | Record<string, unknown>,
+});
+
+export const lastClosed = () => ({
+  id: 8,
+  opened_at: tonight(18, 0),
+  closed_at: tonight(23, 58),
+  cashier: "Alex",
+  amount: "311.50",
+  expected: "312.50",
+  difference: "-1.00",
+});

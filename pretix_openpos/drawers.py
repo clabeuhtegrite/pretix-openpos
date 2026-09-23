@@ -83,8 +83,8 @@ class DrawerError(Exception):
 def drawer_closed():
     return DrawerError(
         "drawer_closed",
-        _("This till's cash drawer is not open. Open it, with the float counted in, "
-          "before taking cash."),
+        _("This till's cash drawer is not open. Open it on a counted float before "
+          "taking or handing back cash."),
     )
 
 
@@ -92,7 +92,7 @@ def drawer_stale():
     return DrawerError(
         "drawer_stale",
         _("This till's cash drawer was opened on an earlier day and never closed. "
-          "Close it, then open tonight's, before taking cash."),
+          "Close it, then open tonight's, before taking or handing back cash."),
     )
 
 

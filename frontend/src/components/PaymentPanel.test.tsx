@@ -745,3 +745,82 @@ describe("on a till with a card reader of its own", () => {
     expect(screen.getByRole("button", { name: t("payment.confirm") })).toBeDefined();
   });
 });
+
+describe("on a till whose cash drawer is not open", () => {
+  // The server refuses cash into a drawer nobody opened. Said the moment cash
+  // is chosen, with the way to open it, rather than after change was counted.
+  const closedDrawer = { name: "Bar", stale: false };
+
+  it("says so instead of the keypad, and offers to open it", async () => {
+    const onOpenDrawer = vi.fn();
+    const { user, container } = show({ drawer: closedDrawer, onOpenDrawer });
+
+    expect(screen.getByText(t("payment.drawerClosed", { name: "Bar" }))).toBeDefined();
+    expect(screen.queryByRole("button", { name: "1" })).toBeNull();
+    expect(
+      within(container.querySelector(".pay-actions") as HTMLElement).queryByRole("button", {
+        name: t("payment.confirm"),
+      }),
+    ).toBeNull();
+    expect(screen.queryByText(t("payment.change"))).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: t("drawer.openAction") }));
+    expect(onOpenDrawer).toHaveBeenCalledOnce();
+  });
+
+  it("sends a drawer left open since an earlier day to the drawer, to be closed first", () => {
+    show({ drawer: { name: "Bar", stale: true } });
+
+    expect(screen.getByText(t("payment.drawerStale", { name: "Bar" }))).toBeDefined();
+    expect(screen.getByRole("button", { name: t("drawer.see") })).toBeDefined();
+  });
+
+  it("still takes a card, which never reaches the drawer", async () => {
+    const { user, onConfirm } = show({ drawer: closedDrawer }, "card");
+
+    await user.click(screen.getByRole("button", { name: t("payment.cardConfirm") }));
+
+    expect(onConfirm).toHaveBeenCalledWith("card", null);
+  });
+
+  it("gives the keypad back the moment the drawer is open", () => {
+    const { rerender } = render(
+      <PaymentPanel
+        totalCents={1234}
+        currency="EUR"
+        denominations={DENOMINATIONS}
+        cardMode="declared"
+        terminal={null}
+        onTerminalStart={vi.fn()}
+        onTerminalStop={vi.fn()}
+        busy={false}
+        error={null}
+        drawer={closedDrawer}
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: t("payment.cash") }));
+    expect(screen.queryByRole("button", { name: "1" })).toBeNull();
+
+    rerender(
+      <PaymentPanel
+        totalCents={1234}
+        currency="EUR"
+        denominations={DENOMINATIONS}
+        cardMode="declared"
+        terminal={null}
+        onTerminalStart={vi.fn()}
+        onTerminalStop={vi.fn()}
+        busy={false}
+        error={null}
+        drawer={null}
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "1" })).toBeDefined();
+    expect(screen.getByRole("button", { name: t("payment.confirm") })).toBeDefined();
+  });
+});

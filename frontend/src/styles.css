@@ -1864,6 +1864,257 @@ table.takings thead th {
   line-height: 1.4;
 }
 
+/* ---------- cash drawer ---------- */
+
+/* Amber, like every other "this is not over" in the app: the till is working,
+   it only cannot take cash until somebody opens the drawer. Red would read as
+   a fault, and nothing here is broken. */
+.drawer-bar {
+  background: var(--tint-warning);
+  color: var(--warning-text);
+  border-bottom-color: var(--warning-text);
+}
+
+.icon-button.is-alert {
+  background: var(--tint-warning);
+  box-shadow: inset 0 0 0 1px var(--warning-text);
+}
+
+/* Counting note by note wants the width: notes beside coins on a tablet,
+   rather than fourteen rows under each other to scroll through. */
+@media (min-width: 900px) {
+  .panel.drawer-panel.is-counting {
+    width: min(760px, 100%);
+  }
+
+  .drawer-panel.is-counting .count-groups {
+    grid-template-columns: 1fr 1fr;
+    column-gap: 28px;
+  }
+}
+
+.drawer-status {
+  margin: 0 0 12px;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+
+.drawer-note {
+  margin: 10px 0;
+  color: var(--text-dim);
+  font-size: 15px;
+  line-height: 1.4;
+}
+
+.drawer-offline,
+.drawer-warn {
+  margin-bottom: 14px;
+  padding: 12px 14px;
+  border-radius: var(--radius);
+  background: var(--tint-warning);
+  border: 1px solid var(--warning-text);
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+/* The fact in bold, what to do about it in plain: five lines of bold read as
+   one shout, and the second half is the part somebody has to act on. */
+.drawer-warn {
+  font-weight: 400;
+}
+
+/* A count and what the drawer should have held: the one box on this screen
+   that is read twice, once at the till and once more by whoever counts again. */
+.drawer-result {
+  margin: 4px 0 14px;
+  padding: 12px 16px 4px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+.drawer-result .amount-display {
+  padding: 6px 0;
+}
+
+.drawer-result .amount-display .value {
+  font-size: 24px;
+}
+
+.drawer-result-head {
+  color: var(--text-dim);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+}
+
+.drawer-gap.is-right .value,
+.drawer-verdict.is-right {
+  color: var(--success-text);
+}
+
+.drawer-gap.is-off .value,
+.drawer-verdict.is-off {
+  color: var(--warning-text);
+}
+
+.drawer-verdict {
+  margin: 2px 0 12px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.drawer-result .field {
+  margin: 4px 0 12px;
+}
+
+/* "Recompter", filled like the box it sits in without this. */
+.drawer-result > .btn {
+  margin-bottom: 12px;
+  background: var(--surface);
+}
+
+.drawer-subtitle {
+  margin: 18px 0 4px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+}
+
+.drawer-moves {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.drawer-move {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+
+.drawer-move-time {
+  color: var(--text-dim);
+  font-size: 14px;
+}
+
+.drawer-move-reason {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.drawer-move-reason small {
+  display: block;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.drawer-move-amount {
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+/* Money going out is the line an audit asks about, so it is the one that
+   stands out, in the same amber as a deposit handed back. */
+.drawer-move.is-out .drawer-move-amount {
+  color: var(--warning-text);
+}
+
+.drawer-row {
+  display: flex;
+  gap: 10px;
+  margin: 14px 0 12px;
+}
+
+.drawer-row .btn {
+  flex: 1;
+  min-height: 52px;
+  padding: 0 10px;
+  font-size: 16px;
+}
+
+/* The keypad in here is not the payment panel's, which flexes to whatever
+   height is left: counting has no customer waiting, so it keeps full keys and
+   lets the body scroll on the rare screen too short for them. */
+.drawer-panel .keypad button {
+  min-height: 56px;
+}
+
+.cash-count .segmented {
+  margin-bottom: 12px;
+}
+
+.count-groups {
+  display: grid;
+  row-gap: 12px;
+}
+
+.count-group h3 {
+  margin: 0 0 4px;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-dim);
+}
+
+/* Note, how many, what they come to — sized for a 375-point iPhone, where the
+   panel leaves about 315 for the three of them. */
+.count-row {
+  display: grid;
+  grid-template-columns: 56px auto 1fr;
+  align-items: center;
+  gap: 10px;
+  padding: 2px 0;
+}
+
+.count-note {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.count-subtotal {
+  text-align: right;
+  color: var(--text-dim);
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.count-row .stepper {
+  gap: 4px;
+}
+
+.count-row .stepper button {
+  width: 44px;
+  height: 44px;
+}
+
+/* 18px, because iOS zooms the whole page into any field under 16 the moment
+   it is focused, and a panel that jumps sideways mid-count is lost. */
+.count-input {
+  width: 64px;
+  height: 44px;
+  padding: 0 6px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  text-align: center;
+  font-size: 18px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.count-input:focus {
+  outline: 2px solid var(--accent-text);
+  outline-offset: -1px;
+}
+
 /* ---------- check-in verdict ---------- */
 
 .verdict {

@@ -445,6 +445,36 @@ describe("the endpoints", () => {
     expect(JSON.parse(String(options.body))).toEqual({ idempotency_key: "sale-1" });
   });
 
+  it("reads this till's cash drawer", async () => {
+    await api.drawer(pairing);
+
+    const [url, options] = callArgs();
+    expect(url).toBe("/api/v1/organizers/demo/events/festival/openpos/drawer/");
+    expect(options.method).toBe("GET");
+  });
+
+  it("opens, moves, counts and closes the drawer, each under its own key", async () => {
+    await api.drawerOpen(pairing, {
+      idempotency_key: "open-1", amount: "100.00", denominations: { "20.00": 5 }, cashier: "Ana",
+    });
+    await api.drawerMovement(pairing, {
+      idempotency_key: "move-1", kind: "out", amount: "20.00", reason: "Coffre",
+    });
+    await api.drawerCount(pairing, { idempotency_key: "count-1", amount: "184.00" });
+    await api.drawerClose(pairing, { idempotency_key: "close-1", count_seq: 4, reason: "" });
+
+    const base = "/api/v1/organizers/demo/events/festival/openpos/drawer";
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      `${base}/open/`, `${base}/movement/`, `${base}/count/`, `${base}/close/`,
+    ]);
+    for (let i = 0; i < 4; i++) expect(callArgs(i)[1].method).toBe("POST");
+    expect(JSON.parse(String(callArgs(0)[1].body))).toEqual({
+      idempotency_key: "open-1", amount: "100.00", denominations: { "20.00": 5 }, cashier: "Ana",
+    });
+    expect(JSON.parse(String(callArgs(1)[1].body))).toMatchObject({ kind: "out", reason: "Coffre" });
+    expect(JSON.parse(String(callArgs(3)[1].body))).toMatchObject({ count_seq: 4 });
+  });
+
   it("reads the takings", async () => {
     await api.summary(pairing);
 

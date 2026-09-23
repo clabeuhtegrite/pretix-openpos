@@ -111,15 +111,20 @@ function EventField({
   );
 }
 
+/** An amount, or a dash where the server keeps it back: see Takings. */
+function amount(value: string | null, currency: string): string {
+  return value === null ? "—" : formatMoney(toCents(value), currency);
+}
+
 function TakingsRow({ label, takings, currency }: { label: string; takings: Takings; currency: string }) {
   return (
     <tr>
       <td>{label}</td>
       <td>{takings.count}</td>
-      <td>{formatMoney(toCents(takings.cash), currency)}</td>
+      <td>{amount(takings.cash, currency)}</td>
       <td>{formatMoney(toCents(takings.card), currency)}</td>
       <td>
-        <strong>{formatMoney(toCents(takings.total), currency)}</strong>
+        <strong>{amount(takings.total, currency)}</strong>
       </td>
     </tr>
   );
@@ -273,6 +278,15 @@ export default function SettingsPanel({
             </tbody>
           </table>
         ) : null}
+        {summary?.drawer && (
+          // The dashes above are not a failure to load. A till whose cash goes
+          // into a drawer is counted blind at closing, and a screen that gave
+          // the cash figure away one tap from the count would make the count
+          // a copy.
+          <div className="attendance-note">
+            {t("summary.drawerHidden", { name: summary.drawer.name })}
+          </div>
+        )}
         {summary && summary.event.cancellations > 0 && (
           // Said out loud rather than left to be discovered: the amounts above
           // are net, so a drawer that is short by exactly a cancelled sale is

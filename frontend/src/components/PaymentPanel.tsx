@@ -37,6 +37,16 @@ interface Props {
   /** Money already taken back off the customer, from a sale cancelled to be corrected. */
   credit?: { amountCents: number; order: string } | null;
   /**
+   * The cash drawer that is not open to take this payment, when there is one.
+   *
+   * The server refuses cash into a drawer nobody opened, so the panel says so
+   * the moment cash is chosen — with the way to open it next to the words —
+   * rather than letting the cashier count out change for a sale that will be
+   * refused at the last tap.
+   */
+  drawer?: { name: string; stale: boolean } | null;
+  onOpenDrawer?: () => void;
+  /**
    * ``charged`` is what the reader actually took, when one did. Passed on
    * rather than left to the caller: the server priced the basket when it put
    * it on the reader, and that figure — not this app's, whose catalogue can
@@ -115,7 +125,7 @@ function TerminalPrompt({
 
 export default function PaymentPanel({
   totalCents, currency, denominations, cardMode, terminal, onTerminalStart, onTerminalStop,
-  busy, error, credit, onConfirm, onCancel,
+  busy, error, credit, drawer, onOpenDrawer, onConfirm, onCancel,
 }: Props) {
   // Deliberately unanswered to begin with. A panel that opened on cash got
   // confirmed on cash: a card sale rung up as a cash one, and the drawer at
@@ -273,6 +283,17 @@ export default function PaymentPanel({
                 </button>
               </div>
             </>
+          ) : method === "cash" && drawer ? (
+            <div className="pay-reader">
+              <p className="pay-reader-prompt">
+                {drawer.stale
+                  ? t("payment.drawerStale", { name: drawer.name })
+                  : t("payment.drawerClosed", { name: drawer.name })}
+              </p>
+              <button className="btn" style={{ marginTop: 12 }} onClick={onOpenDrawer}>
+                {drawer.stale ? t("drawer.see") : t("drawer.openAction")}
+              </button>
+            </div>
           ) : method === "cash" ? (
             <>
               {/* Nothing left to take: the credit covers the corrected order, and
@@ -358,7 +379,7 @@ export default function PaymentPanel({
             and the button that ends the sale are the two things that must never
             be a scroll away with a customer waiting. */}
         <div className="pay-actions">
-          {method === "cash" && change !== null && change >= 0 && (
+          {method === "cash" && !drawer && change !== null && change >= 0 && (
             <div className="amount-display change">
               <span>{t("payment.change")}</span>
               <span className="value">{formatMoney(change, currency)}</span>
@@ -383,7 +404,9 @@ export default function PaymentPanel({
             {/* Absent rather than disabled: the two buttons above are the step,
                 and a greyed-out "Valider" beside them reads as a till that is
                 stuck rather than as a question waiting for an answer. */}
-            {method !== null && (!(method === "card" && onReader) || readerPaid) && (
+            {method !== null &&
+              (!(method === "card" && onReader) || readerPaid) &&
+              !(method === "cash" && drawer) && (
               <button
                 className="btn success"
                 style={{ flex: 2 }}

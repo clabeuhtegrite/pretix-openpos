@@ -100,6 +100,103 @@ export interface PosConfig {
     name: string | null;
     price: string | null;
   };
+  /**
+   * The cash drawer this device's cash goes into, when it has one.
+   *
+   * Null for a device with none, and absent from a server older than drawers:
+   * both take cash the way every till always has.
+   */
+  drawer?: DrawerBrief | null;
+}
+
+/** A cash drawer as the config names it: enough to say whether cash can be taken. */
+export interface DrawerBrief {
+  id: number;
+  name: string;
+  /** An opening is running: a float was counted in and nobody has closed it. */
+  open: boolean;
+  /**
+   * ...and it began on an earlier till day. Its money is not tonight's, so the
+   * server refuses cash into it until it is closed and a new one opened.
+   */
+  stale: boolean;
+}
+
+/** One note or coin of the drawer's currency, for counting it one by one. */
+export interface Denomination {
+  value: string;
+  kind: "note" | "coin";
+}
+
+/** One line of a drawer's ledger, as the till is shown it. */
+export interface DrawerEntry {
+  seq: number;
+  kind: "open" | "in" | "out" | "count" | "close";
+  datetime: string;
+  /** Null only on a closing nobody counted. */
+  amount: string | null;
+  reason: string;
+  cashier: string;
+  /** The device it was written from; empty when it came from the back office. */
+  device: string;
+}
+
+/**
+ * A blind count, with what the drawer should have held when it was made.
+ *
+ * The server only ever hands out `expected` beside a count that is already
+ * written down: before that, the count would be copying a figure off the
+ * screen rather than counting.
+ */
+export interface DrawerCount extends DrawerEntry {
+  expected: string;
+  difference: string;
+  /** Nothing sold or moved since: the drawer can still be closed on this count. */
+  current: boolean;
+}
+
+/** The opening that is running: from the float counted in, to the count at the end. */
+export interface DrawerSession {
+  id: number;
+  opened_at: string;
+  opened_by: string;
+  opening_float: string;
+  /** Opened on an earlier till day and never closed. */
+  stale: boolean;
+  movements: DrawerEntry[];
+  /** The latest count, recounts included. */
+  count: DrawerCount | null;
+}
+
+/** How the previous opening ended, for a drawer that is closed now. */
+export interface DrawerClosing {
+  id: number;
+  opened_at: string;
+  closed_at: string;
+  cashier: string;
+  /** Null when it was closed without a count. */
+  amount: string | null;
+  expected: string;
+  difference: string | null;
+}
+
+/** Everything the drawer panel shows, and deliberately not what the drawer holds. */
+export interface DrawerState {
+  drawer: {
+    id: number;
+    name: string;
+    /** What the organiser usually puts in at opening, when they said. */
+    opening_float: string | null;
+    currency: string;
+    denominations: Denomination[];
+  } | null;
+  session: DrawerSession | null;
+  last_closed: DrawerClosing | null;
+}
+
+/** The answer to anything done to a drawer: its state now, and the line just written. */
+export interface DrawerAnswer extends DrawerState {
+  entry: DrawerEntry & { expected?: string | null; difference?: string | null };
 }
 
 /** An event this till is allowed to sell for, i.e. Open POS is enabled on it. */
@@ -523,13 +620,20 @@ export interface Takings {
    * an ordinary evening.
    */
   earlier_days?: { count: number; total: string } | null;
-  cash: string;
+  /**
+   * Null on a till with a cash drawer: what it took in cash is what the drawer
+   * should hold, and that is only ever shown beside a count — see DrawerCount.
+   * The total goes with it, since it would give the cash away by subtraction.
+   */
+  cash: string | null;
   card: string;
-  total: string;
+  total: string | null;
 }
 
 export interface SummaryResponse {
   since: string;
   device: Takings | null;
   event: Takings;
+  /** This till's cash drawer, when it has one: why the cash above is not shown. */
+  drawer?: { name: string } | null;
 }
