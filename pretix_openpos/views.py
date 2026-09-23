@@ -19,6 +19,7 @@ from pretix.control.views.event import EventSettingsFormView, EventSettingsViewM
 from .api.views import BUSINESS_DAY_STARTS_AT
 from .forms import OpenPosSettingsForm
 from .models import PosCategory, PosDevice, PosSale
+from .takings import journal_rows, summarise
 
 
 class SettingsView(EventSettingsViewMixin, EventSettingsFormView):
@@ -458,8 +459,45 @@ def business_day_window(event, start, end):
     )
 
 
+def takings_detail(event, sales):
+    """
+    What the takings of ``sales`` are made of: products by category, deposits
+    apart, and the cancellations already netted off.
+
+    The till's closing screen reads the same computation, so the two can never
+    disagree about what a product sold. It answers in the API's shape, amounts
+    as strings, and pretix' ``money`` filter takes numbers only.
+    """
+    report = summarise(event, journal_rows(sales))
+    deposits = report["deposits"]
+    return {
+        "categories": [
+            {
+                **group,
+                "total": Decimal(group["total"]),
+                "items": [{**line, "total": Decimal(line["total"])} for line in group["items"]],
+            }
+            for group in report["categories"]
+        ],
+        "deposits": (
+            {
+                "taken": {**deposits["taken"], "total": Decimal(deposits["taken"]["total"])},
+                "returned": {
+                    **deposits["returned"], "total": Decimal(deposits["returned"]["total"]),
+                },
+                "total": Decimal(deposits["total"]),
+            }
+            if deposits
+            else None
+        ),
+        "unallocated": Decimal(report["unallocated"]) if report["unallocated"] else None,
+        "cancellations": report["event"]["cancellations"],
+        "cancelled_total": Decimal(report["event"]["cancelled_total"]),
+    }
+
+
 class SalesView(EventPermissionRequiredMixin, ListView):
-    """Journal of till sales, with the takings broken down per device."""
+    """Journal of till sales, with the takings broken down per device and per product."""
 
     template_name = "pretix_openpos/sales.html"
     permission = "event.orders:read"
@@ -664,6 +702,10 @@ class SalesView(EventPermissionRequiredMixin, ListView):
             testmode_totals if all_sales.filter(testmode=True).exists() else None
         )
         ctx["currency"] = self.request.event.currency
+        # Product by product, and following the filter like the table it
+        # details: a breakdown of other rows than the total above it would not
+        # add up to it.
+        ctx["detail"] = takings_detail(self.request.event, all_sales)
         # Deliberately NOT filtered, unlike everything above. The chain runs
         # through the whole journal, so checking a slice of it would let a page
         # showing one night report a sound journal while an entry outside the

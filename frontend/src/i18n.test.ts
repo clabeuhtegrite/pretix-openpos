@@ -80,7 +80,30 @@ describe("t", () => {
   it("takes numbers as readily as strings", async () => {
     const { t } = await withLanguage("en");
 
-    expect(t("summary.cancellations", { n: 2 })).toContain("2");
+    expect(t("takings.salesCount.other", { n: 2 })).toContain("2");
+  });
+});
+
+describe("tn", () => {
+  it("says one sale and two sales", async () => {
+    const { tn } = await withLanguage("en");
+
+    expect(tn("takings.salesCount", 1)).toBe("1 sale");
+    expect(tn("takings.salesCount", 2)).toBe("2 sales");
+  });
+
+  it("says nought in the plural in English and in the singular in French", async () => {
+    // The one count an `n === 1` gets wrong in one language or the other.
+    expect((await withLanguage("en")).tn("takings.salesCount", 0)).toBe("0 sales");
+    expect((await withLanguage("fr-FR")).tn("takings.salesCount", 0)).toBe("0 vente");
+  });
+
+  it("fills the other placeholders in beside the count", async () => {
+    const { tn } = await withLanguage("fr-FR");
+
+    expect(tn("takings.cancelled", 2, { amount: "−15,00 €" })).toBe(
+      "2 ventes annulées, −15,00 € : déjà déduites de tous les montants ici.",
+    );
   });
 });
 

@@ -255,6 +255,97 @@
     {% endif %}
 
     {% comment %}
+        What the takings above are made of, product by product: the same
+        computation as the till's closing screen, and the same rows as the
+        table above, filter included. Under the alerts rather than above them,
+        because it runs as long as the menu and they are what needs doing.
+    {% endcomment %}
+    {% if detail.categories or detail.deposits %}
+        <div class="row">
+            <div class="col-md-7">
+                <h3>{% trans "By product" %}</h3>
+                <table class="table table-condensed">
+                    <thead>
+                    <tr>
+                        <th>{% trans "Product" %}</th>
+                        <th class="text-right">{% trans "Quantity" %}</th>
+                        <th class="text-right">{% trans "Amount" %}</th>
+                    </tr>
+                    </thead>
+                    {% for group in detail.categories %}
+                        {# One body per category, headed by the category's own row. #}
+                        <tbody>
+                        <tr class="active">
+                            <th>{% if group.name %}{{ group.name }}{% else %}{% trans "No category" context "takings" %}{% endif %}</th>
+                            <th class="text-right">{{ group.count }}</th>
+                            <th class="text-right">{{ group.total|money:currency }}</th>
+                        </tr>
+                        {% for line in group.items %}
+                            <tr>
+                                <td>
+                                    {{ line.name }}
+                                    {% if line.variation_name %}<small class="text-muted">{{ line.variation_name }}</small>{% endif %}
+                                </td>
+                                <td class="text-right">{{ line.count }}</td>
+                                <td class="text-right">{{ line.total|money:currency }}</td>
+                            </tr>
+                        {% endfor %}
+                        </tbody>
+                    {% endfor %}
+                </table>
+                {% if detail.unallocated %}
+                    <p class="text-muted">
+                        {% blocktrans trimmed with amount=detail.unallocated|money:currency %}
+                            {{ amount }} of the takings comes from journal entries that name no product.
+                        {% endblocktrans %}
+                    </p>
+                {% endif %}
+            </div>
+            <div class="col-md-5">
+                {% if detail.deposits %}
+                    <h3>{% trans "Deposits" %}</h3>
+                    <table class="table table-condensed">
+                        <tbody>
+                        <tr>
+                            <td>{% trans "Taken" context "deposits" %}</td>
+                            <td class="text-right">{{ detail.deposits.taken.count }}</td>
+                            <td class="text-right">{{ detail.deposits.taken.total|money:currency }}</td>
+                        </tr>
+                        <tr>
+                            <td>{% trans "Handed back" context "deposits" %}</td>
+                            <td class="text-right">{{ detail.deposits.returned.count }}</td>
+                            <td class="text-right">{{ detail.deposits.returned.total|money:currency }}</td>
+                        </tr>
+                        </tbody>
+                        <tfoot>
+                        <tr>
+                            <th colspan="2">{% trans "Balance" context "deposits" %}</th>
+                            <th class="text-right">{{ detail.deposits.total|money:currency }}</th>
+                        </tr>
+                        </tfoot>
+                    </table>
+                    <p class="text-muted">
+                        {% trans "Kept apart from the products: a deposit is owed to whoever brings the cup back." %}
+                    </p>
+                {% endif %}
+                {% if detail.cancellations %}
+                    {% comment %}
+                        Said out loud: every amount on this page is net, so a
+                        product short by exactly a cancelled sale is not short.
+                    {% endcomment %}
+                    <p class="text-muted">
+                        {% blocktrans trimmed count counter=detail.cancellations with amount=detail.cancelled_total|money:currency %}
+                            {{ counter }} sale cancelled, {{ amount }}: already taken off every figure on this page.
+                        {% plural %}
+                            {{ counter }} sales cancelled, {{ amount }}: already taken off every figure on this page.
+                        {% endblocktrans %}
+                    </p>
+                {% endif %}
+            </div>
+        </div>
+    {% endif %}
+
+    {% comment %}
         Nights, not calendar days: a till day starts at six in the morning
         because an evening crosses midnight. Asking for one date gives that
         whole evening, small hours included.

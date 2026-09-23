@@ -3,11 +3,13 @@ import { useEffect, useState } from "react";
 import { api } from "../api";
 import { eventLabel } from "../events";
 import { loadQueue } from "../storage";
-import { locale, t } from "../i18n";
+import { t, tn } from "../i18n";
 import { formatMoney, toCents } from "../money";
 import { THEMES, type Theme } from "../theme";
-import type { Pairing, PosEventList, SummaryResponse, Takings } from "../types";
+import type { Pairing, PosEventList, SummaryResponse } from "../types";
+import { useBackClose } from "../useBackClose";
 import { UnavailableEvents } from "./EventChoice";
+import TakingsPanel, { scopeLabel, TakingsLine } from "./TakingsPanel";
 
 interface Props {
   pairing: Pairing;
@@ -30,10 +32,6 @@ const THEME_LABELS: Record<Theme, "settings.themeSystem" | "settings.themeLight"
   light: "settings.themeLight",
   dark: "settings.themeDark",
 };
-
-function time(iso: string): string {
-  return new Date(iso).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
-}
 
 /** The cash half of what is still queued, which is what the drawer holds. */
 function queuedCash(entries: { paymentType: string; chargedTotal: string }[]): number {
@@ -111,20 +109,6 @@ function EventField({
   );
 }
 
-function TakingsRow({ label, takings, currency }: { label: string; takings: Takings; currency: string }) {
-  return (
-    <tr>
-      <td>{label}</td>
-      <td>{takings.count}</td>
-      <td>{formatMoney(toCents(takings.cash), currency)}</td>
-      <td>{formatMoney(toCents(takings.card), currency)}</td>
-      <td>
-        <strong>{formatMoney(toCents(takings.total), currency)}</strong>
-      </td>
-    </tr>
-  );
-}
-
 export default function SettingsPanel({
   pairing, currency, cashier, theme, onThemeChange, sound, onSoundChange, onCashierChange,
   onRefresh, onUnpair,
@@ -143,6 +127,8 @@ export default function SettingsPanel({
    */
   const [queued] = useState(() => loadQueue().filter((entry) => entry.kind === "sale"));
   const [events, setEvents] = useState<PosEventList | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+  useBackClose(detailOpen, () => setDetailOpen(false));
 
   useEffect(() => {
     let cancelled = false;
@@ -161,9 +147,11 @@ export default function SettingsPanel({
   }, [pairing]);
 
   const [attempt, setAttempt] = useState(0);
+  const [loading, setLoading] = useState(true);
   useEffect(() => {
     let cancelled = false;
     setSummaryFailed(false);
+    setLoading(true);
     api
       .summary(pairing)
       .then((data) => {
@@ -175,6 +163,9 @@ export default function SettingsPanel({
         // is the closing-time screen, and at half past one a spinner that
         // never resolves is worse than a sentence saying what happened.
         if (!cancelled) setSummaryFailed(true);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
       });
     return () => {
       cancelled = true;
@@ -254,68 +245,27 @@ export default function SettingsPanel({
         </div>
 
         <h3 style={{ fontSize: 16, marginTop: 24 }}>{t("summary.title")}</h3>
-        {summary ? (
-          <table className="takings">
-            <thead>
-              <tr>
-                <th />
-                <th>{t("summary.sales")}</th>
-                <th>{t("summary.cash")}</th>
-                <th>{t("summary.card")}</th>
-                <th>{t("summary.total")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {summary.device && (
-                <TakingsRow label={t("summary.thisTill")} takings={summary.device} currency={currency} />
-              )}
-              <TakingsRow label={t("summary.allTills")} takings={summary.event} currency={currency} />
-            </tbody>
-          </table>
-        ) : null}
-        {summary && summary.event.cancellations > 0 && (
-          // Said out loud rather than left to be discovered: the amounts above
-          // are net, so a drawer that is short by exactly a cancelled sale is
-          // not short at all.
-          <div className="attendance-note">
-            {t("summary.cancellations", { n: summary.event.cancellations })}
-          </div>
-        )}
-        {summary && (summary.event.deposit_refunds ?? 0) > 0 && (
-          // Same reasoning, and the figure is easier to be surprised by: a
-          // night of returned cups is money out of the drawer with not one
-          // sale to show for it.
-          <div className="attendance-note">
-            {t("summary.depositRefunds", { n: summary.event.deposit_refunds ?? 0 })}
-          </div>
-        )}
-        {summary?.event.earlier_days && (
-          // The one that cannot be worked out from this screen. Somebody came
-          // back days later and was paid out of tonight's drawer: the takings
-          // above are short by that much, correctly, and nothing else here
-          // would ever say so.
-          <div className="attendance-note">
-            {t("summary.earlierDays", {
-              n: summary.event.earlier_days.count,
-              amount: formatMoney(
-                Math.abs(toCents(summary.event.earlier_days.total)),
-                currency,
-              ),
-            })}
+        {summary?.scope.series && (
+          // Which date of the series, since the field above names only the
+          // series: its takings are one date's, and the next one starts at zero.
+          <div className="attendance-note" style={{ marginTop: -4, marginBottom: 6 }}>
+            {scopeLabel(summary.scope)}
           </div>
         )}
         {summary && (
-          // A till day starts at six in the morning, so a bar that closes at
-          // 5:40 and counts the drawer at 6:15 reads zeros everywhere. True,
-          // and useless without this line.
-          <div className="attendance-note">
-            {t("summary.since", { time: time(summary.since) })}
-          </div>
+          // Lines rather than the five-column table this used to be: on a
+          // phone held upright, the card column and the total ran off the
+          // right-hand edge of the panel.
+          <ul className="takings-lines">
+            {summary.device && (
+              <TakingsLine name={t("summary.thisTill")} takings={summary.device} currency={currency} />
+            )}
+            <TakingsLine name={t("summary.allTills")} takings={summary.event} currency={currency} />
+          </ul>
         )}
         {queued.length > 0 && (
           <div className="attendance-note">
-            {t("summary.queued", {
-              n: queued.length,
+            {tn("summary.queued", queued.length, {
               amount: formatMoney(queuedCash(queued), currency),
             })}
           </div>
@@ -330,6 +280,17 @@ export default function SettingsPanel({
               {t("summary.retry")}
             </button>
           </div>
+        )}
+        {summary && (
+          // The detail on a panel of its own: by product it runs as long as
+          // the menu, and everything else on this screen would end up under it.
+          <button
+            className="btn"
+            style={{ marginTop: 12 }}
+            onClick={() => setDetailOpen(true)}
+          >
+            {t("summary.detail")}
+          </button>
         )}
 
         <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 24 }}>
@@ -349,6 +310,18 @@ export default function SettingsPanel({
           </button>
         </div>
       </div>
+
+      {detailOpen && (
+        <TakingsPanel
+          summary={summary}
+          failed={summaryFailed}
+          busy={loading}
+          currency={currency}
+          queued={{ count: queued.length, cashCents: queuedCash(queued) }}
+          onRefresh={() => setAttempt((n) => n + 1)}
+          onClose={() => setDetailOpen(false)}
+        />
+      )}
     </div>
   );
 }
