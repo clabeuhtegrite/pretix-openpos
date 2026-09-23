@@ -310,8 +310,7 @@ describe("sendable", () => {
 });
 
 describe("the figure kept for a reload", () => {
-  const tonight: DoorScans = {
-    since: new Date(Date.now() - 3_600_000).toISOString(),
+  const counted: DoorScans = {
     device: { admitted: 5, refused: 1, other: 0, offline: 0 },
     event: { admitted: 50, refused: 2, other: 0, offline: 0 },
     devices: [],
@@ -320,21 +319,21 @@ describe("the figure kept for a reload", () => {
   it("counts a scan the drain has sent", async () => {
     // Out of the queue and not yet in the figure: without this, a phone
     // reloaded with no network right after a drain opened short of it.
-    saveDoorScans("festival", tonight);
+    saveDoorScans("festival", counted);
     saveQueue([checkin("nonce-1", "alice-secret", { at: new Date().toISOString() })]);
     redeem.mockResolvedValue({ status: "ok" });
 
     await drainQueue(pairing);
 
     expect(loadDoorScans("festival")).toEqual({
-      ...tonight,
+      ...counted,
       device: { admitted: 6, refused: 1, other: 0, offline: 1 },
       event: { admitted: 51, refused: 2, other: 0, offline: 1 },
     });
   });
 
   it("counts a refusal as one", async () => {
-    saveDoorScans("festival", tonight);
+    saveDoorScans("festival", counted);
     saveQueue([checkin("n", "nobody", { at: new Date().toISOString(), refused: "invalid" })]);
     reportRefusal.mockResolvedValue({});
 
@@ -344,23 +343,24 @@ describe("the figure kept for a reload", () => {
   });
 
   it("leaves out a scan the server would not take", async () => {
-    saveDoorScans("festival", tonight);
+    saveDoorScans("festival", counted);
     saveQueue([checkin("nonce-1", "alice-secret", { at: new Date().toISOString() })]);
     redeem.mockRejectedValue(new ApiError(400, "unknown list"));
 
     await drainQueue(pairing);
 
-    expect(loadDoorScans("festival")).toEqual(tonight);
+    expect(loadDoorScans("festival")).toEqual(counted);
   });
 
-  it("leaves out a scan from before tonight", async () => {
-    saveDoorScans("festival", tonight);
+  it("counts a scan from an earlier night of the event", async () => {
+    // Weeks old, and still one of this event's: the figure is the event's.
+    saveDoorScans("festival", counted);
     saveQueue([checkin("nonce-1", "alice-secret")]);
     redeem.mockResolvedValue({ status: "ok" });
 
     await drainQueue(pairing);
 
-    expect(loadDoorScans("festival")).toEqual(tonight);
+    expect(loadDoorScans("festival")?.event.admitted).toBe(51);
   });
 
   it("is not made up when there is none", async () => {

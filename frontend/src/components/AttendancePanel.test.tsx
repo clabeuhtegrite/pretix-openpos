@@ -160,7 +160,6 @@ describe("the breakdown per product", () => {
 
 describe("the scans per device", () => {
   const scans: DoorScans = {
-    since: "2026-08-16T04:00:00.000Z",
     device: { admitted: 64, refused: 3, other: 0, offline: 12 },
     event: { admitted: 120, refused: 4, other: 0, offline: 12 },
     devices: [

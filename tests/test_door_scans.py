@@ -1,10 +1,12 @@
 """
-What the doors have scanned tonight, and which of it waited in a phone.
+What the doors have scanned for an event, and which of it waited in a phone.
 
 The scanner's own counter used to live in the app, and it went back to zero
 whenever iOS reloaded the page — which is to say every time somebody at the
 door stepped out of the app for a while. pretix writes every scan down anyway,
-so the figure is counted from its rows: that one cannot be lost.
+so the figure is counted from its rows: that one cannot be lost. It covers the
+whole event: counted from six each morning, it read zero the day after on a
+phone that had let seventy people in.
 
 The same rows say which scans were made with no network and sent later, as long
 as they were sent the way pretix expects an offline scan to be sent. A till
@@ -15,12 +17,11 @@ from decimal import Decimal
 
 import pytest
 from django.utils.timezone import now
-from pretix.base.models import Checkin, Order
+from pretix.base.models import Checkin, Event, Item, Order, OrderPosition
 
-from pretix_openpos.api.views import start_of_business_day
-
-from .conftest import sell
+from .conftest import Till, sell
 from .test_attendance import sold_online
+from .test_series import a_date, an_item, series_event
 
 
 def redeem(till, clist, secret, **extra):
@@ -62,7 +63,7 @@ def scans(till, clist):
 
 
 @pytest.mark.django_db
-def test_the_counter_is_what_this_device_scanned_tonight(
+def test_the_counter_is_what_this_device_scanned_for_the_event(
     till, another_till, event, ticket, checkin_list
 ):
     positions = sold_online(event, ticket, 4)
@@ -76,9 +77,8 @@ def test_the_counter_is_what_this_device_scanned_tonight(
     body = scans(till, checkin_list)
 
     assert body["device"] == {"admitted": 2, "refused": 2, "other": 0, "offline": 0}
-    # Every door, which is the figure of the evening.
+    # Every door, which is the figure of the event.
     assert body["event"] == {"admitted": 3, "refused": 2, "other": 0, "offline": 0}
-    assert body["since"] == start_of_business_day(event).isoformat()
 
 
 @pytest.mark.django_db
@@ -108,7 +108,7 @@ def test_a_device_that_has_not_scanned_yet_reads_zero(till, event, ticket, check
 
 
 @pytest.mark.django_db
-def test_a_scan_from_the_back_office_counts_for_the_evening_under_no_device(
+def test_a_scan_from_the_back_office_counts_for_the_event_under_no_device(
     till, event, ticket, checkin_list
 ):
     position = sold_online(event, ticket, 1)[0]
@@ -149,12 +149,60 @@ def test_a_t_shirt_scanned_at_the_door_is_not_somebody_let_in(
 
 
 @pytest.mark.django_db
-def test_last_night_is_not_tonight(till, event, ticket, checkin_list):
-    position = sold_online(event, ticket, 1)[0]
-    redeem(till, checkin_list, position.secret)
-    Checkin.all.update(datetime=start_of_business_day(event) - timedelta(minutes=1))
+def test_the_night_of_the_event_still_counts_days_later(till, event, ticket, checkin_list):
+    positions = sold_online(event, ticket, 2)
+    redeem(till, checkin_list, positions[0].secret)
+    redeem(till, checkin_list, positions[1].secret)
+    Checkin.all.update(datetime=now() - timedelta(days=4))
+
+    body = scans(till, checkin_list)
+
+    # What a door phone read the Wednesday after a Saturday: zero.
+    assert body["device"]["admitted"] == 2
+    assert body["event"]["admitted"] == 2
+
+
+@pytest.mark.django_db
+def test_another_event_s_scans_stay_with_it(till, organizer, event, ticket, checkin_list):
+    other = Event.objects.create(
+        organizer=organizer, name="Autre soirée", slug="autre", date_from=now(),
+        plugins="pretix_openpos", live=True, currency="EUR",
+    )
+    other_ticket = Item.objects.create(event=other, name="Entrée", default_price=10, admission=True)
+    other_list = other.checkin_lists.create(name="Porte", all_products=True)
+    redeem(Till(till.device, other), other_list, sold_online(other, other_ticket, 1)[0].secret)
 
     assert scans(till, checkin_list)["device"]["admitted"] == 0
+    assert scans(Till(till.device, other), other_list)["device"]["admitted"] == 1
+
+
+@pytest.mark.django_db
+def test_a_door_kept_for_one_date_of_a_series_counts_that_date(organizer, channel, device):
+    event = series_event(organizer)
+    last_week = a_date(event, "La semaine dernière", now() - timedelta(days=7))
+    tonight = a_date(event, "Ce soir", now() - timedelta(hours=1))
+    item = an_item(event, channel, tonight)
+    till = Till(device, event)
+
+    def ticket_for(date):
+        position = sold_online(event, item, 1)[0]
+        OrderPosition.all.filter(pk=position.pk).update(subevent=date)
+        return position
+
+    tonight_door = event.checkin_lists.create(name="Ce soir", all_products=True, subevent=tonight)
+    last_week_door = event.checkin_lists.create(
+        name="La semaine dernière", all_products=True, subevent=last_week
+    )
+    every_date = event.checkin_lists.create(name="Toutes dates", all_products=True)
+    redeem(till, tonight_door, ticket_for(tonight).secret)
+    # Tonight's ticket at a door that takes every date: still tonight's.
+    redeem(till, every_date, ticket_for(tonight).secret)
+    redeem(till, last_week_door, ticket_for(last_week).secret)
+
+    # The list's own figures are that date's, and the counter beside them too.
+    assert scans(till, tonight_door)["event"]["admitted"] == 2
+    # A door for every date is a door for the whole series.
+    assert scans(till, every_date)["event"]["admitted"] == 3
 
 
 @pytest.mark.django_db
@@ -162,7 +210,7 @@ def test_an_offline_scan_counts_when_it_happened_and_says_it_was_offline(
     till, event, ticket, checkin_list
 ):
     position = sold_online(event, ticket, 1)[0]
-    scanned_at = max(now() - timedelta(minutes=30), start_of_business_day(event))
+    scanned_at = now() - timedelta(minutes=30)
 
     response = redeem(
         till, checkin_list, position.secret,
@@ -202,7 +250,7 @@ def test_a_scan_that_waited_in_a_phone_reads_as_offline_even_unflagged(
     # How an app older than this one sent its queue: with the moment of the
     # scan, and nothing else to say it had been offline.
     position = sold_online(event, ticket, 1)[0]
-    scanned_at = max(now() - timedelta(minutes=20), start_of_business_day(event))
+    scanned_at = now() - timedelta(minutes=20)
     redeem(till, checkin_list, position.secret, datetime=scanned_at.isoformat(), nonce="old")
     Checkin.objects.filter(position=position).update(created=scanned_at + timedelta(minutes=15))
 

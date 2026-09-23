@@ -552,10 +552,10 @@ export default function CheckinScreen({
                     ...(waiting > 0 ? [t("checkin.counterWaiting", { n: waiting })] : []),
                   ].join(" · ")}
             </div>
-            <div className="scanner-counter-evening">
-              {count.evening === null
-                ? t("checkin.counterEveningUnknown")
-                : t("checkin.counterEvening", { n: count.evening })}
+            <div className="scanner-counter-event">
+              {count.event === null
+                ? t("checkin.counterEventUnknown")
+                : t("checkin.counterEvent", { n: count.event })}
             </div>
           </div>
           {fatal && <div className="error-banner">{fatal}</div>}

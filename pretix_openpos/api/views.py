@@ -189,9 +189,9 @@ LATE_UPLOAD = timedelta(minutes=2)
 SENT_AFTER_THE_FACT = Q(force_sent=True) | Q(created__gt=F("datetime") + LATE_UPLOAD)
 
 
-def door_scans(event, device):
+def door_scans(event, device, subevent=None):
     """
-    What the doors have scanned tonight, per device and in all.
+    What the doors have scanned for this event, per device and in all.
 
     Read from pretix' own check-in rows rather than counted by the app: a count
     kept in a browser is gone whenever iOS reloads the page, and that is what a
@@ -204,19 +204,24 @@ def door_scans(event, device):
     with a sale is not one — nobody scanned anything — and neither is an
     automatic or a back-office one, which is exactly the set of rows that
     carries no ``raw_source_type``. Entries only: a door counts people coming
-    in. Tonight means since six this morning, as for the takings, so a night
-    that crosses midnight stays one figure.
+    in.
+
+    The whole event, whenever the scan was made. It used to be tonight only,
+    from six in the morning like the takings, so a phone that had let seventy
+    people in read zero on every day after, on that very event. A door
+    scanning on a list kept for one date of a series counts that date, as the
+    list's own figures do: its doors, and its tickets at doors kept for every
+    date.
     """
-    since = start_of_business_day(event)
+    scope = Q(list__event=event, type=Checkin.TYPE_ENTRY, raw_source_type__isnull=False)
+    if subevent is not None:
+        scope &= Q(list__subevent=subevent) | Q(
+            list__subevent__isnull=True, position__subevent=subevent
+        )
     admitted = Q(successful=True, position__item__admission=True)
     with scopes_disabled():
         rows = list(
-            Checkin.all.filter(
-                list__event=event,
-                type=Checkin.TYPE_ENTRY,
-                raw_source_type__isnull=False,
-                datetime__gte=since,
-            )
+            Checkin.all.filter(scope)
             .order_by()
             .values("device_id")
             .annotate(
@@ -251,7 +256,6 @@ def door_scans(event, device):
     ]
     devices.sort(key=lambda d: (-d["admitted"], d["name"] is None, d["name"] or ""))
     return {
-        "since": since.isoformat(),
         "device": figures(by_device.get(device.pk)) if device else None,
         "event": {field: sum(row[field] for row in rows) for field in fields},
         "devices": devices,
@@ -2244,7 +2248,7 @@ class OpenPosViewSet(viewsets.ViewSet):
         people back out reports the room rather than the turnstile.
 
         ``scans`` rides along for the scanner's own counter: what this device
-        and every door have scanned tonight, on every list of the event. It is
+        and every door have scanned for the event, on every list of it. It is
         here rather than behind an endpoint of its own because the door screen
         already asks for this after every scan and every minute, and the two
         figures are read side by side.
@@ -2310,7 +2314,9 @@ class OpenPosViewSet(viewsets.ViewSet):
                 "non_admission_entered": non_admission,
                 "items": items,
                 "scans": door_scans(
-                    event, request.auth if isinstance(request.auth, Device) else None
+                    event,
+                    request.auth if isinstance(request.auth, Device) else None,
+                    clist.subevent,
                 ),
             }
         )

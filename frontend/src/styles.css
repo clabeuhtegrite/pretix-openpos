@@ -1361,7 +1361,7 @@ table.takings thead th {
 
 /* Every door together: the stat, under the line the person scanning is asked
    about, which is this phone's own. */
-.scanner-counter-evening {
+.scanner-counter-event {
   margin-top: 2px;
   font-size: 13px;
 }
