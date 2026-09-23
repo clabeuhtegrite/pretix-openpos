@@ -1,0 +1,229 @@
+{% extends "pretixcontrol/organizers/base.html" %}
+{% load i18n %}
+{% load bootstrap3 %}
+{% load money %}
+{% block title %}{{ drawer.name }} · {{ session.opened_at|date:"SHORT_DATE_FORMAT" }}{% endblock %}
+{% block content %}
+    <h1>
+        {{ drawer.name }}
+        <small>{{ session.opened_at|date:"SHORT_DATETIME_FORMAT" }}</small>
+        <small><a href="{{ drawer_url }}">{% trans "Every opening" %}</a></small>
+    </h1>
+
+    <p>
+        {% if line.opening.cashier %}
+            {% blocktrans trimmed with who=line.opening.cashier when=session.opened_at|date:"SHORT_DATETIME_FORMAT" %}
+                Opened by {{ who }} on {{ when }}.
+            {% endblocktrans %}
+        {% else %}
+            {% blocktrans trimmed with when=session.opened_at|date:"SHORT_DATETIME_FORMAT" %}
+                Opened on {{ when }}.
+            {% endblocktrans %}
+        {% endif %}
+        {% if closing %}
+            {% blocktrans trimmed with who=closing.cashier|default:"—" when=session.closed_at|date:"SHORT_DATETIME_FORMAT" %}
+                Closed by {{ who }} on {{ when }}.
+            {% endblocktrans %}
+            {% if closing.source == "backoffice" %}
+                <span class="label label-default">{% trans "from the back office" %}</span>
+            {% endif %}
+        {% else %}
+            <span class="label label-success">{% trans "Still open" %}</span>
+        {% endif %}
+    </p>
+
+    {% if late %}
+        <div class="alert alert-warning">
+            {% blocktrans trimmed with at_closing=closing.expected|money:currency now=figures.expected|money:currency %}
+                Sales reached this opening after it was closed — rung up on a till that had lost
+                its network, and sent once it was back. The drawer should have held
+                {{ at_closing }} at the closing, as far as anybody could know then; with those
+                sales, it should have held {{ now }}.
+            {% endblocktrans %}
+        </div>
+    {% endif %}
+
+    <div class="row">
+        <div class="col-md-6">
+            <h3>{% trans "Cash" %}</h3>
+            <table class="table table-condensed">
+                <tbody>
+                <tr>
+                    <td>{% trans "Opening float" %}</td>
+                    <td class="text-right">{{ figures.float|money:currency }}</td>
+                </tr>
+                <tr>
+                    <td>{% blocktrans with n=figures.cash_sales_count %}Cash sales ({{ n }}){% endblocktrans %}</td>
+                    <td class="text-right">{{ figures.cash_sales|money:currency }}</td>
+                </tr>
+                {% if figures.cash_cancellations_count %}
+                    <tr>
+                        <td>{% blocktrans with n=figures.cash_cancellations_count %}Cancellations ({{ n }}){% endblocktrans %}</td>
+                        <td class="text-right">{{ figures.cash_cancellations|money:currency }}</td>
+                    </tr>
+                {% endif %}
+                {% if figures.deposit_refunds_count %}
+                    <tr>
+                        <td>{% blocktrans with n=figures.deposit_refunds_count %}Deposits handed back ({{ n }}){% endblocktrans %}</td>
+                        <td class="text-right">{{ figures.deposit_refunds|money:currency }}</td>
+                    </tr>
+                {% endif %}
+                {% if figures.cash_in_count %}
+                    <tr>
+                        <td>{% blocktrans with n=figures.cash_in_count %}Cash put in ({{ n }}){% endblocktrans %}</td>
+                        <td class="text-right">{{ figures.cash_in|money:currency }}</td>
+                    </tr>
+                {% endif %}
+                {% if figures.cash_out_count %}
+                    <tr>
+                        <td>{% blocktrans with n=figures.cash_out_count %}Cash taken out ({{ n }}){% endblocktrans %}</td>
+                        <td class="text-right">−{{ figures.cash_out|money:currency }}</td>
+                    </tr>
+                {% endif %}
+                </tbody>
+                <tfoot>
+                <tr>
+                    <th>{% if closing %}{% trans "Expected at the closing" %}{% else %}{% trans "Expected now" %}{% endif %}</th>
+                    <th class="text-right">{% if closing %}{{ closing.expected|money:currency }}{% else %}{{ figures.expected|money:currency }}{% endif %}</th>
+                </tr>
+                {% if closing and first_count and first_count.amount != closing.amount %}
+                    <tr class="text-muted">
+                        <td>{% trans "First count" %}</td>
+                        <td class="text-right">{{ first_count.amount|money:currency }}</td>
+                    </tr>
+                {% endif %}
+                {% if closing %}
+                    <tr>
+                        <th>{% trans "Counted" %}</th>
+                        <th class="text-right">
+                            {% if closing.amount is not None %}{{ closing.amount|money:currency }}{% else %}<span class="text-muted">{% trans "Not counted" %}</span>{% endif %}
+                        </th>
+                    </tr>
+                    {% if closing.difference is not None %}
+                        <tr>
+                            <th>{% trans "Difference" %}</th>
+                            <th class="text-right {% if closing.difference < 0 %}text-danger{% elif closing.difference > 0 %}text-warning{% else %}text-success{% endif %}">
+                                {{ closing.difference|money:currency }}
+                            </th>
+                        </tr>
+                    {% endif %}
+                    {% if late and difference_now is not None %}
+                        <tr class="text-muted">
+                            <td>{% trans "Difference with the late sales" %}</td>
+                            <td class="text-right">{{ difference_now|money:currency }}</td>
+                        </tr>
+                    {% endif %}
+                    {% if closing.reason %}
+                        <tr><td colspan="2"><em>{{ closing.reason }}</em></td></tr>
+                    {% endif %}
+                {% endif %}
+                </tfoot>
+            </table>
+        </div>
+        <div class="col-md-6">
+            <h3>{% trans "By till" %}</h3>
+            <table class="table table-condensed">
+                <thead>
+                <tr>
+                    <th>{% trans "Till" %}</th>
+                    <th class="text-right">{% trans "Sales" %}</th>
+                    <th class="text-right">{% trans "Cash" %}</th>
+                    <th class="text-right">{% trans "Card" %}</th>
+                </tr>
+                </thead>
+                <tbody>
+                {% for till in tills %}
+                    <tr>
+                        <td>{{ till.label }}</td>
+                        <td class="text-right">{{ till.count }}</td>
+                        <td class="text-right">{{ till.cash|money:currency }}</td>
+                        <td class="text-right">{{ till.card|money:currency }}</td>
+                    </tr>
+                {% empty %}
+                    <tr><td colspan="4">{% trans "Nothing was sold into this opening." %}</td></tr>
+                {% endfor %}
+                </tbody>
+                {% if tills %}
+                    <tfoot>
+                    <tr class="text-muted">
+                        <td colspan="3">{% blocktrans count n=figures.card_count %}Card, for reference ({{ n }} sale) — never in the drawer{% plural %}Card, for reference ({{ n }} sales) — never in the drawer{% endblocktrans %}</td>
+                        <td class="text-right">{{ figures.card|money:currency }}</td>
+                    </tr>
+                    </tfoot>
+                {% endif %}
+            </table>
+            {% if figures.testmode_count %}
+                <p class="text-muted">
+                    {% blocktrans trimmed count n=figures.testmode_count %}
+                        One sale was made in test mode and is not counted.
+                    {% plural %}
+                        {{ n }} sales were made in test mode and are not counted.
+                    {% endblocktrans %}
+                </p>
+            {% endif %}
+            {% if events %}
+                <p class="text-muted">
+                    {% trans "Journal:" %}
+                    {% for row in events %}<a href="{{ row.url }}">{{ row.event.name }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}
+                </p>
+            {% endif %}
+        </div>
+    </div>
+
+    <h3>{% trans "Ledger" %}</h3>
+    <div class="table-responsive">
+        <table class="table table-condensed">
+            <thead>
+            <tr>
+                <th>#</th>
+                <th>{% trans "Time" %}</th>
+                <th>{% trans "What" %}</th>
+                <th>{% trans "Who" %}</th>
+                <th class="text-right">{% trans "Amount" %}</th>
+                <th class="text-right">{% trans "Expected" %}</th>
+                <th class="text-right">{% trans "Difference" %}</th>
+            </tr>
+            </thead>
+            <tbody>
+            {% for entry in entries %}
+                <tr>
+                    <td>{{ entry.seq }}</td>
+                    <td>{{ entry.datetime|date:"SHORT_DATETIME_FORMAT" }}</td>
+                    <td>
+                        {{ entry.get_kind_display }}
+                        {% if entry.reason %}<br><small class="text-muted">{{ entry.reason }}</small>{% endif %}
+                    </td>
+                    <td>
+                        {{ entry.cashier|default:"—" }}
+                        <br><small class="text-muted">
+                            {% if entry.source == "backoffice" %}{% trans "back office" %}{% else %}{{ entry.device_name|default:entry.device_serial|default:"—" }}{% endif %}
+                        </small>
+                    </td>
+                    <td class="text-right">
+                        {% if entry.amount is not None %}{% if entry.kind == "out" %}−{% endif %}{{ entry.amount|money:currency }}{% else %}—{% endif %}
+                    </td>
+                    <td class="text-right">{% if entry.expected is not None %}{{ entry.expected|money:currency }}{% endif %}</td>
+                    <td class="text-right">{% if entry.difference is not None %}{{ entry.difference|money:currency }}{% endif %}</td>
+                </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {% if can_manage and not closing %}
+        <h3>{% trans "Close from here" %}</h3>
+        <p class="text-muted">
+            {% blocktrans trimmed %}
+                For an opening a till never closed. Give the cash counted if somebody counted it,
+                or leave it empty. The ledger records that it was closed from the back office,
+                and by whom.
+            {% endblocktrans %}
+        </p>
+        <form action="" method="post" class="form-inline">
+            {% csrf_token %}
+            {% bootstrap_field close_form.amount layout="inline" %}
+            {% bootstrap_field close_form.reason layout="inline" %}
+            <button type="submit" class="btn btn-danger">{% trans "Close the drawer" %}</button>
+        </form>
+    {% endif %}
+{% endblock %}

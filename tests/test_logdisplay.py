@@ -227,9 +227,10 @@ def organizer_history(client, organizer):
 
 @pytest.mark.django_db
 def test_the_organizer_history_opens_with_every_kind_of_entry_on_it(
-    backoffice, organizer, device, sumup
+    backoffice, organizer, device, sumup, till
 ):
     from pretix_openpos.logdisplay import organizer_entry_types
+    from pretix_openpos.models import PosDrawer
 
     # An evening of setting up, through the real screens: a new key for the
     # account, a reader paired, given to a till, cleared and then removed.
@@ -248,6 +249,24 @@ def test_the_organizer_history_opens_with_every_kind_of_entry_on_it(
     })
     backoffice.post(sumup_url(organizer), {"action": "free", "reader_id": reader})
     backoffice.post(sumup_url(organizer), {"action": "forget", "reader_id": reader})
+    # And the drawers: one created, renamed, given to the till, opened there
+    # and closed from the back office; another created and deleted.
+    drawers = f"/control/organizer/{organizer.slug}/openpos/drawers/"
+    backoffice.post(drawers, {"action": "create", "new-name": "Bar", "new-opening_float": "100"})
+    backoffice.post(drawers, {"action": "create", "new-name": "Vestiaire"})
+    bar = PosDrawer.objects.get(name="Bar")
+    backoffice.post(drawers, {
+        "action": "save", "drawer": bar.pk,
+        f"d{bar.pk}-name": "Bar du haut", f"d{bar.pk}-opening_float": "100",
+    })
+    backoffice.post(drawers, {
+        "action": "delete", "drawer": PosDrawer.objects.get(name="Vestiaire").pk,
+    })
+    backoffice.post(devices_url(organizer), {
+        f"role_{device.pk}": PosDevice.ROLE_TILL, f"drawer_{device.pk}": bar.pk,
+    })
+    till.post("drawer/open", {"idempotency_key": "open-00001", "amount": "100.00"})
+    backoffice.post(f"{drawers}{bar.pk}/{bar.sessions.get().pk}/", {"amount": ""})
     # One of every kind the plugin writes on the organizer, or this proves less
     # than its name says.
     written = set(
@@ -266,6 +285,12 @@ def test_the_organizer_history_opens_with_every_kind_of_entry_on_it(
     assert f"{device.name}: no role → till, card reader {reader}" in page
     assert f"A card reader was asked to clear its screen: {reader}." in page
     assert f"A card reader was removed: {reader}" in page
+    assert "A cash drawer was created: Bar, usual float" in page
+    assert "A cash drawer was created: Vestiaire." in page
+    assert "The cash drawer Bar du haut was changed: renamed from Bar." in page
+    assert "The cash drawer Vestiaire was deleted." in page
+    assert f"{device.name}: cash drawer Bar du haut" in page
+    assert "The cash drawer Bar du haut was closed from the back office, without a count." in page
     for action_type in organizer_entry_types:
         assert action_type not in page
     # The key itself, which is the other thing this page must never show.

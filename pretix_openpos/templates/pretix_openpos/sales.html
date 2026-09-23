@@ -327,6 +327,12 @@
                         {% if sale.testmode %}
                             <span class="label label-warning">{% trans "test" %}</span>
                         {% endif %}
+                        {% if sale.drawer_session %}
+                            <br><small class="text-muted">
+                                <span class="fa fa-money"></span>
+                                <a href="{% url "plugins:pretix_openpos:drawer.session" organizer=request.event.organizer.slug drawer=sale.drawer_session.drawer_id session=sale.drawer_session_id %}">{{ sale.drawer_session.drawer.name }}</a>
+                            </small>
+                        {% endif %}
                     </td>
                     <td>{{ sale.cashier|default:"—" }}</td>
                     <td>{{ sale.get_payment_type_display }}</td>

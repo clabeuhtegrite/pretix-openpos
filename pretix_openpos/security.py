@@ -48,6 +48,14 @@ class OpenPosSecurityProfile(AllowListSecurityProfile):
         # The snapshot a till carries so a network dropout does not close the door.
         ("GET", "api-v1:openpos-offline"),
         ("POST", "api-v1:openpos-cancel"),
+        # The cash drawer this till is assigned: opening it on a counted float,
+        # money put in or taken out, the blind count and the closing. Each one
+        # acts on this till's own drawer and no other.
+        ("GET", "api-v1:openpos-drawer"),
+        ("POST", "api-v1:openpos-drawer-open"),
+        ("POST", "api-v1:openpos-drawer-movement"),
+        ("POST", "api-v1:openpos-drawer-count"),
+        ("POST", "api-v1:openpos-drawer-close"),
         # Scanning tickets at the door. pretix' own check-in RPC is used rather
         # than a POS-specific endpoint: it already carries the rules engine,
         # revoked/blocked secrets, and the exact semantics pretixSCAN relies on.

@@ -1,0 +1,94 @@
+{% extends "pretixcontrol/organizers/base.html" %}
+{% load i18n %}
+{% load money %}
+{% block title %}{{ drawer.name }}{% endblock %}
+{% block content %}
+    <h1>
+        {{ drawer.name }}
+        <small><a href="{{ drawers_url }}">{% trans "Cash drawers" %}</a></small>
+        <a href="?export=csv" class="btn btn-default btn-sm pull-right">
+            <span class="fa fa-download"></span>
+            {% trans "Export CSV" %}
+        </a>
+    </h1>
+
+    {% if tampered_with %}
+        <div class="alert alert-danger">
+            <strong>{% trans "This drawer's ledger does not add up." %}</strong>
+            {% blocktrans trimmed with seq=tampered_with.seq %}
+                Entry #{{ seq }} does not match the hash of the entry before it. The ledger is
+                meant to be append-only, so this means rows were changed or removed directly in
+                the database.
+            {% endblocktrans %}
+        </div>
+    {% endif %}
+
+    <p class="text-muted">
+        {% if devices %}
+            {% trans "Tills putting their cash in it:" %}
+            {% for device in devices %}{{ device.name }}{% if not forloop.last %}, {% endif %}{% endfor %}.
+        {% else %}
+            {% trans "No till puts its cash in this drawer at the moment." %}
+        {% endif %}
+    </p>
+
+    <div class="table-responsive">
+        <table class="table table-condensed table-hover">
+            <thead>
+            <tr>
+                <th>{% trans "Opened" %}</th>
+                <th>{% trans "Closed" %}</th>
+                <th class="text-right">{% trans "Float" %}</th>
+                <th class="text-right">{% trans "Expected" %}</th>
+                <th class="text-right">{% trans "Counted" %}</th>
+                <th class="text-right">{% trans "Difference" %}</th>
+            </tr>
+            </thead>
+            <tbody>
+            {% for row in rows %}
+                <tr>
+                    <td>
+                        <a href="{{ row.url }}">{{ row.session.opened_at|date:"SHORT_DATETIME_FORMAT" }}</a>
+                        {% if row.opening.cashier %}<br><small class="text-muted">{{ row.opening.cashier }}</small>{% endif %}
+                    </td>
+                    <td>
+                        {% if row.session.closed_at %}
+                            {{ row.session.closed_at|date:"SHORT_DATETIME_FORMAT" }}
+                            {% if row.closing.cashier %}<br><small class="text-muted">{{ row.closing.cashier }}</small>{% endif %}
+                        {% else %}
+                            <span class="label label-success">{% trans "Open" %}</span>
+                        {% endif %}
+                    </td>
+                    <td class="text-right">{{ row.float|money:currency }}</td>
+                    <td class="text-right">{% if row.expected is not None %}{{ row.expected|money:currency }}{% else %}—{% endif %}</td>
+                    <td class="text-right">
+                        {% if row.counted is not None %}
+                            {{ row.counted|money:currency }}
+                        {% elif row.closing %}
+                            <span class="text-muted">{% trans "Not counted" %}</span>
+                        {% else %}—{% endif %}
+                    </td>
+                    <td class="text-right">
+                        {% if row.difference is None %}
+                            —
+                        {% elif row.difference == 0 %}
+                            <span class="text-success">{{ row.difference|money:currency }}</span>
+                        {% else %}
+                            <strong class="{% if row.difference < 0 %}text-danger{% else %}text-warning{% endif %}">{{ row.difference|money:currency }}</strong>
+                        {% endif %}
+                    </td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="6">{% trans "This drawer has never been opened." %}</td></tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    {% if previous_page or next_page %}
+        <ul class="pager">
+            {% if previous_page %}<li class="previous"><a href="?page={{ previous_page }}">{% trans "More recent" %}</a></li>{% endif %}
+            {% if next_page %}<li class="next"><a href="?page={{ next_page }}">{% trans "Older" %}</a></li>{% endif %}
+        </ul>
+    {% endif %}
+{% endblock %}

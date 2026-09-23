@@ -1,0 +1,135 @@
+{% extends "pretixcontrol/organizers/base.html" %}
+{% load i18n %}
+{% load bootstrap3 %}
+{% load money %}
+{% block title %}{% trans "Cash drawers" %}{% endblock %}
+{% block content %}
+    <h1>{% trans "Cash drawers" %}</h1>
+    <p class="text-muted">
+        {% blocktrans trimmed %}
+            One drawer here for every drawer of notes and coins behind a counter. A till given
+            a drawer asks for it to be opened, on a counted float, before it takes any cash;
+            at the end of the evening the drawer is counted blind and closed, and the difference
+            is written down. A till with no drawer takes cash as it always has.
+        {% endblocktrans %}
+    </p>
+
+    {% if rows %}
+        <div class="table-responsive">
+            <table class="table table-condensed">
+                <thead>
+                <tr>
+                    <th>{% trans "Drawer" %}</th>
+                    <th>{% trans "Tills" %}</th>
+                    <th>{% trans "Tonight" %}</th>
+                    <th>{% trans "Last closing" %}</th>
+                    {% if can_manage %}<th></th>{% endif %}
+                </tr>
+                </thead>
+                <tbody>
+                {% for row in rows %}
+                    <tr>
+                        <td>
+                            <strong><a href="{{ row.url }}">{{ row.drawer.name }}</a></strong>
+                            {% if row.drawer.opening_float is not None %}
+                                <br><small class="text-muted">
+                                    {% blocktrans trimmed with amount=row.drawer.opening_float|money:currency %}
+                                        Usual float {{ amount }}
+                                    {% endblocktrans %}
+                                </small>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% for device in row.devices %}
+                                {{ device.name }}{% if not forloop.last %}<br>{% endif %}
+                            {% empty %}
+                                <span class="text-muted">{% trans "No till yet" %}</span>
+                            {% endfor %}
+                        </td>
+                        <td>
+                            {% if row.session %}
+                                <span class="label label-success">{% trans "Open" %}</span>
+                                <a href="{% url "plugins:pretix_openpos:drawer.session" organizer=request.organizer.slug drawer=row.drawer.pk session=row.session.session.pk %}">
+                                    {% blocktrans trimmed with when=row.session.session.opened_at|date:"SHORT_DATETIME_FORMAT" %}
+                                        since {{ when }}
+                                    {% endblocktrans %}
+                                </a>
+                                {% if row.session.opening.cashier %}
+                                    <br><small class="text-muted">{{ row.session.opening.cashier }}</small>
+                                {% endif %}
+                            {% else %}
+                                <span class="label label-default">{% trans "Closed" %}</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if row.last %}
+                                <a href="{% url "plugins:pretix_openpos:drawer.session" organizer=request.organizer.slug drawer=row.drawer.pk session=row.last.session.pk %}">
+                                    {{ row.last.session.closed_at|date:"SHORT_DATETIME_FORMAT" }}
+                                </a>
+                                <br>
+                                {% if row.last.difference is None %}
+                                    <small class="text-muted">{% trans "Not counted" %}</small>
+                                {% elif row.last.difference == 0 %}
+                                    <small class="text-success">{% trans "No difference" %}</small>
+                                {% else %}
+                                    <small class="{% if row.last.difference < 0 %}text-danger{% else %}text-warning{% endif %}">
+                                        {% blocktrans trimmed with amount=row.last.difference|money:currency %}
+                                            Difference {{ amount }}
+                                        {% endblocktrans %}
+                                    </small>
+                                {% endif %}
+                            {% else %}
+                                <span class="text-muted">—</span>
+                            {% endif %}
+                        </td>
+                        {% if can_manage %}
+                            <td>
+                                <form action="" method="post" class="form-inline">
+                                    {% csrf_token %}
+                                    <input type="hidden" name="drawer" value="{{ row.drawer.pk }}">
+                                    {% bootstrap_form_errors row.form type="non_fields" %}
+                                    {% bootstrap_field row.form.name layout="inline" size="small" %}
+                                    {% bootstrap_field row.form.opening_float layout="inline" size="small" %}
+                                    <button type="submit" name="action" value="save" class="btn btn-default btn-sm">
+                                        {% trans "Save" %}
+                                    </button>
+                                    {% if not row.has_history %}
+                                        <button type="submit" name="action" value="delete" class="btn btn-danger btn-sm"
+                                                title="{% trans "Delete" %}">
+                                            <span class="fa fa-trash"></span>
+                                        </button>
+                                    {% endif %}
+                                </form>
+                            </td>
+                        {% endif %}
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div class="alert alert-info">
+            {% trans "No cash drawer yet. Every till takes cash the way it always has." %}
+        </div>
+    {% endif %}
+
+    {% if can_manage %}
+        <h3>{% trans "New drawer" %}</h3>
+        <form action="" method="post" class="form-inline">
+            {% csrf_token %}
+            {% bootstrap_form_errors create_form type="non_fields" %}
+            {% bootstrap_field create_form.name layout="inline" %}
+            {% bootstrap_field create_form.opening_float layout="inline" %}
+            <button type="submit" name="action" value="create" class="btn btn-primary">
+                <span class="fa fa-plus"></span>
+                {% trans "Create" %}
+            </button>
+        </form>
+        <p class="help-block">
+            {% blocktrans trimmed with url=devices_url %}
+                Then say which tills put their cash in it, on the <a href="{{ url }}">till devices</a>
+                screen. Two tablets at one bar can share one drawer.
+            {% endblocktrans %}
+        </p>
+    {% endif %}
+{% endblock %}

@@ -1,14 +1,18 @@
 import hashlib
 import json
+from datetime import timezone as dt_timezone
+from decimal import Decimal
 
 from django.core.cache import cache
 from django.db import IntegrityError, models, transaction
 from django.utils.timezone import now
 from django.utils.translation import gettext_lazy as _
-from pretix.base.models import Device, Event, ItemCategory, Order
+from pretix.base.models import Device, Event, ItemCategory, Order, Organizer, User
 
 #: previous_hash of the very first sale of an event.
 GENESIS_HASH = "0" * 64
+
+CENT = Decimal("0.01")
 
 
 class PosSale(models.Model):
@@ -122,6 +126,21 @@ class PosSale(models.Model):
     #: product is renamed or deleted afterwards.
     positions = models.JSONField(default=list)
 
+    #: The opening of a cash drawer this sale's money went into, or came out of.
+    #:
+    #: Set when the till that rang it up is assigned a drawer and that drawer
+    #: was open at the time, and never otherwise: a till with no drawer keeps
+    #: selling exactly as it always has. Card sales carry it too, for the
+    #: closing report to name them, although no card money ever reaches the
+    #: drawer. Part of the hash from version 5, so a sale cannot be quietly
+    #: moved from one evening's drawer to another's — and ``RESTRICT`` rather
+    #: than ``SET_NULL`` for the same reason: nulling it would rewrite a row
+    #: of an append-only journal behind its hash.
+    drawer_session = models.ForeignKey(
+        "PosDrawerSession", null=True, blank=True, on_delete=models.RESTRICT,
+        related_name="sales",
+    )
+
     idempotency_key = models.CharField(max_length=190)
 
     previous_hash = models.CharField(max_length=64)
@@ -181,7 +200,7 @@ class PosSale(models.Model):
     # -- integrity ---------------------------------------------------------
 
     #: Version used for rows written from now on.
-    CURRENT_HASH_VERSION = 4
+    CURRENT_HASH_VERSION = 5
 
     def _hash_payload(self) -> str:
         """Canonical representation the hash is taken over, for this row's version."""
@@ -207,6 +226,8 @@ class PosSale(models.Model):
             payload["reason"] = self.reason
         if self.hash_version >= 4:
             payload["offline"] = self.offline
+        if self.hash_version >= 5:
+            payload["drawer_session"] = self.drawer_session_id
         return json.dumps(
             payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False
         )
@@ -317,7 +338,7 @@ class PosSale(models.Model):
     def record(cls, *, event, order, device, cashier, payment_type, total, positions,
                idempotency_key, cash_given=None, cash_change=None, testmode=False,
                kind=KIND_SALE, cancels_seq=None, reason="", offline=False,
-               recorded_at=None, attempts=5):
+               recorded_at=None, drawer_session=None, attempts=5):
         """
         Append a row to the journal, chaining it onto the current tail.
 
@@ -328,6 +349,9 @@ class PosSale(models.Model):
 
         ``order`` may be ``None``: a deposit refund is money out of the drawer
         with no order to hang it on.
+
+        ``drawer_session`` is the drawer opening the money belongs to, when the
+        till has a drawer — see :attr:`drawer_session`.
         """
         for _attempt in range(attempts):
             last = cls.objects.filter(event=event).order_by("-seq").first()
@@ -357,6 +381,7 @@ class PosSale(models.Model):
                 cancels_seq=cancels_seq,
                 reason=reason or "",
                 offline=offline,
+                drawer_session=drawer_session,
                 hash_version=cls.CURRENT_HASH_VERSION,
                 previous_hash=last.hash if last else GENESIS_HASH,
             )
@@ -444,6 +469,17 @@ class PosDevice(models.Model):
     sumup_reader_id = models.CharField(
         max_length=190, blank=True, default="",
         verbose_name=_("SumUp reader"),
+    )
+
+    #: The cash drawer this device's cash goes into, if it has one.
+    #:
+    #: Several devices may share a drawer — two tablets at one bar, one box of
+    #: change between them — and a device with none keeps selling exactly as
+    #: it did before drawers existed. Once it has one, a cash sale waits for
+    #: that drawer to be opened: see :class:`PosDrawerSession`.
+    drawer = models.ForeignKey(
+        "PosDrawer", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="devices", verbose_name=_("Cash drawer"),
     )
 
     class Meta:
@@ -678,3 +714,300 @@ class PosCategory(models.Model):
             for category_id, role in cls.reserved(event).items()
             if role != pos_device.role
         }
+
+
+class PosDrawer(models.Model):
+    """
+    A cash drawer: the box of notes and coins behind a counter.
+
+    Created in the back office, one per physical drawer, and given to the
+    devices whose cash goes into it — often one, sometimes two tablets at the
+    same bar. Organizer-level, like the devices themselves: the bar's drawer is
+    the bar's drawer whichever event is on tonight.
+
+    The drawer itself holds no money figure. What it held at any moment is the
+    business of its openings, :class:`PosDrawerSession`, and of their ledger,
+    :class:`PosDrawerEntry`, which is where every euro that went in or out
+    without a sale is written down.
+    """
+
+    organizer = models.ForeignKey(
+        Organizer, on_delete=models.CASCADE, related_name="openpos_drawers"
+    )
+    name = models.CharField(max_length=190, verbose_name=_("Name"))
+    #: What the drawer usually starts the evening with.
+    #:
+    #: Only ever a suggestion: the till offers it when the drawer is opened,
+    #: and what is actually counted then is what the evening starts from.
+    opening_float = models.DecimalField(
+        max_digits=13, decimal_places=2, null=True, blank=True,
+        verbose_name=_("Usual opening float"),
+    )
+    created = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = _("Cash drawer")
+        verbose_name_plural = _("Cash drawers")
+        ordering = ("name", "pk")
+        constraints = [
+            # Two drawers called "Bar" is a report nobody can read.
+            models.UniqueConstraint(
+                fields=["organizer", "name"], name="openpos_drawer_unique_name"
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
+
+    def open_session(self):
+        """The opening that is still running, or ``None``."""
+        return self.sessions.filter(closed_at__isnull=True).first()
+
+
+class PosDrawerSession(models.Model):
+    """
+    One opening of a drawer, from the float counted in to the cash counted out.
+
+    Opened on a till by whoever sets up the counter, with the float they
+    counted into it; closed at the end of the evening by a blind count — the
+    cash is counted before anybody is shown what it should come to — and the
+    difference between the two is the one figure the evening is judged by.
+
+    A cash sale on a device that has a drawer is refused while its drawer is
+    not open: the sale has to land in an opening, or the count at the end of
+    the night cannot account for it. Card sales are never refused, and are
+    attached for the report's sake only.
+
+    The row is mutable — it gains its closing time — but everything that
+    happened to the money is in :class:`PosDrawerEntry`, which is not.
+    """
+
+    drawer = models.ForeignKey(PosDrawer, on_delete=models.CASCADE, related_name="sessions")
+    opened_at = models.DateTimeField()
+    closed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        verbose_name = _("Cash drawer opening")
+        verbose_name_plural = _("Cash drawer openings")
+        ordering = ("-opened_at", "-pk")
+        constraints = [
+            # One drawer, one opening at a time. The ledger code checks this
+            # first; this is what holds when two tills press "open" at once.
+            models.UniqueConstraint(
+                fields=["drawer"],
+                condition=models.Q(closed_at__isnull=True),
+                name="openpos_drawer_one_open_session",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.drawer} {self.opened_at:%Y-%m-%d %H:%M}"
+
+    @property
+    def is_open(self) -> bool:
+        return self.closed_at is None
+
+
+class PosDrawerEntry(models.Model):
+    """
+    Append-only ledger of a drawer: everything that moved its money but a sale.
+
+    Opening float, cash put in, cash taken out, every count, the closing. Sales
+    are not repeated here — they are in :class:`PosSale`, and each one names
+    the opening it belongs to — so a drawer's expected cash is its entries plus
+    its sales, and neither ledger has to be kept in step with the other.
+
+    Hash-chained per drawer the way the sales journal is per event, and for
+    the same reason: a float lowered after the fact, or a withdrawal that
+    disappears, is exactly what a cash audit looks for, and the chain makes
+    either one visible. ``save()`` and ``delete()`` refuse to modify a row.
+
+    Written under a lock on the drawer's row, which serialises everything that
+    happens to one drawer. The traffic is a handful of rows an evening, so the
+    optimistic retry the sales journal needs would be all cost and no benefit.
+    """
+
+    KIND_OPEN = "open"
+    KIND_IN = "in"
+    KIND_OUT = "out"
+    KIND_COUNT = "count"
+    KIND_CLOSE = "close"
+    KIND_CHOICES = (
+        (KIND_OPEN, _("Opening float")),
+        (KIND_IN, _("Cash in")),
+        (KIND_OUT, _("Cash out")),
+        (KIND_COUNT, _("Count")),
+        (KIND_CLOSE, _("Closing")),
+    )
+
+    #: Done on a till, by whoever held it.
+    SOURCE_TILL = "till"
+    #: Done in the back office, by a pretix user.
+    SOURCE_BACKOFFICE = "backoffice"
+    SOURCE_CHOICES = (
+        (SOURCE_TILL, _("Till")),
+        (SOURCE_BACKOFFICE, _("Back office")),
+    )
+
+    drawer = models.ForeignKey(PosDrawer, on_delete=models.CASCADE, related_name="entries")
+    session = models.ForeignKey(
+        PosDrawerSession, on_delete=models.CASCADE, related_name="entries"
+    )
+    #: Gapless per-drawer counter, starting at 1.
+    seq = models.PositiveIntegerField()
+    datetime = models.DateTimeField(db_index=True)
+    kind = models.CharField(max_length=16, choices=KIND_CHOICES)
+
+    #: The float, the sum put in or taken out, or the cash counted. Positive.
+    #:
+    #: Empty on one row only: a closing nobody counted, which is how a drawer
+    #: left open since an earlier evening gets closed by somebody who never
+    #: saw the money it held.
+    amount = models.DecimalField(max_digits=13, decimal_places=2, null=True, blank=True)
+    #: On a count and on a closing, what the drawer should have held then.
+    expected = models.DecimalField(max_digits=13, decimal_places=2, null=True, blank=True)
+    #: How the amount was counted, ``{"20.00": 3, "0.50": 4}``, when it was
+    #: counted note by note. Empty when a total was typed in.
+    denominations = models.JSONField(default=dict, blank=True)
+    #: Why money went in or out, or a word about the closing.
+    reason = models.CharField(max_length=190, blank=True, default="")
+    #: Who did it: the name the till was given, or the back-office user.
+    cashier = models.CharField(max_length=190, blank=True, default="")
+    source = models.CharField(max_length=16, choices=SOURCE_CHOICES, default=SOURCE_TILL)
+
+    device = models.ForeignKey(
+        Device, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="openpos_drawer_entries",
+    )
+    #: Denormalised, like the sales journal's, so the ledger still names the
+    #: till after the device is gone. The serial is what the hash covers.
+    device_serial = models.CharField(max_length=190, blank=True, default="")
+    device_name = models.CharField(max_length=190, blank=True, default="")
+    #: The back-office user, when there was one. A convenience link only:
+    #: :attr:`cashier` is what the hash covers, so a deleted account leaves
+    #: the chain intact.
+    user = models.ForeignKey(
+        User, null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="openpos_drawer_entries",
+    )
+
+    idempotency_key = models.CharField(max_length=190)
+
+    previous_hash = models.CharField(max_length=64)
+    hash = models.CharField(max_length=64)
+    #: Which fields the hash covers; see :attr:`PosSale.hash_version`.
+    hash_version = models.PositiveSmallIntegerField(default=1)
+
+    CURRENT_HASH_VERSION = 1
+
+    class Meta:
+        verbose_name = _("Cash drawer entry")
+        verbose_name_plural = _("Cash drawer entries")
+        ordering = ("drawer", "seq")
+        constraints = [
+            models.UniqueConstraint(fields=["drawer", "seq"], name="openpos_drawer_unique_seq"),
+            models.UniqueConstraint(
+                fields=["drawer", "idempotency_key"], name="openpos_drawer_unique_idempotency"
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.drawer} #{self.seq} {self.kind} {self.amount}"
+
+    @property
+    def difference(self):
+        """Counted minus expected: negative when cash is missing."""
+        if self.amount is None or self.expected is None:
+            return None
+        return self.amount - self.expected
+
+    # -- integrity ---------------------------------------------------------
+
+    def _hash_payload(self) -> str:
+        def money(value):
+            return None if value is None else str(Decimal(value).quantize(CENT))
+
+        payload = {
+            "seq": self.seq,
+            "drawer": self.drawer_id,
+            "session": self.session_id,
+            # In UTC whatever it was handed in, so that a row reads back from
+            # the database exactly as it was hashed.
+            "datetime": self.datetime.astimezone(dt_timezone.utc).isoformat(),
+            "kind": self.kind,
+            "amount": money(self.amount),
+            "expected": money(self.expected),
+            "denominations": self.denominations or {},
+            "reason": self.reason,
+            "cashier": self.cashier,
+            "source": self.source,
+            "device": self.device_serial,
+            "previous_hash": self.previous_hash,
+        }
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+    def compute_hash(self) -> str:
+        return hashlib.sha256(self._hash_payload().encode("utf-8")).hexdigest()
+
+    @classmethod
+    def verify_chain(cls, drawer):
+        """The first entry of this drawer that does not add up, or ``None``."""
+        previous = GENESIS_HASH
+        expected_seq = 1
+        for entry in cls.objects.filter(drawer=drawer).order_by("seq").iterator():
+            if (
+                entry.seq != expected_seq
+                or entry.previous_hash != previous
+                or entry.hash != entry.compute_hash()
+            ):
+                return entry
+            previous = entry.hash
+            expected_seq += 1
+        return None
+
+    # -- append-only enforcement -------------------------------------------
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            raise ValueError("PosDrawerEntry rows are append-only and cannot be modified.")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValueError("PosDrawerEntry rows are append-only and cannot be deleted.")
+
+    # -- writing -----------------------------------------------------------
+
+    @classmethod
+    def append(cls, *, drawer, session, kind, idempotency_key, amount=None, expected=None,
+               denominations=None, reason="", cashier="", device=None, user=None,
+               source=SOURCE_TILL, at=None):
+        """
+        Chain one entry onto the drawer's ledger.
+
+        The caller holds the drawer's row lock — see :mod:`pretix_openpos.drawers`
+        — which is what makes reading the tail and writing after it safe.
+        """
+        last = cls.objects.filter(drawer=drawer).order_by("-seq").first()
+        entry = cls(
+            drawer=drawer,
+            session=session,
+            seq=(last.seq + 1) if last else 1,
+            datetime=at or now(),
+            kind=kind,
+            amount=None if amount is None else Decimal(amount).quantize(CENT),
+            expected=None if expected is None else Decimal(expected).quantize(CENT),
+            denominations=denominations or {},
+            reason=reason or "",
+            cashier=cashier or "",
+            source=source,
+            device=device,
+            device_serial=device.unique_serial if device else "",
+            device_name=(device.name or "") if device else "",
+            user=user,
+            idempotency_key=idempotency_key,
+            hash_version=cls.CURRENT_HASH_VERSION,
+            previous_hash=last.hash if last else GENESIS_HASH,
+        )
+        entry.hash = entry.compute_hash()
+        entry.save()
+        return entry
