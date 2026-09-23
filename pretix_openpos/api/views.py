@@ -3,7 +3,6 @@ from datetime import datetime, time, timedelta
 from decimal import Decimal
 
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Exists, F, OuterRef, Q
 from django.utils.timezone import make_aware, now
 from django.utils.translation import gettext_lazy as _
 from django_scopes import scopes_disabled
@@ -21,6 +20,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 
 from .. import __version__
+from ..attendance import attendance, door_scans
 from ..backoffice import till_cancelling
 from ..channels import POS_CHANNEL, PosSalesChannelType
 from ..drawers import (
@@ -182,92 +182,6 @@ def start_of_business_day(event, at=None):
     if local.time() < BUSINESS_DAY_STARTS_AT:
         day -= timedelta(days=1)
     return make_aware(datetime.combine(day, BUSINESS_DAY_STARTS_AT), event.timezone)
-
-
-#: How late a scan may reach the server and still be taken for a live one.
-#:
-#: pretix' own threshold, from ``Checkin.is_late_upload``. It matters for the
-#: scans that were queued with no network before this plugin sent them the way
-#: pretix expects offline scans to be sent: those carry no offline flag, and
-#: the gap between the moment of the scan and the moment it arrived is the only
-#: trace that they waited on a device.
-LATE_UPLOAD = timedelta(minutes=2)
-
-#: A scan made with no network, then sent: flagged by the device that sent it,
-#: or visibly late.
-SENT_AFTER_THE_FACT = Q(force_sent=True) | Q(created__gt=F("datetime") + LATE_UPLOAD)
-
-
-def door_scans(event, device, subevent=None):
-    """
-    What the doors have scanned for this event, per device and in all.
-
-    Read from pretix' own check-in rows rather than counted by the app: a count
-    kept in a browser is gone whenever iOS reloads the page, and that is what a
-    door found out on its first evening — the figure on the scanner went back
-    to zero every time somebody stepped out of the app for a while. The rows
-    are there anyway; counting them is the figure that cannot be lost.
-
-    A scan is a check-in that came through the check-in API with a code in it:
-    a scanning app, this one or pretixSCAN. The check-in written at the till
-    with a sale is not one — nobody scanned anything — and neither is an
-    automatic or a back-office one, which is exactly the set of rows that
-    carries no ``raw_source_type``. Entries only: a door counts people coming
-    in.
-
-    The whole event, whenever the scan was made. It used to be tonight only,
-    from six in the morning like the takings, so a phone that had let seventy
-    people in read zero on every day after, on that very event. In a series,
-    ``subevent`` narrows it to one date: its doors, and its tickets at doors
-    kept for every date.
-    """
-    scope = Q(list__event=event, type=Checkin.TYPE_ENTRY, raw_source_type__isnull=False)
-    if subevent is not None:
-        scope &= Q(list__subevent=subevent) | Q(
-            list__subevent__isnull=True, position__subevent=subevent
-        )
-    admitted = Q(successful=True, position__item__admission=True)
-    with scopes_disabled():
-        rows = list(
-            Checkin.all.filter(scope)
-            .order_by()
-            .values("device_id")
-            .annotate(
-                admitted=Count("pk", filter=admitted),
-                # Recorded, but for a product that lets nobody in: the T-shirt
-                # scanned at a list that takes every product.
-                other=Count("pk", filter=Q(successful=True, position__item__admission=False)),
-                refused=Count("pk", filter=Q(successful=False)),
-                offline=Count("pk", filter=admitted & SENT_AFTER_THE_FACT),
-            )
-        )
-        names = dict(
-            Device.objects.filter(
-                pk__in=[row["device_id"] for row in rows if row["device_id"]]
-            ).values_list("pk", "name")
-        )
-
-    fields = ("admitted", "refused", "other", "offline")
-
-    def figures(row):
-        return {field: row[field] if row else 0 for field in fields}
-
-    by_device = {row["device_id"]: row for row in rows}
-    devices = [
-        {
-            # None for scans made from the back office, which have no device.
-            "name": names.get(pk) if pk else None,
-            "current": device is not None and pk == device.pk,
-            **figures(row),
-        }
-        for pk, row in by_device.items()
-    ]
-    devices.sort(key=lambda d: (-d["admitted"], d["name"] is None, d["name"] or ""))
-    return {
-        "device": figures(by_device.get(device.pk)) if device else None,
-        "event": {field: sum(row[field] for row in rows) for field in fields},
-        "devices": devices,
-    }
 
 
 def walk_in(position, clist, *, auth, user, offline_at=None):
@@ -2529,15 +2443,11 @@ class OpenPosViewSet(viewsets.ViewSet):
         """
         How many people are inside right now, and how the room filled up.
 
-        Counts admission products only. A check-in list with ``all_products``
-        happily accepts a T-shirt and pretix will dutifully record the scan, but
-        a merch line has no door: counting those would answer "how many things
-        were scanned" when the question at the door is "how many people are in
-        the room". Everything on the screen is derived from that same
-        population, so the figures always add up.
-
-        Entry and exit scans are resolved by pretix itself, so a list that scans
-        people back out reports the room rather than the turnstile.
+        Counted by :func:`pretix_openpos.attendance.attendance`, which the
+        back office's arrivals page reads too, so the door and the office
+        cannot disagree about an evening. In a series, the date this door's
+        list is kept for; on a list for every date, tonight's rather than the
+        whole season's.
 
         ``scans`` rides along for the scanner's own counter: what this device
         and every door have scanned for the event, on every list of it. It is
@@ -2550,68 +2460,15 @@ class OpenPosViewSet(viewsets.ViewSet):
         if clist is None:
             raise ValidationError({"list": [_("Unknown check-in list.")]})
 
-        # Scopes off for the counting, as pretix does for its own check-in
-        # figures: the extra organizer filter inside the EXISTS() subquery
-        # tricks PostgreSQL into sequentially scanning every event. Every
-        # queryset below is already bounded to this list, hence to this event.
-        with scopes_disabled():
-            admissions = clist.positions.filter(item__admission=True)
-            entered = self._with_entry_scan(admissions, clist)
-            inside = clist.positions_inside_query().filter(item__admission=True)
-
-            def by_item(qs):
-                return {
-                    row["item"]: row["cnt"]
-                    for row in qs.order_by().values("item").annotate(cnt=Count("id"))
-                }
-
-            expected_by_item = by_item(admissions)
-            entered_by_item = by_item(entered)
-            inside_by_item = by_item(inside)
-
-            items = [
-                {
-                    "id": item.pk,
-                    "name": str(item.name),
-                    "inside": inside_by_item.get(item.pk, 0),
-                    "entered": entered_by_item.get(item.pk, 0),
-                    "expected": expected_by_item.get(item.pk, 0),
-                }
-                for item in event.items.filter(pk__in=list(expected_by_item)).order_by(
-                    "category__position", "category_id", "position", "pk"
-                )
-            ]
-
-            # Reported rather than hidden: it is the one thing that explains a
-            # figure here differing from the count pretix' own back-office shows.
-            non_admission = self._with_entry_scan(
-                clist.positions.filter(item__admission=False), clist
-            ).count()
-
-        expected = sum(expected_by_item.values())
-        entered_count = sum(entered_by_item.values())
-        inside_count = sum(inside_by_item.values())
-
+        subevent = clist.subevent or evening_subevent(event)
         return Response(
             {
-                "list": {"id": clist.pk, "name": str(clist.name)},
+                **attendance(clist, subevent),
                 "computed_at": now().isoformat(),
-                "inside": inside_count,
-                # Everyone who was let in at least once, whether or not they
-                # have since been scanned back out.
-                "entered": entered_count,
-                "exited": entered_count - inside_count,
-                "expected": expected,
-                "not_arrived": expected - entered_count,
-                "non_admission_entered": non_admission,
-                "items": items,
-                # In a series, the date this door's list is kept for, as its
-                # own figures are; on a list for every date, tonight's rather
-                # than the whole season's.
                 "scans": door_scans(
                     event,
                     request.auth if isinstance(request.auth, Device) else None,
-                    clist.subevent or evening_subevent(event),
+                    subevent,
                 ),
             }
         )
@@ -2660,18 +2517,6 @@ class OpenPosViewSet(viewsets.ViewSet):
                 position_id__lte=rows[-1].pk,
             ).values_list("position_id", flat=True)
         )
-
-    def _with_entry_scan(self, positions, clist):
-        """Narrow a position queryset to the ones let in through ``clist``."""
-        return positions.annotate(
-            checked_in=Exists(
-                Checkin.objects.filter(
-                    list_id=clist.pk,
-                    position=OuterRef("pk"),
-                    type=Checkin.TYPE_ENTRY,
-                )
-            )
-        ).filter(checked_in=True)
 
     def _journal_payload(self, sale, cancelled_seqs=()):
         """One journal line as the till displays it."""

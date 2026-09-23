@@ -118,7 +118,10 @@ def test_a_scan_from_the_back_office_counts_for_the_event_under_no_device(
 
     assert body["event"]["admitted"] == 1
     assert body["devices"] == [
-        {"name": None, "current": False, "admitted": 1, "refused": 0, "other": 0, "offline": 0}
+        {
+            "id": None, "name": None, "current": False,
+            "admitted": 1, "refused": 0, "other": 0, "offline": 0,
+        }
     ]
 
 

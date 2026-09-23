@@ -167,7 +167,7 @@ de caisse à la fermeture) et **`PosDrawerEntry`** (le journal du tiroir, chaîn
 lui aussi) — décrits au §5septies. Une vente porte l'ouverture de caisse dans
 laquelle son argent est entré, dans le champ `drawer_session`.
 
-### 2.5 Sept écrans de back-office
+### 2.5 Huit écrans de back-office
 
 [views.py](../pretix_openpos/views.py), [arrivals.py](../pretix_openpos/arrivals.py),
 [devices.py](../pretix_openpos/devices.py),
@@ -180,7 +180,8 @@ laquelle son argent est entré, dans le champ `drawer_session`.
 | `/control/event/<org>/<ev>/openpos/` | Réglages (liste de contrôle d'accès) | `event.settings.general:write` |
 | `…/openpos/categories/` | Qui vend quoi : la catégorie réservée au bar ou à la porte | `event.items:write` |
 | `…/openpos/sales/` | Journal des ventes + recette par caisse et par produit | `event.orders:read` |
-| `/control/organizer/<org>/openpos/arrivals/` | Affluence à l'entrée, tous événements passés | `event.orders:read` sur ≥ 1 événement |
+| `…/openpos/arrivals/` | Arrivées de la soirée : entrés, pas venus, arrivées par quart d'heure, scans par appareil, refus par motif | `event.orders:read` |
+| `/control/organizer/<org>/openpos/arrivals/` | Arrivées : une ligne par soirée, et l'heure d'arrivée sur toutes les soirées passées | `event.orders:read` sur ≥ 1 événement |
 | `/control/organizer/<org>/openpos/devices/` | Appareils de caisse : rôle, lecteur et caisse espèces de chacun | `organizer.devices:write` |
 | `/control/organizer/<org>/openpos/sumup/` | Lecteurs de carte : le compte SumUp et ses lecteurs | `organizer.devices:write` |
 | `/control/organizer/<org>/openpos/drawers/` | Caisses espèces : les tiroirs, l'historique de chacun et le rapport de chaque soirée (§5septies) | `organizer.devices:write` ; en lecture, `event.orders:read` sur **tous** les événements |
@@ -192,25 +193,58 @@ sans lui (§5bis).
 Les quatre derniers sont au niveau *organisateur*, et pas par événement : une
 caisse est appairée une fois, un lecteur et un tiroir appartiennent à
 l'association, et « à quelle heure les gens arrivent-ils ? » est une question
-qui porte sur toutes les soirées passées. Les écrans matériels sont gardés par
-la permission des devices de pretix — qui peut appairer une caisse peut dire à
-quoi elle sert.
+qui porte sur toutes les soirées passées — chacune ayant en plus sa page à elle.
+Les écrans matériels sont gardés par la permission des devices de pretix — qui
+peut appairer une caisse peut dire à quoi elle sert.
 
-Six d'entre eux ont leur entrée dans le menu latéral de pretix : *Qui vend
-quoi* et *Ventes* sous **Open POS** dans celui de l'événement, les quatre écrans
-d'organisateur dans celui de l'organisateur. Un lien n'y apparaît qu'à qui a la
-permission de l'écran derrière lui, et le menu **Open POS** n'apparaît pas du
-tout à qui ne peut ouvrir ni l'un ni l'autre. Le septième, *Réglages*, reste sur
-la carte du plugin, sous *Paramètres → Plugins*.
+Sept d'entre eux ont leur entrée dans le menu latéral de pretix : *Qui vend
+quoi*, *Ventes* et *Arrivées* sous **Open POS** dans celui de l'événement, les
+quatre écrans d'organisateur dans celui de l'organisateur. Un lien n'y apparaît
+qu'à qui a la permission de l'écran derrière lui, et le menu **Open POS**
+n'apparaît pas du tout à qui ne peut en ouvrir aucun. Le huitième, *Réglages*,
+reste sur la carte du plugin, sous *Paramètres → Plugins*.
 
-L'écran Affluence est strictement en lecture — un histogramme des
-scans d'entrée réussis par heure locale de l'événement, le pic et le creux, et
-le détail par événement. Les check-ins automatiques, les commandes en mode test,
-les scans refusés et les scans de sortie n'y comptent pas : la page mesure des
-personnes qui franchissent une porte. Une équipe limitée à certains événements
-ne voit que les scans de ces événements-là. Le graphique est un SVG rendu côté
-serveur, stylé par une feuille statique — la CSP du back-office interdit les
-styles inline, et un `<style>` bloqué rend chaque rectangle SVG noir par défaut.
+Les deux écrans Arrivées sont strictement en lecture, et lisent le calcul de
+l'écran de porte ([attendance.py](../pretix_openpos/attendance.py)) : une soirée
+ne peut pas avoir deux réponses.
+
+- **Celui de l'événement** dit la soirée à qui la relit. En tuiles : les
+  *entrés* sur les billets attendus, les *pas venus* (*pas encore arrivés* tant
+  que la soirée dure), le *quart d'heure de plus forte affluence*, les *refusés*
+  avec leur premier motif, et *sur place* dès qu'une sortie est scannée — avec
+  le moment où la salle a été la plus pleine. Puis, nuit par nuit (de 6 h à
+  6 h, comme la recette), les arrivées par quart d'heure — par demi-heure au-delà
+  de douze heures d'ouverture —, empilées *prévente* / *vendus sur place* quand
+  il y a des deux, avec leur tableau et leur cumul ; le détail par produit ; les
+  scans par appareil (admis, refusés, hors ligne), chaque appareil menant à
+  son historique dans pretix ; les refus par motif, dans les mots de pretix, qui
+  mènent aux check-ins filtrés sur ce motif. Une *arrivée* est le premier
+  passage d'un billet d'admission sur la liste : un billet ressorti puis rentré
+  n'arrive qu'une fois, si bien que les arrivées d'une soirée font exactement
+  ses *entrés*, et que les refus par motif font exactement la colonne *refusés*
+  des téléphones. Un billet vendu en caisse arrive au moment de sa vente,
+  puisque c'est la caisse qui fait entrer son acheteur ; il compte parmi les
+  vendus sur place, sans être un scan. Dans une série, la page montre une date
+  — celle qu'on choisit, sinon celle de ce soir — et la liste celle qu'on
+  choisit, sinon celle de la caisse. Elle compte les billets comme pretix et la
+  porte les comptent, check-ins automatiques et mode test compris.
+- **Celui de l'organisateur** commence par une ligne par soirée commencée —
+  chaque événement, et chaque date d'une série —, la plus récente en haut, avec
+  ses entrés, ses attendus, ses ventes sur place et son quart d'heure de pointe,
+  qui mène à la page de la soirée. Une soirée finie garde ses chiffres un quart
+  d'heure en cache ; une soirée en cours est recomptée à chaque affichage.
+  Suit l'histogramme des scans d'entrée réussis par heure locale de l'événement
+  sur toutes les soirées passées, le pic et le creux. Les check-ins
+  automatiques, les commandes en mode test, les scans refusés et les scans de
+  sortie n'y comptent pas : cet histogramme mesure des personnes qui franchissent
+  une porte. Une équipe limitée à certains événements ne voit que ces
+  événements-là.
+
+Les graphiques sont des SVG rendus côté serveur, stylés par une feuille
+statique — la CSP du back-office interdit les styles inline, et un `<style>`
+bloqué rend chaque rectangle SVG noir par défaut. Leurs coordonnées arrivent au
+gabarit déjà écrites : en français, Django écrirait `507,8`, qu'un attribut SVG
+lit comme deux nombres.
 
 ### 2.6 L'app elle-même
 
@@ -737,6 +771,15 @@ part plutôt que passés sous silence.
 Le calcul des présents est celui de pretix (`CheckinList.positions_inside_query`),
 pas une reprise maison : entrée puis sortie puis nouvelle entrée, la personne est
 dedans.
+
+Dans une série, les chiffres suivent une date, comme le compteur du scanneur
+(§5.2) : celle de la liste si elle est réservée à une date, sinon celle que la
+caisse vend ce soir. Une liste ouverte à toutes les dates comptait jusqu'ici les
+billets de toute la saison — trois mille attendus, à une porte qui en attend
+deux cents ce soir.
+
+La page *Arrivées* du back-office (§2.5) lit ce même calcul : ses *entrés* sont
+ceux du téléphone.
 
 ### 5.2 Le compteur du scanneur
 
@@ -2389,7 +2432,7 @@ pour une app d'avant la 0.19 pas encore rouverte.
     "device": { "admitted": 64, "refused": 3, "other": 1, "offline": 12 },
     "event": { "admitted": 196, "refused": 7, "other": 4, "offline": 12 },
     "devices": [
-      { "name": "Porte 1", "current": true, "admitted": 64, "refused": 3, "other": 1, "offline": 12 }
+      { "id": 7, "name": "Porte 1", "current": true, "admitted": 64, "refused": 3, "other": 1, "offline": 12 }
     ]
   }
 }
@@ -2397,8 +2440,11 @@ pour une app d'avant la 0.19 pas encore rouverte.
 
 `scans` compte les scans de l'événement sur **toutes** ses listes,
 pas seulement celle demandée (voir §5.2). `device` vaut `null` pour un appelant
-qui n'est pas un appareil, et `name` vaut `null` sur la ligne des scans faits
-depuis le back-office.
+qui n'est pas un appareil, et `id` comme `name` valent `null` sur la ligne des
+scans faits depuis le back-office. `id` est celui de l'appareil dans pretix.
+
+Dans une série, tous les chiffres suivent la date de la liste, ou celle de ce
+soir sur une liste ouverte à toutes les dates (§5.1).
 
 `inside + exited == entered` et `entered + not_arrived == expected`, toujours :
 les quatre chiffres sont tirés de la même population. `list` est facultatif dans
@@ -2513,7 +2559,8 @@ Ce qu'elle couvre, fichier par fichier :
 | `test_sumup_client.py` | La forme d'un échec SumUp — « refusé », « pas encore », « on n'a pas pu demander » |
 | `test_sumup_backoffice.py` | Les deux écrans matériels : la clé d'API hors des journaux, un lecteur donné à une seule caisse, SumUp en panne |
 | `test_backoffice.py` | Les écrans, chacun avec sa permission exacte — dont la page de commande de pretix, qu'une vente espèces a déjà mise en 500 |
-| `test_arrivals.py` | L'histogramme et tout ce qu'il ne doit pas compter |
+| `test_arrivals.py` | La page de l'organisateur : une ligne par soirée (une date de série comprise), l'histogramme et tout ce qu'il ne doit pas compter |
+| `test_event_arrivals.py` | La page d'une soirée : les arrivées font les entrés, les refus par motif font les refusés, un billet ressorti puis rentré n'arrive qu'une fois, minuit, plusieurs nuits, la liste de la caisse, une date de série |
 | `test_security.py` | Ce qu'un token de caisse atteint, et surtout ce qu'il n'atteint pas |
 
 **La suite frontend** (`frontend/src/*.test.ts`) couvre la logique qui décide où
@@ -2536,7 +2583,7 @@ entier.
 | [`dev/smoke_test.py`](../dev/smoke_test.py) | Bout en bout de l'API : appairage, catalogue, vente espèces, rejeu à l'identique, recette. Bibliothèque standard uniquement |
 | [`dev/backoffice_test.py`](../dev/backoffice_test.py) | Rend les pages du back-office avec un vrai navigateur de session |
 | [`dev/concurrency_test.py`](../dev/concurrency_test.py) | Martèle la caisse depuis plusieurs fils et vérifie que le journal tient. **À lancer sur PostgreSQL** : le savepoint du journal est indulgent sur SQLite et impitoyable sur PostgreSQL, ce que la suite backend ne peut pas voir |
-| [`dev/arrivals_test.py`](../dev/arrivals_test.py) | Sème son propre organisateur et vérifie l'histogramme sur des données connues |
+| [`dev/arrivals_test.py`](../dev/arrivals_test.py) | Sème son propre organisateur et vérifie l'histogramme, puis la page d'une soirée, sur des données connues |
 
 `OPENPOS_BASE` permet de viser une autre instance que la pile de dev SQLite.
 

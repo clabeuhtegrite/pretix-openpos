@@ -12,7 +12,7 @@ from decimal import Decimal
 
 import pytest
 from django.utils.timezone import now
-from pretix.base.models import Checkin, Event, Order, OrderPosition
+from pretix.base.models import Checkin, Event, Order, OrderPosition, Team
 
 from pretix_openpos.arrivals import chart_geometry, hour_label, px
 
@@ -259,3 +259,115 @@ def test_an_evening_bigger_than_any_step_still_gets_a_scale():
 
     assert geometry["yticks"][-1]["label"] >= 120_000
     assert geometry["bars"][21]["d"] is not None
+
+
+@pytest.mark.django_db
+def test_each_evening_that_has_begun_is_a_row_with_its_own_figures(
+    readable, organizer, event, ticket
+):
+    client, past = readable
+    item = past.items.create(name="Entrée", default_price=10, admission=True)
+    paris = zoneinfo.ZoneInfo("Europe/Paris")
+    for minute in (0, 5, 40):
+        arrival(past, item, datetime(2026, 7, 4, 21, minute, tzinfo=paris))
+    # Bought, never came.
+    OrderPosition.objects.create(
+        order=Order.objects.create(
+            event=past, status=Order.STATUS_PAID, datetime=now(), expires=now(),
+            total=Decimal("10.00"),
+            sales_channel=organizer.sales_channels.get(identifier="web"),
+        ),
+        item=item, positionid=1, price=Decimal("10.00"),
+    )
+    tonight = past_event(organizer, slug="ce-soir")
+    tonight.date_from = now() - timedelta(hours=1)
+    tonight.date_to = now() + timedelta(hours=4)
+    tonight.save()
+    Team.objects.get(organizer=organizer).limit_events.add(tonight)
+    tonight.checkin_lists.create(name="Porte", all_products=True)
+
+    response = load(client, organizer)
+    rows = response.context["evening_rows"]
+
+    # Newest first; `event` has not begun, so it is not an evening yet.
+    assert [row["event"] for row in rows] == [tonight, past]
+    assert (rows[1]["entered"], rows[1]["expected"], rows[1]["percent"]) == (3, 4, 75)
+    assert (rows[1]["rush"], rows[1]["rush_count"]) == ("21:00–21:15", 2)
+    assert not rows[0]["over"] and rows[1]["over"]
+    body = response.content.decode()
+    assert f"/control/event/{organizer.slug}/{past.slug}/openpos/arrivals/" in body
+
+
+@pytest.mark.django_db
+def test_each_date_of_a_series_is_an_evening_of_its_own(readable, organizer, channel):
+    from .test_series import a_date, an_item, series_event
+
+    client, _past = readable
+    series = series_event(organizer)
+    Team.objects.get(organizer=organizer).limit_events.add(series)
+    first = a_date(series, "Première", now() - timedelta(days=14), now() - timedelta(days=14) + timedelta(hours=5))
+    second = a_date(series, "Seconde", now() - timedelta(days=7), now() - timedelta(days=7) + timedelta(hours=5))
+    a_date(series, "À venir", now() + timedelta(days=7))
+    item = an_item(series, channel, first)
+    door = series.checkin_lists.create(name="Porte", all_products=True)
+    for date, count in ((first, 2), (second, 1)):
+        for _ in range(count):
+            order = Order.objects.create(
+                event=series, status=Order.STATUS_PAID, datetime=now(), expires=now(),
+                total=Decimal("10.00"),
+                sales_channel=organizer.sales_channels.get(identifier="web"),
+            )
+            position = OrderPosition.objects.create(
+                order=order, item=item, positionid=1, price=Decimal("10.00"), subevent=date
+            )
+            Checkin.objects.create(position=position, list=door, datetime=date.date_from)
+
+    rows = [row for row in load(client, organizer).context["evening_rows"] if row["event"] == series]
+
+    assert [(row["subevent"], row["entered"]) for row in rows] == [(second, 1), (first, 2)]
+
+
+@pytest.mark.django_db
+def test_an_evening_that_is_over_is_not_recounted_on_every_load(
+    readable, organizer, real_cache
+):
+    client, past = readable
+    item = past.items.create(name="Entrée", default_price=10, admission=True)
+    paris = zoneinfo.ZoneInfo("Europe/Paris")
+    arrival(past, item, datetime(2026, 7, 4, 21, 0, tzinfo=paris))
+
+    assert load(client, organizer).context["evening_rows"][0]["entered"] == 1
+
+    # A scan added behind the cache's back: an evening that is over stops
+    # being scanned, and a row per evening is a count per evening.
+    arrival(past, item, datetime(2026, 7, 4, 22, 0, tzinfo=paris))
+
+    assert load(client, organizer).context["evening_rows"][0]["entered"] == 1
+
+
+@pytest.mark.django_db
+def test_an_evening_with_nothing_to_count_on_says_so(readable, organizer):
+    client, past = readable
+
+    response = load(client, organizer)
+
+    assert response.context["evening_rows"][0]["expected"] is None
+    assert "no check-in list" in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_the_organizer_page_reads_in_french(readable, organizer):
+    from pretix.base.models import User
+
+    client, past = readable
+    User.objects.filter(email="boss@example.org").update(locale="fr")
+    item = past.items.create(name="Entrée", default_price=10, admission=True)
+    arrival(past, item, datetime(2026, 7, 4, 21, 0, tzinfo=zoneinfo.ZoneInfo("Europe/Paris")))
+
+    body = load(client, organizer).content.decode()
+
+    for french in (
+        "Arrivées", "Par événement", "Entrés", "Attendus", "Vendus sur place",
+        "Plus forte affluence", "Heure d’arrivée, toutes soirées passées confondues",
+    ):
+        assert french in body, french

@@ -1,13 +1,15 @@
 """
-Prove the organizer-level Arrivals page counts the right scans — and only those.
+Prove the Arrivals pages count the right scans — and only those.
 
     docker compose exec -T pretix python -m pretix shell < dev/arrivals_test.py
 
 Seeds its own organizer ("arrtest") so no other dev data can leak into the
 totals, with three past events whose entry scans form a known histogram, plus
-one of everything the page must ignore: an auto-check-in, a test-mode order,
-exit scans, a failed scan, and a future event. Every leak would change the
-grand total, so asserting one number audits every filter at once.
+one of everything the organizer's hour-of-day chart must ignore: an
+auto-check-in, a test-mode order, exit scans, a failed scan, and a future
+event. Every leak would change the grand total, so asserting one number audits
+every filter at once. Then each evening's own page, on PostgreSQL: the
+arrivals it charts add up to the tickets it says were admitted.
 
 Idempotent the blunt way: if the organizer exists, the fixture is assumed
 seeded and only the assertions run. Change the fixture -> bump ORG_SLUG.
@@ -240,10 +242,65 @@ with scopes_disabled():
     check("a team without orders:read is refused", response.status_code == 403,
           f"HTTP {response.status_code}")
 
+    print("\n-- one evening -----------------------------------------------")
+    # The organizer's table leads to each evening's own page, and both read
+    # the door's own calculation. Unlike the hour-of-day chart, that one counts
+    # tickets the way pretix and the door screen do, so the automatic
+    # check-in and the test-mode ticket of the May event are among its
+    # admitted: what matters is that the chart and the figure agree.
+    from pretix_openpos.attendance import arrivals, attendance
+
+    body = client_for(admin).get(url).content.decode(errors="replace")
+    check("each past evening links to its own page",
+          all(f"/control/event/{ORG_SLUG}/{slug}/openpos/arrivals/" in body for slug in EVENTS))
+    mai = Event.objects.get(organizer__slug=ORG_SLUG, slug="arr-mai")
+    mai_list = mai.checkin_lists.get()
+    figures = attendance(mai_list)
+    timeline = arrivals(mai_list)
+    check("arrivals add up to the admitted figure",
+          timeline["total"] == figures["entered"],
+          f"{timeline['total']} arrivals, {figures['entered']} admitted")
+    check("exits make the room's fullest point known", timeline["room"] is not None)
+
+    event_url = f"/control/event/{ORG_SLUG}/arr-mai/openpos/arrivals/"
+    response = client_for(admin).get(event_url)
+    check("evening page renders", response.status_code == 200, f"HTTP {response.status_code}")
+    body = response.content.decode(errors="replace") if response.status_code == 200 else ""
+    tiles = re.findall(r'<div class="op-num[^"]*">([^<]+)</div>', body)
+    check(f"admitted tile reads {figures['entered']}",
+          tiles[:1] == [str(figures["entered"])], f"tiles: {tiles}")
+    # 12 people at 21:30, the most in any quarter of an hour of that night.
+    check("busiest quarter is 21:30–21:45", "21:30–21:45" in tiles, f"tiles: {tiles}")
+
+    admin.locale = "fr"
+    admin.save(update_fields=["locale"])
+    try:
+        response = client_for(admin).get(event_url)
+        body_fr = response.content.decode(errors="replace") if response.status_code == 200 else ""
+        commas = re.findall(r'\S+="\d+,\d+"', body_fr)
+        check("evening page renders in French with no decimal comma in its chart",
+              response.status_code == 200 and not commas,
+              f"HTTP {response.status_code}, e.g. {commas[:3]}")
+    finally:
+        admin.locale = "en"
+        admin.save(update_fields=["locale"])
+
+    check("limited team gets its own evening",
+          client_for(limited).get(event_url).status_code == 200)
+    status = client_for(limited).get(f"/control/event/{ORG_SLUG}/arr-juin/openpos/arrivals/").status_code
+    check("limited team is kept out of another evening", status in (403, 404), f"HTTP {status}")
+    status = client_for(no_orders).get(event_url).status_code
+    check("a team without orders:read is kept out of an evening", status in (403, 404),
+          f"HTTP {status}")
+
     print("\n-- navigation ------------------------------------------------")
     response = client_for(admin).get(f"/control/organizer/{ORG_SLUG}/")
     check("organizer page links to the arrivals screen",
           response.status_code == 200 and "/openpos/arrivals/" in response.content.decode(errors="replace"),
+          f"HTTP {response.status_code}")
+    response = client_for(admin).get(f"/control/event/{ORG_SLUG}/arr-mai/")
+    check("event page links to its arrivals screen",
+          response.status_code == 200 and event_url in response.content.decode(errors="replace"),
           f"HTTP {response.status_code}")
 
 print()
