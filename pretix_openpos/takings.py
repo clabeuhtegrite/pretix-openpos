@@ -97,7 +97,10 @@ class Figures:
         else:
             self.cancelled_total += row["total"]
             if reverses == PosSale.KIND_SALE:
-                self.cancellations += 1
+                # A reactivation takes a cancellation back: pretix brought the
+                # order back, the money is in the takings again, and the sale
+                # is no longer one of the cancelled.
+                self.cancellations += -1 if row["kind"] == PosSale.KIND_REACTIVATION else 1
         if row["payment_type"] == PosSale.PAYMENT_CARD:
             self.card += row["total"]
         elif row["payment_type"] == PosSale.PAYMENT_CASH:
@@ -147,23 +150,36 @@ def summarise(event, rows, *, device=None, night_of=None):
 
     # What each cancellation reverses. Usually a row that is in the slice as
     # well; not always — the back office filters by evening, and a sale can be
-    # reversed on a later one — so the few that are missing are asked for.
-    kinds = {row["seq"]: row["kind"] for row in rows}
-    missing = {
-        row["cancels_seq"]
-        for row in real
-        if row["kind"] == PosSale.KIND_CANCELLATION and row["cancels_seq"] not in kinds
-    } - {None}
-    if missing:
-        kinds.update(
-            PosSale.objects.filter(event=event, seq__in=missing).values_list("seq", "kind")
+    # reversed on a later one — so the few that are missing are asked for. A
+    # reactivation reverses a cancellation, so it is followed one step further,
+    # to the sale or the returned cups whose money it moves again.
+    reversals = (PosSale.KIND_CANCELLATION, PosSale.KIND_REACTIVATION)
+    known = {row["seq"]: (row["kind"], row["cancels_seq"]) for row in rows}
+    for _step in range(2):
+        missing = {
+            target
+            for kind, target in known.values()
+            if kind in reversals and target is not None and target not in known
+        }
+        if not missing:
+            break
+        known.update(
+            (seq, (kind, target))
+            for seq, kind, target in PosSale.objects.filter(
+                event=event, seq__in=missing
+            ).values_list("seq", "kind", "cancels_seq")
         )
 
     def origin(row):
         """The kind of money a row moves: a reversal moves its original's, backwards."""
-        if row["kind"] == PosSale.KIND_CANCELLATION:
-            return kinds.get(row["cancels_seq"], PosSale.KIND_SALE)
-        return row["kind"]
+        kind, target = row["kind"], row["cancels_seq"]
+        # Two steps at most: a reactivation, the cancellation it undoes, and
+        # the row that one reversed.
+        for _step in range(2):
+            if kind not in reversals:
+                break
+            kind, target = known.get(target, (PosSale.KIND_SALE, None))
+        return kind
 
     # The deposit is a product like any other when it is sold, and it is kept
     # out of the products all the same: a cup deposit is money held for

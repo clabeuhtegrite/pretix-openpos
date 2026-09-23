@@ -2,7 +2,9 @@ from django.dispatch import receiver
 from django.urls import resolve, reverse
 from django.utils.translation import gettext_lazy as _
 from pretix.api.signals import register_device_security_profile
-from pretix.base.signals import event_copy_data, register_payment_providers, register_sales_channel_types
+from pretix.base.signals import (
+    event_copy_data, order_canceled, order_reactivated, register_payment_providers, register_sales_channel_types,
+)
 from pretix.control.signals import nav_event, nav_organizer
 
 from .channels import PosSalesChannelType
@@ -35,6 +37,30 @@ def openpos_event_copy_data(sender, other, **kwargs):
     from .copying import copy_pos_setup
 
     copy_pos_setup(sender, other, kwargs)
+
+
+@receiver(order_canceled, dispatch_uid="openpos_order_canceled")
+def openpos_order_canceled(sender, order, **kwargs):
+    """
+    A till's sale cancelled anywhere but at the till, reversed in the journal.
+
+    pretix sends this at the end of every cancellation, the till's own
+    included; that one is journalled by the till itself, with its cashier and
+    its key, and is let through here untouched.
+    """
+    from .backoffice import cancelled_by_a_till, record_cancellation
+
+    if cancelled_by_a_till():
+        return
+    record_cancellation(order)
+
+
+@receiver(order_reactivated, dispatch_uid="openpos_order_reactivated")
+def openpos_order_reactivated(sender, order, **kwargs):
+    """A cancelled till sale brought back in pretix, put back in the journal."""
+    from .backoffice import record_reactivation
+
+    record_reactivation(order)
 
 
 @receiver(nav_event, dispatch_uid="openpos_nav_event")

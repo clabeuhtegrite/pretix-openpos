@@ -1,6 +1,6 @@
 # Fonctionnement de pretix-openpos
 
-Documentation de fonctionnement du plugin, version 0.19.0. Elle couvre trois
+Documentation de fonctionnement du plugin, version 0.20.0. Elle couvre trois
 choses, dans cet ordre : ce que le plugin ajoute à pretix, comment le mettre en
 service, et ce qui se passe exactement quand un bénévole encaisse.
 
@@ -105,6 +105,14 @@ une commande déjà payée).
 `payment_control_render()` affiche « reçu / rendu » sur la page de commande du
 back-office.
 
+`openpos_card` sait aussi **rendre l'argent depuis pretix** : pour une carte
+qu'un lecteur de l'organisateur a encaissée, `payment_refund_supported()` fait
+proposer « Montant total » dans la fenêtre de remboursement de pretix, et
+`execute_refund()` envoie le remboursement à SumUp, comme la caisse le fait
+quand elle annule (§5bis, *Une vente annulée depuis pretix*). Pas pour une carte
+prise sur le téléphone de quelqu'un, ni pour une carte déjà remboursée, ni en
+partie.
+
 ### 2.3 Un profil de sécurité pour les devices
 
 [security.py](../pretix_openpos/security.py) déclare `OpenPosSecurityProfile`, une
@@ -140,13 +148,13 @@ jamais supprimée : `save()` sur une ligne existante et `delete()` lèvent une
 |---|---|
 | `seq` | Compteur sans trou, par événement, à partir de 1 |
 | `device`, `device_serial`, `device_name` | La caisse. Dénormalisé pour survivre à la suppression du device |
-| `cashier` | Étiquette libre saisie dans l'app, pour distinguer deux bénévoles sur une même tablette |
+| `cashier` | Étiquette libre saisie dans l'app, pour distinguer deux bénévoles sur une même tablette ; sur une ligne écrite par le back-office, le compte pretix ou le jeton d'API qui a agi |
 | `order`, `order_code` | La commande pretix. Dénormalisé : les commandes de test sont purgeables |
 | `testmode` | Écrit à la création, pas déduit après coup (voir §6.4) |
 | `positions` | Instantané JSON de ce qui a été vendu, lisible même si le produit est renommé ou supprimé |
 | `idempotency_key` | Unique par événement |
-| `kind` | `sale` ou `cancellation` : une annulation est une ligne neuve, jamais une modification |
-| `cancels_seq` | Pour une annulation, le `seq` de la vente qu'elle contrepasse |
+| `kind` | `sale`, `cancellation`, `deposit_refund` (consigne rendue, §5quater) ou `reactivation` (§5bis) : une annulation est une ligne neuve, jamais une modification |
+| `cancels_seq` | Pour une annulation, le `seq` de la ligne qu'elle contrepasse ; pour une réactivation, celui de l'annulation qu'elle défait |
 | `reason` | Le motif saisi par l'opérateur, pour qui lira le journal plus tard |
 | `previous_hash`, `hash`, `hash_version` | La chaîne d'intégrité |
 
@@ -169,6 +177,10 @@ quel poste vend une catégorie (§2.7bis).
 | `/control/organizer/<org>/openpos/arrivals/` | Affluence à l'entrée, tous événements passés | `event.orders:read` sur ≥ 1 événement |
 | `/control/organizer/<org>/openpos/devices/` | Appareils de caisse : rôle et lecteur de chacun | `organizer.devices:write` |
 | `/control/organizer/<org>/openpos/sumup/` | Lecteurs de carte : le compte SumUp et ses lecteurs | `organizer.devices:write` |
+
+La page Ventes porte aussi une action, `…/openpos/sales/catch-up/` (POST,
+`event.orders:write`), qui écrit au journal les annulations que pretix a faites
+sans lui (§5bis).
 
 Les trois derniers sont au niveau *organisateur*, et pas par événement : une
 caisse est appairée une fois, un lecteur appartient à l'association, et
@@ -338,7 +350,7 @@ En Docker/Kubernetes, [`deploy/Dockerfile`](../deploy/Dockerfile) intègre le pl
 
 ```bash
 cd frontend && npm run build && cd ..
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.19.0 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.20.0 .
 ```
 
 Deux pièges :
@@ -838,6 +850,61 @@ comme ce qui s'est passé : un avoir imputé sur une vente neuve.
   articles au panier, en retirer un et réencaisser fait le même travail, avec
   une piste écrite en trois documents plutôt qu'une modification silencieuse.
 
+### Une vente annulée depuis pretix
+
+Une vente de caisse peut aussi s'annuler hors de la caisse : bouton *Annuler* de
+la commande dans le back-office, API de pretix, annulation d'un événement
+entier. pretix prévient le plugin (`order_canceled`), qui écrit alors lui-même
+l'annulation au journal ([backoffice.py](../pretix_openpos/backoffice.py)) :
+
+- **une ligne neuve**, comme depuis la caisse, qui contrepasse la vente et, s'il
+  y en avait, la consigne rendue dans le même panier — le client avait payé le
+  net, c'est le net qui sort de la recette ;
+- **au nom de qui a annulé** : le compte pretix (son nom, à défaut son e-mail),
+  ou le nom du jeton d'API ; vide quand pretix ne nomme personne, un client qui
+  annule lui-même par exemple. Le commentaire saisi devient le motif ;
+- **sur aucune caisse** : la page Ventes la range sur sa propre ligne,
+  *back-office pretix*, et le relevé d'une caisse ne la compte pas, puisque rien
+  n'est sorti de son tiroir. Le total de la soirée, lui, baisse ;
+- **frais d'annulation gardés** : la ligne ne contrepasse que le reste, et porte
+  les frais comme une ligne à part, pour que la colonne tombe juste sur ce que
+  pretix garde.
+
+La caisse voit ensuite la vente « annulée » et ne propose plus de l'annuler.
+Quand c'est la caisse qui annule, rien de tout cela ne se déclenche : elle
+écrit sa propre ligne, avec sa clé, une seule fois.
+
+**L'argent.** pretix enchaîne sur sa fenêtre de remboursement. Espèces : rien ne
+change, on rembourse à la main. Carte encaissée sur un lecteur : la ligne
+*Terminal de paiement (Open POS)* propose « Montant total », déjà cochée ;
+valider demande à SumUp de rembourser la transaction **en entier**, sans le
+lecteur ni la carte, exactement comme `cancel/` le fait pour la caisse. SumUp
+refuse : pretix marque le remboursement échoué, et la page Ventes le liste. SumUp
+ne répond pas : le message demande de vérifier la transaction dans l'app SumUp
+avant de recommencer, puisque la demande a pu passer. Rembourser une partie
+seulement se fait depuis l'app SumUp. Si personne ne rembourse, l'annulation
+reste au journal : c'est pretix qui dit ce qui est vendu, et la commande y
+apparaît avec un montant à rembourser.
+
+**La réactivation.** Une commande annulée puis réactivée dans pretix revient
+*payée* si personne ne l'avait remboursée : une ligne `reactivation` défait
+alors l'annulation, la vente compte de nouveau, et la caisse peut de nouveau
+l'annuler. Si l'argent était reparti, pretix la remet *en attente* : le client a
+son argent, le journal garde l'annulation, et l'historique de la commande le
+dit.
+
+**Avant la 0.20.0**, le plugin n'écoutait pas pretix. Une vente annulée dans le
+back-office restait donc dans la recette. La page Ventes les liste sous
+*Annulées dans pretix, encore comptées ici*, et le bouton *Les écrire au
+journal* (droit de modifier les commandes) les annule au journal **à la date où
+pretix les avait annulées**, au nom de qui l'avait fait. La même liste rattrape
+une annulation que le plugin n'aurait pas pu écrire sur le moment ; l'historique
+de la commande le signale alors.
+
+Ce qui ne suit pas : une commande **modifiée** dans pretix (un article retiré
+par *Modifier les produits*) garde sa vente entière au journal. Pour corriger un
+panier, on annule et on réencaisse.
+
 ### Les factures des ventes au guichet
 
 **Activées par défaut**, et c'est le plugin qui s'en charge, pas les règles de
@@ -1307,6 +1374,12 @@ sans la carte du client**, et répond ce qu'il en est :
 Une correction de commande après une annulation carte ne porte donc **pas
 d'avoir** : l'argent est reparti. Le panier corrigé s'encaisse en entier.
 
+Un remboursement refusé se relance depuis pretix : *Créer un remboursement* sur
+la commande propose la carte, et SumUp est redemandé (§5bis, *Une vente annulée
+depuis pretix*). Une fois passé, la vente quitte la liste des remboursements
+refusés de la page Ventes ; le remboursement échoué reste dans l'historique de
+la commande, comme pretix le garde.
+
 SumUp répond `201` à un remboursement qu'il accepte. Jusqu'à la 0.17.0, le
 plugin n'attendait que `200` ou `204` et annonçait donc `failed` pour un
 remboursement passé : le bandeau rouge envoyait rembourser une seconde fois
@@ -1752,7 +1825,9 @@ sur deux à la tablette en paysage :
 - les **consignes à part** : prises, rendues et solde. Une consigne n'est pas une
   vente, c'est de l'argent dû à qui rapporte le gobelet ;
 - **par appareil**, le plus gros en tête, celui qu'on tient marqué, le
-  back-office en dernier ;
+  back-office en dernier : les annulations faites dans pretix y tombent (voir
+  *Une vente annulée depuis pretix*), et la ligne de la caisse reste ce que son
+  tiroir contient ;
 - **par soirée**, seulement quand l'événement en a eu plusieurs, une soirée
   allant de 6 h à 6 h le lendemain ;
 - ce que les chiffres ne disent pas seuls : combien de ventes ont été annulées
