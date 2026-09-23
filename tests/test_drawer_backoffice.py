@@ -535,7 +535,7 @@ def test_the_audit_walks_every_drawer_s_ledger(evening):
     out = StringIO()
     call_command("openpos_verify_journal", stdout=out)
     # Open, the ice money, the count, the closing: the sales are the journal's.
-    assert "drawer 1 (Bar) (4 rows)" in out.getvalue()
+    assert f"drawer {evening.drawer_id} (Bar) (4 rows)" in out.getvalue()
 
     PosDrawerEntry.objects.filter(session=evening, kind=PosDrawerEntry.KIND_OPEN).update(
         amount=Decimal("50.00")

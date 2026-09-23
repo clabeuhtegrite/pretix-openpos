@@ -1,6 +1,6 @@
 # Fonctionnement de pretix-openpos
 
-Documentation de fonctionnement du plugin, version 0.20.0. Elle couvre trois
+Documentation de fonctionnement du plugin, version 0.21.0. Elle couvre trois
 choses, dans cet ordre : ce que le plugin ajoute à pretix, comment le mettre en
 service, et ce qui se passe exactement quand un bénévole encaisse.
 
@@ -358,7 +358,7 @@ En Docker/Kubernetes, [`deploy/Dockerfile`](../deploy/Dockerfile) intègre le pl
 
 ```bash
 cd frontend && npm run build && cd ..
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.20.0 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.21.0 .
 ```
 
 Deux pièges :
@@ -1651,6 +1651,11 @@ les entrées et sorties d'argent. Elle reste donc affichée.
   rapport de cette soirée signale qu'elle est arrivée après le comptage. Hors
   ligne, l'app ne bloque donc pas les espèces : elle ne sait plus où en est le
   tiroir, et le serveur prendra la vente quoi qu'il arrive.
+
+Une vente annulée depuis le back-office de pretix (§5bis) n'est rattachée à
+aucun tiroir : personne n'y dit quelle caisse a rendu l'argent. Si le
+remboursement sort d'un tiroir, l'inscrire en **sortie d'argent** sur la
+caisse, avec le numéro de la commande en motif.
 
 Deux tablettes sur un même tiroir passent chacune leur tour : toute écriture
 dans le journal d'un tiroir verrouille sa ligne, et une vente en train de
