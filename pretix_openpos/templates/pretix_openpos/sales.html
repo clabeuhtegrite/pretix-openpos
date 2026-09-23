@@ -142,9 +142,10 @@
                 <div class="alert alert-danger">
                     {% blocktrans trimmed %}
                         These sales were cancelled, and the refund did not go through. The money
-                        is still on the customer's card. Refund it from the SumUp dashboard using
-                        the reference below — pretix will not try again on its own, and the
-                        cancellation itself stands.
+                        is still on the customer's card. Refund it with “Create a refund” on the
+                        order, which sends it back through SumUp, or from the SumUp dashboard using
+                        the reference below. Nothing tries again on its own, and the cancellation
+                        itself stands.
                     {% endblocktrans %}
                 </div>
                 <table class="table table-condensed">
@@ -171,6 +172,66 @@
                     {% endfor %}
                     </tbody>
                 </table>
+            </div>
+        </div>
+    {% endif %}
+
+    {% comment %}
+        Till sales pretix cancelled that the journal still counts: cancelled in
+        pretix before Open POS listened for it, or while writing it failed. Not
+        filtered by evening, since the takings of whichever night they were sold
+        on are wrong until they are written.
+    {% endcomment %}
+    {% if missed_cancellations %}
+        <div class="row">
+            <div class="col-md-12">
+                <h3>{% trans "Cancelled in pretix, still counted here" %}</h3>
+                <div class="alert alert-warning">
+                    {% blocktrans trimmed %}
+                        pretix cancelled these till sales without the journal hearing of it, so the
+                        takings still count them. Writing them to the journal reverses each one on
+                        the date pretix cancelled it, in the name of whoever did. It only adds rows:
+                        nothing already written changes.
+                    {% endblocktrans %}
+                </div>
+                <table class="table table-condensed">
+                    <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>{% trans "Date" %}</th>
+                        <th>{% trans "Order" %}</th>
+                        <th>{% trans "Till" %}</th>
+                        <th class="text-right">{% trans "Total" %}</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    {% for sale in missed_cancellations %}
+                        <tr>
+                            <td>{{ sale.seq }}</td>
+                            <td>{{ sale.datetime|date:"SHORT_DATETIME_FORMAT" }}</td>
+                            <td>
+                                <a href="{% url "control:event.order" organizer=request.event.organizer.slug event=request.event.slug code=sale.order_code %}">
+                                    {{ sale.order_code }}
+                                </a>
+                                {% if sale.testmode %}
+                                    <span class="label label-warning">{% trans "test" %}</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ sale.device_name|default:sale.device_serial|default:"—" }}</td>
+                            <td class="text-right">{{ sale.total|money:currency }}</td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% if can_write_orders %}
+                    <form action="{% url "plugins:pretix_openpos:sales.catch_up" organizer=request.event.organizer.slug event=request.event.slug %}"
+                          method="post" style="margin-bottom: 15px;">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-primary">
+                            {% trans "Write them to the journal" %}
+                        </button>
+                    </form>
+                {% endif %}
             </div>
         </div>
     {% endif %}
@@ -328,10 +389,13 @@
                         {% trans "Kept apart from the products: a deposit is owed to whoever brings the cup back." %}
                     </p>
                 {% endif %}
-                {% if detail.cancellations %}
+                {% if detail.cancellations > 0 %}
                     {% comment %}
                         Said out loud: every amount on this page is net, so a
                         product short by exactly a cancelled sale is not short.
+                        Above zero only, as on the till: an evening that saw
+                        pretix bring a sale back and not cancel it counts one
+                        cancellation less, which is nothing to announce.
                     {% endcomment %}
                     <p class="text-muted">
                         {% blocktrans trimmed count counter=detail.cancellations with amount=detail.cancelled_total|money:currency %}
@@ -414,7 +478,11 @@
                         {% endif %}
                     </td>
                     <td>
-                        {{ sale.device_name|default:sale.device_serial|default:"—" }}
+                        {% if sale.from_back_office %}
+                            {% trans "pretix back office" %}
+                        {% else %}
+                            {{ sale.device_name|default:sale.device_serial|default:"—" }}
+                        {% endif %}
                         {% if sale.testmode %}
                             <span class="label label-warning">{% trans "test" %}</span>
                         {% endif %}

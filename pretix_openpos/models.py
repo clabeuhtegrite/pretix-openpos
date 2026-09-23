@@ -1,5 +1,6 @@
 import hashlib
 import json
+from decimal import Decimal
 
 from django.core.cache import cache
 from django.db import IntegrityError, models, transaction
@@ -9,6 +10,32 @@ from pretix.base.models import Device, Event, ItemCategory, Order
 
 #: previous_hash of the very first sale of an event.
 GENESIS_HASH = "0" * 64
+
+
+def refund_key(idempotency_key: str) -> str:
+    """
+    The key of the payout row that goes with a sale.
+
+    One customer can produce two journal rows — the sale, and the deposit
+    handed back with it — and the journal's idempotency is per row. Derived
+    rather than sent, so a retry of the whole transaction still recognises both
+    halves of what it already committed.
+    """
+    return f"{idempotency_key}:refund"
+
+
+def reversed_positions(positions):
+    """The sold lines, negated, so the journal reads as a credit note."""
+    reversed_lines = []
+    for line in positions:
+        entry = dict(line)
+        for field in ("count", "line_total"):
+            value = entry.get(field)
+            if value is None:
+                continue
+            entry[field] = -value if isinstance(value, int) else str(-Decimal(str(value)))
+        reversed_lines.append(entry)
+    return reversed_lines
 
 
 class PosSale(models.Model):
@@ -45,10 +72,19 @@ class PosSale(models.Model):
     #: against the drawer. The amount is negative, like a cancellation's, which
     #: is what keeps the takings the plain sum of the column.
     KIND_DEPOSIT_REFUND = "deposit_refund"
+    #: A cancellation undone: pretix' back office reactivated the order.
+    #:
+    #: Written only when the money never left — the order comes back paid —
+    #: and pointing at the cancellation it undoes rather than at the sale, so
+    #: every reversal in this journal names the one row it reverses. Its amount
+    #: is the cancellation's, negated, which puts the sale back in the takings.
+    #: A till never writes one: it cannot reactivate anything.
+    KIND_REACTIVATION = "reactivation"
     KIND_CHOICES = (
         (KIND_SALE, _("Sale")),
         (KIND_CANCELLATION, _("Cancellation")),
         (KIND_DEPOSIT_REFUND, _("Deposit refund")),
+        (KIND_REACTIVATION, _("Reactivation")),
     )
 
     event = models.ForeignKey(Event, on_delete=models.CASCADE, related_name="openpos_sales")
@@ -166,17 +202,54 @@ class PosSale(models.Model):
     @classmethod
     def cancelled_seqs(cls, event, seqs):
         """
-        Which of these sales already have a cancellation against them.
+        Which of these rows stand reversed.
 
         Asked of the journal rather than of the order, because the journal is
         what survives: a test-mode purge takes the orders away and the takings
         still have to add up afterwards.
+
+        A reversal can itself be undone. pretix' back office can reactivate a
+        cancelled order, and the journal answers with a reactivation pointing
+        at the cancellation — so a sale is reversed by any cancellation of it
+        that no reactivation has undone, and a cancellation is reversed when a
+        reactivation has. Two queries, whatever the number of rows asked about.
         """
-        return set(
+        reversals = dict(
             cls.objects.filter(
-                event=event, kind=cls.KIND_CANCELLATION, cancels_seq__in=list(seqs)
+                event=event,
+                kind__in=(cls.KIND_CANCELLATION, cls.KIND_REACTIVATION),
+                cancels_seq__in=list(seqs),
+            ).values_list("seq", "cancels_seq")
+        )
+        if not reversals:
+            return set()
+        undone = set(
+            cls.objects.filter(
+                event=event, kind=cls.KIND_REACTIVATION, cancels_seq__in=list(reversals)
             ).values_list("cancels_seq", flat=True)
         )
+        return {target for seq, target in reversals.items() if seq not in undone}
+
+    @classmethod
+    def is_back_office(cls, device_serial, kind):
+        """
+        Whether a row with this serial and kind was written by pretix' back
+        office rather than by a till.
+
+        Told apart by shape rather than by a column of its own, because the
+        shape cannot lie: a till's cancellation always carries that till's
+        serial — the endpoint refuses any caller that is not a paired device —
+        and a reactivation is never written by a till at all. A reversal with
+        no till behind it can only have come from the back office.
+
+        A classmethod as well as the property below, because the Sales page
+        asks it of aggregated rows that are dictionaries, not models.
+        """
+        return not device_serial and kind in (cls.KIND_CANCELLATION, cls.KIND_REACTIVATION)
+
+    @property
+    def from_back_office(self) -> bool:
+        return self.is_back_office(self.device_serial, self.kind)
 
     # -- integrity ---------------------------------------------------------
 
@@ -570,6 +643,28 @@ class PosTerminalPayment(models.Model):
 
     def __str__(self):
         return f"{self.idempotency_key} {self.amount} {self.status}"
+
+    @classmethod
+    def settling(cls, sale):
+        """
+        The reader payment a journal sale was settled by, if a reader settled it.
+
+        One lookup for every question that must never get two answers: whether
+        a cancellation at the till asks SumUp for the money back, whether
+        pretix' refund dialog offers to, and which transaction either of them
+        names. A cash sale, or a card taken on somebody's phone, has none —
+        there is nothing here for this server to refund.
+        """
+        if sale is None or sale.payment_type != PosSale.PAYMENT_CARD:
+            return None
+        payment = cls.objects.filter(
+            event_id=sale.event_id,
+            idempotency_key=sale.idempotency_key,
+            status=cls.STATUS_SUCCESSFUL,
+        ).first()
+        if payment is None or not payment.transaction_id:
+            return None
+        return payment
 
     @property
     def settled(self) -> bool:

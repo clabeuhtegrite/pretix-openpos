@@ -452,6 +452,95 @@ class SoldOutsideRole(NoOpShredderMixin, OrderLogEntryType):
         )
 
 
+def _journal_rows(data, currency):
+    """The journal rows an entry names, one per line, as the Sales page lists them."""
+    return format_html_join(
+        "", "<li>{}</li>",
+        (
+            (
+                format_html(
+                    _("#{seq}, reversing #{target}: {total}"),
+                    seq=row.get("seq", "?"),
+                    target=row.get("cancels_seq", "?"),
+                    total=_money(row.get("total"), currency),
+                ),
+            )
+            for row in data.get("rows") or []
+        ),
+    )
+
+
+@log_entry_types.new()
+class JournalCancelled(NoOpShredderMixin, OrderLogEntryType):
+    """
+    A till's sale that pretix cancelled, reversed in the till journal.
+
+    Written when the order is cancelled anywhere but at the till — the order
+    page, the REST API, a whole event cancelled — or later, from the Sales
+    page, for one cancelled before Open POS listened for it.
+    """
+
+    action_type = "pretix_openpos.order.journal.cancelled"
+
+    def display(self, logentry, data):
+        heading = (
+            _("Cancelled earlier in pretix, and written to the till journal only now:")
+            if data.get("late")
+            else _("Written to the till journal, so the takings no longer count this sale:")
+        )
+        return format_html(
+            "{}<ul>{}</ul>", heading, _journal_rows(data, logentry.event.currency)
+        )
+
+
+@log_entry_types.new()
+class JournalReactivated(NoOpShredderMixin, OrderLogEntryType):
+    """A reactivated till sale, counted in the takings again."""
+
+    action_type = "pretix_openpos.order.journal.reactivated"
+
+    def display(self, logentry, data):
+        return format_html(
+            "{}<ul>{}</ul>",
+            _("Back in the till journal: the order came back paid, so the cancellation "
+              "is undone."),
+            _journal_rows(data, logentry.event.currency),
+        )
+
+
+@log_entry_types.new()
+class JournalNotRestored(NoOpShredderMixin, OrderLogEntryType):
+    """
+    A till sale reactivated after its money went back, left out of the takings.
+
+    pretix brings such an order back as pending: the customer holds the money
+    again. The till journal records what the drawer and the card did, and they
+    gave it back — so the cancellation stands there, and this says why the two
+    now disagree on purpose.
+    """
+
+    action_type = "pretix_openpos.order.journal.not_restored"
+
+    def display(self, logentry, data):
+        return _("Reactivated after the money was paid back, so the till journal keeps "
+                 "this sale cancelled. If the customer pays again, that payment is not a "
+                 "till sale and is not counted in the till takings.")
+
+
+@log_entry_types.new()
+class JournalFailed(NoOpShredderMixin, OrderLogEntryType):
+    """pretix changed the order, and the till journal could not follow."""
+
+    action_type = "pretix_openpos.order.journal.failed"
+
+    def display(self, logentry, data):
+        if data.get("action") == "reactivation":
+            return _("The reactivation could not be written to the till journal. The "
+                     "server log has the details.")
+        return _("The cancellation could not be written to the till journal. The Open POS "
+                 "Sales page lists this sale until it is.")
+
+
 @receiver(logentry_display, dispatch_uid="openpos_organizer_logentry_display")
 def describe_organizer_entry(sender, logentry, **kwargs):
     """

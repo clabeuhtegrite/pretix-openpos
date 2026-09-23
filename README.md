@@ -114,7 +114,11 @@ it was written for. Read the scope section before deciding it fits.
 - **Transaction history and cancellation**, scoped to the till in your hands:
   cancelling issues a credit note, records the refund and appends a reversing
   journal entry — the original sale is never touched — and the items go back in
-  the basket so the corrected order is rung up as a new sale.
+  the basket so the corrected order is rung up as a new sale. A till's sale
+  cancelled in pretix itself — the order page, the REST API, a whole event
+  called off — is reversed in the journal too, in the name of whoever did it,
+  and pretix' own refund dialog sends a reader's card payment back through
+  SumUp.
 - An **append-only journal**, hash-chained so that editing history after the
   fact is detectable.
 - **Takings for the event**, on the till and in the back office: cash and
@@ -225,7 +229,7 @@ If you run pretix in Docker or Kubernetes, [`deploy/Dockerfile`](deploy/Dockerfi
 bakes the plugin into the official image:
 
 ```bash
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.19.0 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.20.0 .
 ```
 
 The PWA bundle is built inside the image, from the tree you are building, so the

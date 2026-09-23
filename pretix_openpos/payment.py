@@ -1,8 +1,9 @@
 from decimal import Decimal, InvalidOperation
 
 from django.template.loader import get_template
+from django.utils.timezone import now
 from django.utils.translation import gettext_lazy as _
-from pretix.base.payment import BasePaymentProvider
+from pretix.base.payment import BasePaymentProvider, PaymentException
 
 CASH = "openpos_cash"
 CARD = "openpos_card"
@@ -90,3 +91,90 @@ class OpenPosCardProvider(OpenPosPaymentProvider):
     identifier = CARD
     verbose_name = _("Card terminal (Open POS)")
     public_name = _("Card")
+
+    # -- giving the money back from pretix ----------------------------------
+    #
+    # A sale cancelled at the till has its card refunded by the till. One
+    # cancelled in pretix' back office used to have nobody to do it: pretix
+    # offered only a manual refund, and the money went back — or did not —
+    # from the SumUp app, by hand, with nothing on either side to say so. These
+    # three put "refund automatically" in pretix' own refund dialog for a card
+    # a reader of this organizer took, and send it through the same SumUp call
+    # the till uses.
+
+    def _terminal_payment(self, payment):
+        """The reader payment behind this pretix payment, if a reader took it."""
+        from .models import PosSale, PosTerminalPayment
+
+        sale = PosSale.objects.filter(
+            event=self.event, order_id=payment.order_id, kind=PosSale.KIND_SALE
+        ).first()
+        return PosTerminalPayment.settling(sale)
+
+    def payment_refund_supported(self, payment) -> bool:
+        """
+        Offered for a card a reader took and that has not been given back yet.
+
+        Not for a card taken on somebody's phone: this server never saw that
+        transaction and has nothing to name to SumUp. And not once the reader
+        payment says it was refunded — at the till, or from here — because
+        then the only thing left for an automatic refund to do is the second
+        one.
+        """
+        from .sumup import SumUpAccount
+
+        terminal = self._terminal_payment(payment)
+        return (
+            terminal is not None
+            and terminal.refunded is None
+            and SumUpAccount(self.event.organizer).configured
+        )
+
+    def payment_partial_refund_supported(self, payment) -> bool:
+        # The whole transaction or nothing, as the till does it. SumUp could
+        # take an amount, but the reader payment keeps one date of refund, not
+        # a running figure — a part given back here would make the till answer
+        # "already refunded" for the rest. A part goes back from the SumUp app.
+        return False
+
+    def execute_refund(self, refund):
+        from .sumup import SumUpAccount, SumUpError
+
+        terminal = self._terminal_payment(refund.payment)
+        if terminal is None:
+            raise PaymentException(
+                _("No card reader of this organizer took this payment, so it can only "
+                  "be refunded from the SumUp app.")
+            )
+        if terminal.refunded is not None:
+            raise PaymentException(
+                _("This card payment has already been refunded through SumUp.")
+            )
+        if refund.amount != refund.payment.amount:
+            raise PaymentException(
+                _("Only the whole payment can be refunded to the card from here. Refund "
+                  "a part of it from the SumUp app.")
+            )
+        try:
+            # Without an amount, like the till: SumUp refunds its own
+            # transaction in full, which is what the card was charged.
+            SumUpAccount(self.event.organizer).refund(terminal.transaction_id)
+        except SumUpError as exc:
+            if exc.retryable:
+                # The request may have reached SumUp and the answer been lost.
+                # Asking again blind could send the money twice, so the person
+                # at the dialog is told to look first.
+                raise PaymentException(
+                    _("SumUp did not answer, so it is not known whether the money went "
+                      "back. Check transaction {transaction} in the SumUp app before "
+                      "refunding again.").format(transaction=terminal.transaction_id)
+                ) from exc
+            raise PaymentException(exc.message) from exc
+
+        terminal.refunded = now()
+        terminal.save(update_fields=["refunded", "updated"])
+        refund.info_data = {
+            **(refund.info_data or {}),
+            "transaction_id": terminal.transaction_id,
+        }
+        refund.done()

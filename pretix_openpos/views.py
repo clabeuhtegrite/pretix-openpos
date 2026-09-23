@@ -10,13 +10,15 @@ from django.shortcuts import redirect
 from django.urls import reverse
 from django.utils.functional import cached_property
 from django.utils.timezone import make_aware, now
-from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_lazy as _, ngettext
+from django.views import View
 from django.views.generic import ListView, TemplateView
 from pretix.base.models import Event
 from pretix.control.permissions import EventPermissionRequiredMixin
 from pretix.control.views.event import EventSettingsFormView, EventSettingsViewMixin
 
 from .api.views import BUSINESS_DAY_STARTS_AT
+from .backoffice import cancelled_outside_the_journal, catch_up
 from .forms import OpenPosSettingsForm
 from .models import PosCategory, PosDevice, PosSale
 from .takings import journal_rows, summarise
@@ -294,7 +296,9 @@ def refused_card_refunds(event):
     So the money is still on their card, and the only other record of that is
     SumUp's dashboard. This is the list the organiser reconciling the next
     morning did not have. Read-only, like the section above it: refunding one
-    of these from the SumUp app is a decision, not a page load.
+    of these — from the order's own refund dialog, which sends it through
+    SumUp, or from the SumUp app — is a decision, not a page load. Once it is
+    refunded it leaves the list.
 
     Not filtered by evening, deliberately, and for the same reason: an unpaid
     debt to a customer does not stop mattering because the screen is showing a
@@ -328,20 +332,28 @@ def refused_card_refunds(event):
     }
     from .models import PosTerminalPayment
 
-    transactions = {
-        payment.idempotency_key: payment.transaction_id
+    payments = {
+        payment.idempotency_key: payment
         for payment in PosTerminalPayment.objects.filter(
             event=event, idempotency_key__in=list(keys.values())
         )
     }
-    return [
-        {
-            "refund": refund,
-            "order": refund.order,
-            "transaction": transactions.get(keys.get(refund.order_id), ""),
-        }
-        for refund in refunds
-    ]
+    rows = []
+    for refund in refunds:
+        payment = payments.get(keys.get(refund.order_id))
+        if payment is not None and payment.refunded is not None:
+            # Given back since, from pretix' refund dialog or by a retry at
+            # the till. pretix keeps the failed refund on the order, as it
+            # should; the debt it recorded is paid.
+            continue
+        rows.append(
+            {
+                "refund": refund,
+                "order": refund.order,
+                "transaction": payment.transaction_id if payment else "",
+            }
+        )
+    return rows
 
 
 def unresolved_terminal_payments(event):
@@ -585,7 +597,9 @@ class SalesView(EventPermissionRequiredMixin, ListView):
                     sale.kind,
                     sale.datetime.astimezone(tz).isoformat(),
                     sale.order_code,
-                    sale.device_name or sale.device_serial,
+                    sale.device_name or sale.device_serial or (
+                        str(_("pretix back office")) if sale.from_back_office else ""
+                    ),
                     sale.device_serial,
                     sale.cashier,
                     sale.payment_type,
@@ -667,7 +681,14 @@ class SalesView(EventPermissionRequiredMixin, ListView):
                 testmode_totals["count"] += row["n"] if sales else 0
                 continue
 
-            label = row["device_name"] or row["device_serial"] or str(_("unknown till"))
+            label = row["device_name"] or row["device_serial"] or (
+                # Not a till at all: pretix' back office cancelled a till's sale,
+                # or brought one back. Its own line, so the tills' own figures
+                # stay what their drawers hold.
+                str(_("pretix back office"))
+                if PosSale.is_back_office(row["device_serial"], row["kind"])
+                else str(_("unknown till"))
+            )
             if row["cashier"]:
                 label = f"{label} · {row['cashier']}"
             bucket = by_device.setdefault(
@@ -720,9 +741,63 @@ class SalesView(EventPermissionRequiredMixin, ListView):
         # needs seeing whatever range is on screen.
         ctx["off_tariff"], ctx["off_tariff_difference"] = sold_off_tariff(all_sales)
         ctx["refused_refunds"] = refused_card_refunds(self.request.event)
+        # Not filtered by evening either: a sale pretix struck off is wrong in
+        # the takings of whichever night it was sold on, and one button puts
+        # every one of them right.
+        ctx["missed_cancellations"] = cancelled_outside_the_journal(self.request.event)
+        ctx["can_write_orders"] = self.request.user.has_event_permission(
+            self.request.organizer, self.request.event, CatchUpView.permission,
+            request=self.request,
+        )
         # Echoed back so the form keeps what was asked for, and so the export
         # link can carry it.
         ctx["filter_from"] = (self.request.GET.get("from") or "").strip()
         ctx["filter_to"] = (self.request.GET.get("to") or "").strip()
         ctx["filtered"] = any(self.window[:2])
         return ctx
+
+
+class CatchUpView(EventPermissionRequiredMixin, View):
+    """
+    Write into the journal the cancellations pretix made without it.
+
+    POST only, and behind the permission to change orders rather than the one
+    to read them: this appends to a journal that nothing can take back, which
+    is an organiser's decision and not something a page load may do.
+    """
+
+    permission = "event.orders:write"
+
+    def post(self, request, *args, **kwargs):
+        reversed_sales = catch_up(request.event, user=request.user)
+        if reversed_sales:
+            messages.success(
+                request,
+                ngettext(
+                    "%(count)d cancelled sale was written to the journal.",
+                    "%(count)d cancelled sales were written to the journal.",
+                    reversed_sales,
+                ) % {"count": reversed_sales},
+            )
+        left = len(cancelled_outside_the_journal(request.event))
+        if left:
+            # Written to the order's history by the attempt itself; this says
+            # where to look.
+            messages.error(
+                request,
+                ngettext(
+                    "%(count)d cancelled sale could not be written. Its order's history "
+                    "says so.",
+                    "%(count)d cancelled sales could not be written. Their orders' "
+                    "histories say so.",
+                    left,
+                ) % {"count": left},
+            )
+        elif not reversed_sales:
+            messages.info(request, _("Every sale pretix cancelled is already in the journal."))
+        return redirect(
+            reverse(
+                "plugins:pretix_openpos:sales",
+                kwargs={"organizer": request.organizer.slug, "event": request.event.slug},
+            )
+        )

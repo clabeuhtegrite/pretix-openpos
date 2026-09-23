@@ -21,9 +21,10 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 
 from .. import __version__
+from ..backoffice import till_cancelling
 from ..channels import POS_CHANNEL, PosSalesChannelType
 from ..invoicing import pos_invoices_enabled
-from ..models import PosCategory, PosDevice, PosSale, PosTerminalPayment
+from ..models import PosCategory, PosDevice, PosSale, PosTerminalPayment, refund_key, reversed_positions
 from ..payment import CARD, CASH
 from ..sumup import CHECKOUT_CLOSED, SumUpAccount, SumUpError, still_running, succeeded
 from ..webhook import webhook_url
@@ -479,18 +480,6 @@ def custom_sale_item(event):
 def deposit_item(event):
     """The product a cup deposit is sold as, if enabled."""
     return configured_item(event, "openpos_deposit_item")
-
-
-def refund_key(idempotency_key: str) -> str:
-    """
-    The key of the payout row that goes with a sale.
-
-    One customer can produce two journal rows — the sale, and the deposit
-    handed back with it — and the journal's idempotency is per row. Derived
-    rather than sent, so a retry of the whole transaction still recognises both
-    halves of what it already committed.
-    """
-    return f"{idempotency_key}:refund"
 
 
 class ResolvedLine:
@@ -1994,13 +1983,19 @@ class OpenPosViewSet(viewsets.ViewSet):
                 # would have produced. send_mail is off: at a till the customer
                 # is standing right there, and the address is usually the
                 # organiser's own placeholder for an on-site sale.
-                cancel_order(
-                    order,
-                    device=device,
-                    send_mail=False,
-                    cancel_invoice=True,
-                    email_comment=data["reason"] or None,
-                )
+                #
+                # Said to be the till's own doing, because pretix tells the
+                # plugin about every cancellation and one made anywhere else
+                # is written to the journal from there. This one is written
+                # below, with the till and the cashier it belongs to.
+                with till_cancelling():
+                    cancel_order(
+                        order,
+                        device=device,
+                        send_mail=False,
+                        cancel_invoice=True,
+                        email_comment=data["reason"] or None,
+                    )
             except OrderError as e:
                 raise ValidationError({"seq": [str(e)]})
 
@@ -2010,7 +2005,7 @@ class OpenPosViewSet(viewsets.ViewSet):
                 # A reader is about to be asked, after this transaction, and it
                 # can refuse. Nothing may claim the money is back until it has
                 # answered.
-                settle_now=self._reader_payment(event, sale) is None,
+                settle_now=PosTerminalPayment.settling(sale) is None,
             )
 
             cancellation = PosSale.record(
@@ -2022,7 +2017,7 @@ class OpenPosViewSet(viewsets.ViewSet):
                 # Negative, so the takings stay the plain sum of the column and
                 # the drawer reconciles against the journal without arithmetic.
                 total=-sale.total,
-                positions=self._reversed_positions(sale.positions),
+                positions=reversed_positions(sale.positions),
                 idempotency_key=data["idempotency_key"],
                 testmode=sale.testmode,
                 kind=PosSale.KIND_CANCELLATION,
@@ -2055,7 +2050,7 @@ class OpenPosViewSet(viewsets.ViewSet):
                     # Its total is negative — money that left the drawer — so
                     # negating it puts the same amount back.
                     total=-deposit_refund.total,
-                    positions=self._reversed_positions(deposit_refund.positions),
+                    positions=reversed_positions(deposit_refund.positions),
                     # Derived from the cancellation's key exactly as the payout
                     # row derived from the sale's, so a retried cancellation
                     # recognises this half too instead of writing it twice.
@@ -2079,27 +2074,6 @@ class OpenPosViewSet(viewsets.ViewSet):
         self._settle_refund(request, refund, body["card_refund"])
         return Response(body, status=status.HTTP_201_CREATED)
 
-    @staticmethod
-    def _reader_payment(event, sale):
-        """
-        The reader payment this sale was settled by, if a reader settled it.
-
-        One lookup for two questions that must never disagree: whether the
-        server is going to ask SumUp for the money back, and which transaction
-        to ask about. A cash sale, or a card taken on somebody's phone, has
-        none — there is nothing here for this server to refund.
-        """
-        if sale.payment_type != PosSale.PAYMENT_CARD:
-            return None
-        payment = PosTerminalPayment.objects.filter(
-            event=event,
-            idempotency_key=sale.idempotency_key,
-            status=PosTerminalPayment.STATUS_SUCCESSFUL,
-        ).first()
-        if payment is None or not payment.transaction_id:
-            return None
-        return payment
-
     def _refund_card(self, event, sale):
         """
         Give a card sale's money back through SumUp, when there is a card to
@@ -2120,7 +2094,7 @@ class OpenPosViewSet(viewsets.ViewSet):
             refund it from the SumUp app, and has to be told so plainly rather
             than shown a cancellation that looks complete.
         """
-        payment = self._reader_payment(event, sale)
+        payment = PosTerminalPayment.settling(sale)
         if payment is None:
             return "none"
         if payment.refunded:
@@ -2387,19 +2361,6 @@ class OpenPosViewSet(viewsets.ViewSet):
             "credit_note": None,
             "refunded": False,
         }
-
-    def _reversed_positions(self, positions):
-        """The sold lines, negated, so the journal reads as a credit note."""
-        reversed_lines = []
-        for line in positions:
-            entry = dict(line)
-            for field in ("count", "line_total"):
-                value = entry.get(field)
-                if value is None:
-                    continue
-                entry[field] = -value if isinstance(value, int) else str(-Decimal(str(value)))
-            reversed_lines.append(entry)
-        return reversed_lines
 
     def _record_refund(self, request, order, sale, reason, *, settle_now):
         """
