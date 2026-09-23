@@ -322,7 +322,7 @@ export interface DoorDevice extends ScanFigures {
 
 /**
  * The scanner's counter, as the server counts it: every scan of the event,
- * whatever day it was made (of one date, on a list kept for one date of a series).
+ * whatever day it was made (in a series, of one date: the list's, or tonight's).
  *
  * It used to be kept by the app, and it went back to zero whenever iOS reloaded
  * the page; pretix writes every scan down anyway, so that is where it is read.

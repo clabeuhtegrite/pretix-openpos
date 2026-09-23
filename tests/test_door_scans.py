@@ -176,8 +176,8 @@ def test_another_event_s_scans_stay_with_it(till, organizer, event, ticket, chec
     assert scans(Till(till.device, other), other_list)["device"]["admitted"] == 1
 
 
-@pytest.mark.django_db
-def test_a_door_kept_for_one_date_of_a_series_counts_that_date(organizer, channel, device):
+def scanned_series(organizer, channel, device):
+    """Last week's date and tonight's, a door for each and one for every date."""
     event = series_event(organizer)
     last_week = a_date(event, "La semaine dernière", now() - timedelta(days=7))
     tonight = a_date(event, "Ce soir", now() - timedelta(hours=1))
@@ -189,20 +189,48 @@ def test_a_door_kept_for_one_date_of_a_series_counts_that_date(organizer, channe
         OrderPosition.all.filter(pk=position.pk).update(subevent=date)
         return position
 
-    tonight_door = event.checkin_lists.create(name="Ce soir", all_products=True, subevent=tonight)
-    last_week_door = event.checkin_lists.create(
-        name="La semaine dernière", all_products=True, subevent=last_week
-    )
-    every_date = event.checkin_lists.create(name="Toutes dates", all_products=True)
-    redeem(till, tonight_door, ticket_for(tonight).secret)
+    doors = {
+        "tonight": event.checkin_lists.create(name="Ce soir", all_products=True, subevent=tonight),
+        "last week": event.checkin_lists.create(
+            name="La semaine dernière", all_products=True, subevent=last_week
+        ),
+        "every date": event.checkin_lists.create(name="Toutes dates", all_products=True),
+    }
+    redeem(till, doors["tonight"], ticket_for(tonight).secret)
     # Tonight's ticket at a door that takes every date: still tonight's.
-    redeem(till, every_date, ticket_for(tonight).secret)
-    redeem(till, last_week_door, ticket_for(last_week).secret)
+    redeem(till, doors["every date"], ticket_for(tonight).secret)
+    redeem(till, doors["last week"], ticket_for(last_week).secret)
+    return till, doors
+
+
+@pytest.mark.django_db
+def test_a_door_kept_for_one_date_of_a_series_counts_that_date(organizer, channel, device):
+    till, doors = scanned_series(organizer, channel, device)
 
     # The list's own figures are that date's, and the counter beside them too.
-    assert scans(till, tonight_door)["event"]["admitted"] == 2
-    # A door for every date is a door for the whole series.
-    assert scans(till, every_date)["event"]["admitted"] == 3
+    assert scans(till, doors["tonight"])["event"]["admitted"] == 2
+    assert scans(till, doors["last week"])["event"]["admitted"] == 1
+
+
+@pytest.mark.django_db
+def test_a_door_for_every_date_of_a_series_counts_tonight(organizer, channel, device):
+    till, doors = scanned_series(organizer, channel, device)
+
+    # Not the whole season: tonight, the date the till sells for.
+    assert scans(till, doors["every date"])["event"]["admitted"] == 2
+
+
+@pytest.mark.django_db
+def test_a_series_with_no_date_on_still_counts(organizer, channel, device):
+    event = series_event(organizer)
+    a_date(event, "Éteinte", now() - timedelta(hours=1), active=False)
+    door = event.checkin_lists.create(name="Porte", all_products=True)
+
+    response = Till(device, event).get("attendance", list=door.pk)
+
+    # The till refuses to sell with no date on; a count has nothing to refuse.
+    assert response.status_code == 200
+    assert response.json()["scans"]["event"]["admitted"] == 0
 
 
 @pytest.mark.django_db

@@ -738,10 +738,12 @@ soixante-dix personnes y lisait zéro les jours suivants. Ce qui est compté :
 - un **scan** est un check-in arrivé par l'API de scan avec un code
   (`raw_source_type` renseigné), de cette app ou de pretixSCAN. Le pointage fait
   à la vente n'en est pas un, ni un pointage automatique ;
-- entrées seulement, sur toutes les listes de l'événement. Dans une série, une
-  porte dont la liste est réservée à une date compte cette date, comme les
-  chiffres de sa liste : les scans de ses portes, et ceux de ses billets passés à
-  une porte ouverte à toutes les dates ;
+- entrées seulement, sur toutes les listes de l'événement. Dans une série, le
+  compteur suit une date : celle de la liste si elle est réservée à une date,
+  comme les autres chiffres de la liste, sinon celle que la caisse vend ce soir
+  (la plus proche s'il n'y en a pas ce soir). Il compte les scans des portes de
+  cette date, et ceux de ses billets passés à une porte ouverte à toutes les
+  dates ;
 - **admis** : accepté pour un produit d'admission ; **refusés** : tous les
   refus, y compris ceux envoyés après coup ; **sans entrée** : accepté pour un
   produit qui ne fait entrer personne ; **hors ligne** : parmi les admis, ceux
@@ -2122,7 +2124,7 @@ Ce qu'elle couvre, fichier par fichier :
 | `test_summary.py` | La journée de caisse qui commence à 6 h, le mode test à part, une annulation qui se nette |
 | `test_catalog.py` | Ce que la caisse a le droit de vendre et ce qu'on lui dit de l'événement |
 | `test_attendance.py` | Le compteur de présents, produits d'admission seulement |
-| `test_door_scans.py` | Le compteur du scanneur : par appareil et pour tout l'événement (une date d'une série pour une liste datée), ce qui est un scan et ce qui n'en est pas, la marque hors ligne de pretix, un refus envoyé après coup, une vente en caisse qui n'est plus marquée hors ligne |
+| `test_door_scans.py` | Le compteur du scanneur : par appareil et pour tout l'événement (une date dans une série), ce qui est un scan et ce qui n'en est pas, la marque hors ligne de pretix, un refus envoyé après coup, une vente en caisse qui n'est plus marquée hors ligne |
 | `test_device_roles.py` | Le rôle d'un appareil, et ce que le serveur refuse à une caisse qui a un lecteur |
 | `test_terminal.py` | Le paiement sur le lecteur de bout en bout : panier épinglé, double appui, webhook forgé, remboursement à l'annulation |
 | `test_sumup_client.py` | La forme d'un échec SumUp — « refusé », « pas encore », « on n'a pas pu demander » |

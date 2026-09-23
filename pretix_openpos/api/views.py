@@ -208,10 +208,9 @@ def door_scans(event, device, subevent=None):
 
     The whole event, whenever the scan was made. It used to be tonight only,
     from six in the morning like the takings, so a phone that had let seventy
-    people in read zero on every day after, on that very event. A door
-    scanning on a list kept for one date of a series counts that date, as the
-    list's own figures do: its doors, and its tickets at doors kept for every
-    date.
+    people in read zero on every day after, on that very event. In a series,
+    ``subevent`` narrows it to one date: its doors, and its tickets at doors
+    kept for every date.
     """
     scope = Q(list__event=event, type=Checkin.TYPE_ENTRY, raw_source_type__isnull=False)
     if subevent is not None:
@@ -413,6 +412,24 @@ def selling_subevent(event, at=None, *, settled=False):
             "code": "series_closed",
         }
     )
+
+
+def evening_subevent(event):
+    """
+    The date of a series that the evening's figures are about, or ``None``.
+
+    ``None`` for a plain event: its figures are the whole event's. In a series,
+    the date the till sells for tonight, or failing that the nearest one, as for
+    a sale already paid: a figure has to be about some date, and nothing is
+    refused for it. ``None`` too for a series with no date switched on, whose
+    figures are then the whole series'.
+    """
+    if not event.has_subevents:
+        return None
+    try:
+        return selling_subevent(event, settled=True)
+    except ValidationError:
+        return None
 
 
 def setting_row_id(event, setting):
@@ -2313,10 +2330,13 @@ class OpenPosViewSet(viewsets.ViewSet):
                 "not_arrived": expected - entered_count,
                 "non_admission_entered": non_admission,
                 "items": items,
+                # In a series, the date this door's list is kept for, as its
+                # own figures are; on a list for every date, tonight's rather
+                # than the whole season's.
                 "scans": door_scans(
                     event,
                     request.auth if isinstance(request.auth, Device) else None,
-                    clist.subevent,
+                    clist.subevent or evening_subevent(event),
                 ),
             }
         )
