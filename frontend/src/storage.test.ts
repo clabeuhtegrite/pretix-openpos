@@ -137,47 +137,58 @@ describe("the cached catalogue and configuration", () => {
 });
 
 describe("the door's last count", () => {
-  function counted(sinceHoursAgo: number): DoorScans {
-    return {
-      since: new Date(Date.now() - sinceHoursAgo * 3_600_000).toISOString(),
-      device: { admitted: 41, refused: 2, other: 0, offline: 3 },
-      event: { admitted: 180, refused: 5, other: 1, offline: 7 },
-      devices: [],
-    };
-  }
+  const counted: DoorScans = {
+    device: { admitted: 41, refused: 2, other: 0, offline: 3 },
+    event: { admitted: 180, refused: 5, other: 1, offline: 7 },
+    devices: [],
+  };
 
   it("survives a reload, so the counter does not start again from zero", () => {
-    const tonight = counted(3);
-    saveDoorScans("festival", tonight);
+    saveDoorScans("festival", counted);
 
-    expect(loadDoorScans("festival")).toEqual(tonight);
+    expect(loadDoorScans("festival")).toEqual(counted);
   });
 
   it("is kept per event", () => {
-    saveDoorScans("festival", counted(3));
+    saveDoorScans("festival", counted);
 
     expect(loadDoorScans("gala")).toBeNull();
   });
 
-  it("is forgotten once the evening it counted is over", () => {
-    // Six the next morning: tonight's figure would be last night's.
-    saveDoorScans("festival", counted(25));
+  it("is still the event's figure days later", () => {
+    // It counts the whole event, so no morning makes it out of date.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-19T21:00:00.000Z"));
+    saveDoorScans("festival", counted);
+
+    vi.setSystemTime(new Date("2026-09-23T08:00:00.000Z"));
+
+    expect(loadDoorScans("festival")).toEqual(counted);
+    vi.useRealTimers();
+  });
+
+  it("leaves out a figure that counted one evening only", () => {
+    // What 0.18.0 kept: from six in the morning, short of the event's.
+    localStorage.setItem(
+      "openpos.doorScans.v1.festival",
+      JSON.stringify({ ...counted, since: new Date().toISOString() }),
+    );
 
     expect(loadDoorScans("festival")).toBeNull();
   });
 
-  it("is ignored when it does not say which evening it counted", () => {
-    localStorage.setItem("openpos.doorScans.v1.festival", JSON.stringify({ since: "never" }));
+  it("is ignored when it is not a count", () => {
+    localStorage.setItem("openpos.doorScans.v2.festival", JSON.stringify({ device: null }));
     expect(loadDoorScans("festival")).toBeNull();
 
-    localStorage.setItem("openpos.doorScans.v1.festival", JSON.stringify({ device: null }));
+    localStorage.setItem("openpos.doorScans.v2.festival", "null");
     expect(loadDoorScans("festival")).toBeNull();
   });
 
   it("costs only the figure after a reload when it cannot be written", () => {
     fillStorage();
 
-    expect(() => saveDoorScans("festival", counted(1))).not.toThrow();
+    expect(() => saveDoorScans("festival", counted)).not.toThrow();
   });
 });
 

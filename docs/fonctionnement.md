@@ -1,6 +1,6 @@
 # Fonctionnement de pretix-openpos
 
-Documentation de fonctionnement du plugin, version 0.18.0. Elle couvre trois
+Documentation de fonctionnement du plugin, version 0.18.1. Elle couvre trois
 choses, dans cet ordre : ce que le plugin ajoute à pretix, comment le mettre en
 service, et ce qui se passe exactement quand un bénévole encaisse.
 
@@ -338,7 +338,7 @@ En Docker/Kubernetes, [`deploy/Dockerfile`](../deploy/Dockerfile) intègre le pl
 
 ```bash
 cd frontend && npm run build && cd ..
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.18.0 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.18.1 .
 ```
 
 Deux pièges :
@@ -725,18 +725,25 @@ Sous les boutons, deux lignes :
 - **« Cet appareil : 64 admis · 3 refusés »**, suivi de « 1 sans entrée » pour
   un t-shirt scanné et de « 2 à envoyer » pour les scans que pretix n'a pas
   encore reçus ;
-- **« Ce soir, toutes portes : 196 admis »**.
+- **« Cet événement, toutes portes : 196 admis »**.
 
 Ce compteur était tenu par l'écran, et repartait à zéro dès que l'app se
 rechargeait — ce qu'iOS fait à une app laissée un moment en arrière-plan : c'est
 le retour des scanneurs de la première soirée. Il vient maintenant de pretix, par
-le bloc `scans` de `attendance/`, compté sur les lignes de check-in de la soirée
-(depuis 6 h, comme le relevé de caisse) :
+le bloc `scans` de `attendance/`, compté sur les lignes de check-in de tout
+l'événement, quel que soit le jour du scan. La 0.18.0 ne comptait que la soirée,
+depuis 6 h comme le relevé de caisse, et un téléphone qui avait fait entrer
+soixante-dix personnes y lisait zéro les jours suivants. Ce qui est compté :
 
 - un **scan** est un check-in arrivé par l'API de scan avec un code
   (`raw_source_type` renseigné), de cette app ou de pretixSCAN. Le pointage fait
   à la vente n'en est pas un, ni un pointage automatique ;
-- entrées seulement, sur toutes les listes de l'événement ;
+- entrées seulement, sur toutes les listes de l'événement. Dans une série, le
+  compteur suit une date : celle de la liste si elle est réservée à une date,
+  comme les autres chiffres de la liste, sinon celle que la caisse vend ce soir
+  (la plus proche s'il n'y en a pas ce soir). Il compte les scans des portes de
+  cette date, et ceux de ses billets passés à une porte ouverte à toutes les
+  dates ;
 - **admis** : accepté pour un produit d'admission ; **refusés** : tous les
   refus, y compris ceux envoyés après coup ; **sans entrée** : accepté pour un
   produit qui ne fait entrer personne ; **hors ligne** : parmi les admis, ceux
@@ -745,12 +752,12 @@ le bloc `scans` de `attendance/`, compté sur les lignes de check-in de la soir�
   version plus ancienne envoyait sans marque.
 
 L'app y ajoute ce que le serveur ne peut pas encore savoir : les scans répondus
-depuis la dernière lecture, et ceux qui attendent dans la file. Le dernier
-chiffre reçu est gardé sur l'appareil pour la soirée, et une reprise qui envoie
-des scans l'y reporte : une app rechargée sans réseau rouvre sur le chiffre de la
-soirée, pas sur zéro. Pendant qu'une reprise vide la file, le compteur ne
-redescend pas : les scans envoyés restent comptés jusqu'à ce que le chiffre du
-serveur les compte.
+depuis la dernière lecture, et ceux qui attendent dans la file, de quelque soir
+qu'ils datent. Le dernier chiffre reçu est gardé sur l'appareil, par événement,
+et une reprise qui envoie des scans l'y reporte : une app rechargée sans réseau
+rouvre sur le chiffre de l'événement, pas sur zéro. Pendant qu'une reprise vide
+la file, le compteur ne redescend pas : les scans envoyés restent comptés
+jusqu'à ce que le chiffre du serveur les compte.
 
 Le détail de l'effectif (bouton 👥) ajoute un tableau **par appareil** : entrés,
 refusés, hors ligne, le plus actif en tête, les scans du back-office sur une
@@ -2117,7 +2124,7 @@ Ce qu'elle couvre, fichier par fichier :
 | `test_summary.py` | La journée de caisse qui commence à 6 h, le mode test à part, une annulation qui se nette |
 | `test_catalog.py` | Ce que la caisse a le droit de vendre et ce qu'on lui dit de l'événement |
 | `test_attendance.py` | Le compteur de présents, produits d'admission seulement |
-| `test_door_scans.py` | Le compteur du scanneur : par appareil et pour la soirée, ce qui est un scan et ce qui n'en est pas, la marque hors ligne de pretix, un refus envoyé après coup, une vente en caisse qui n'est plus marquée hors ligne |
+| `test_door_scans.py` | Le compteur du scanneur : par appareil et pour tout l'événement (une date dans une série), ce qui est un scan et ce qui n'en est pas, la marque hors ligne de pretix, un refus envoyé après coup, une vente en caisse qui n'est plus marquée hors ligne |
 | `test_device_roles.py` | Le rôle d'un appareil, et ce que le serveur refuse à une caisse qui a un lecteur |
 | `test_terminal.py` | Le paiement sur le lecteur de bout en bout : panier épinglé, double appui, webhook forgé, remboursement à l'annulation |
 | `test_sumup_client.py` | La forme d'un échec SumUp — « refusé », « pas encore », « on n'a pas pu demander » |

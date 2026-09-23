@@ -95,28 +95,22 @@ export function saveCached(kind: "config" | "catalog", event: string, value: unk
   }
 }
 
-/** How long "tonight" lasts: from six one morning to six the next. */
-const BUSINESS_DAY_MS = 24 * 3_600_000;
-
 /**
- * The last count of tonight's scans the server gave this device.
+ * The last count of the event's scans the server gave this device.
  *
- * So a door that iOS reloads while the network is down opens on the evening's
+ * So a door that iOS reloads while the network is down opens on the event's
  * figure rather than on zero, which is the very complaint the server-side count
- * answers. Kept per event, and only for the night it was counted in: past six
- * the next morning it describes an evening that is over.
+ * answers. Kept per event, for as long as there is one: the count is the whole
+ * event's, not an evening's. `v2`, because a `v1` figure was tonight's alone.
  */
 export function loadDoorScans(event: string): DoorScans | null {
-  const saved = readJson<DoorScans | null>(`openpos.doorScans.v1.${event}`, null);
-  if (!saved || typeof saved.since !== "string") return null;
-  const since = Date.parse(saved.since);
-  if (!Number.isFinite(since) || Date.now() >= since + BUSINESS_DAY_MS) return null;
-  return saved;
+  const saved = readJson<DoorScans | null>(`openpos.doorScans.v2.${event}`, null);
+  return typeof saved?.event?.admitted === "number" ? saved : null;
 }
 
 export function saveDoorScans(event: string, scans: DoorScans): void {
   try {
-    localStorage.setItem(`openpos.doorScans.v1.${event}`, JSON.stringify(scans));
+    localStorage.setItem(`openpos.doorScans.v2.${event}`, JSON.stringify(scans));
   } catch {
     // Costs the figure after a reload with no network, and nothing else.
   }
