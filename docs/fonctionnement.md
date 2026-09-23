@@ -1,6 +1,6 @@
 # Fonctionnement de pretix-openpos
 
-Documentation de fonctionnement du plugin, version 0.21.1. Elle couvre trois
+Documentation de fonctionnement du plugin, version 0.22.0. Elle couvre trois
 choses, dans cet ordre : ce que le plugin ajoute à pretix, comment le mettre en
 service, et ce qui se passe exactement quand un bénévole encaisse.
 
@@ -392,7 +392,7 @@ En Docker/Kubernetes, [`deploy/Dockerfile`](../deploy/Dockerfile) intègre le pl
 
 ```bash
 cd frontend && npm run build && cd ..
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.21.1 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.22.0 .
 ```
 
 Deux pièges :
@@ -774,9 +774,9 @@ dedans.
 
 Dans une série, les chiffres suivent une date, comme le compteur du scanneur
 (§5.2) : celle de la liste si elle est réservée à une date, sinon celle que la
-caisse vend ce soir. Une liste ouverte à toutes les dates comptait jusqu'ici les
-billets de toute la saison — trois mille attendus, à une porte qui en attend
-deux cents ce soir.
+caisse vend ce soir. Une liste ouverte à toutes les dates comptait, jusqu'à la
+0.21.1, les billets de toute la saison — trois mille attendus, à une porte qui
+en attend deux cents ce soir.
 
 La page *Arrivées* du back-office (§2.5) lit ce même calcul : ses *entrés* sont
 ceux du téléphone.
