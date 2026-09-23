@@ -49,7 +49,7 @@ class OpenPosSecurityProfile(AllowListSecurityProfile):
         ("GET", "api-v1:openpos-offline"),
         ("POST", "api-v1:openpos-cancel"),
         # The cash drawer this till is assigned: opening it on a counted float,
-        # money put in or taken out, the blind count and the closing. Each one
+        # money put in or taken out, the count and the closing. Each one
         # acts on this till's own drawer and no other.
         ("GET", "api-v1:openpos-drawer"),
         ("POST", "api-v1:openpos-drawer-open"),

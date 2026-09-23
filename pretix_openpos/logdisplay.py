@@ -399,6 +399,29 @@ class DrawerDeleted(OrganizerLogEntryType):
 
 
 @organizer_entry_types.new()
+class DrawerArchived(OrganizerLogEntryType):
+    action_type = "pretix_openpos.drawer.archived"
+
+    def display(self, logentry, data):
+        devices = data.get("devices") or []
+        if not devices:
+            return _("The cash drawer {name} was archived.").format(name=data.get("name") or "?")
+        return _("The cash drawer {name} was archived, and taken away from {devices}.").format(
+            name=data.get("name") or "?", devices=", ".join(devices)
+        )
+
+
+@organizer_entry_types.new()
+class DrawerRestored(OrganizerLogEntryType):
+    action_type = "pretix_openpos.drawer.restored"
+
+    def display(self, logentry, data):
+        return _("The cash drawer {name} was brought back from the archive.").format(
+            name=data.get("name") or "?"
+        )
+
+
+@organizer_entry_types.new()
 class DrawerClosed(OrganizerLogEntryType):
     """A drawer a till left open, closed from the back office."""
 

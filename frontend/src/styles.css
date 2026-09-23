@@ -2126,6 +2126,47 @@ table.takings thead th {
   font-weight: 400;
 }
 
+/* What the drawer should hold right now, line by line down to the sum: the
+   figure somebody behind the bar checks between two rushes, so the sum is the
+   large one and the lines above it only say where it comes from. */
+.drawer-sum {
+  margin: 4px 0 14px;
+  padding: 10px 16px 2px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+.drawer-sum-lines {
+  margin: 0;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.drawer-sum-lines > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 3px 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.drawer-sum-lines dt {
+  min-width: 0;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+.drawer-sum-lines dd {
+  margin: 0;
+  white-space: nowrap;
+}
+
+.drawer-holds {
+  padding: 8px 0;
+}
+
 /* A count and what the drawer should have held: the one box on this screen
    that is read twice, once at the till and once more by whoever counts again. */
 .drawer-result {

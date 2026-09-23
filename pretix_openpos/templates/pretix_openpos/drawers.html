@@ -8,9 +8,10 @@
     <p class="text-muted">
         {% blocktrans trimmed %}
             One drawer here for every drawer of notes and coins behind a counter. A till given
-            a drawer asks for it to be opened, on a counted float, before it takes any cash;
-            at the end of the evening the drawer is counted blind and closed, and the difference
-            is written down. A till with no drawer takes cash as it always has.
+            a drawer asks for it to be opened, on a counted float, before it takes any cash, and
+            shows what the drawer should hold as the evening goes; at the end of it the drawer
+            is counted and closed, and the difference is written down. A till with no drawer
+            takes cash as it always has.
         {% endblocktrans %}
     </p>
 
@@ -57,6 +58,10 @@
                                 {% if row.session.opening.cashier %}
                                     <br><small class="text-muted">{{ row.session.opening.cashier }}</small>
                                 {% endif %}
+                                <br>
+                                {% blocktrans trimmed with amount=row.expected_now|money:currency %}
+                                    Should hold <strong>{{ amount }}</strong>
+                                {% endblocktrans %}
                             {% else %}
                                 <span class="label label-default">{% trans "Closed" context "cash drawer state" %}</span>
                             {% endif %}
@@ -98,6 +103,12 @@
                                                 title="{% trans "Delete" %}">
                                             <span class="fa fa-trash"></span>
                                         </button>
+                                    {% elif not row.session %}
+                                        {# Archived from its own page, which says what that does to its tills. #}
+                                        <a href="{{ row.url }}#archive" class="btn btn-default btn-sm"
+                                           title="{% trans "Archive…" %}">
+                                            <span class="fa fa-archive"></span>
+                                        </a>
                                     {% endif %}
                                 </form>
                             </td>
@@ -110,6 +121,56 @@
     {% else %}
         <div class="alert alert-info">
             {% trans "No cash drawer yet. Every till takes cash the way it always has." %}
+        </div>
+    {% endif %}
+
+    {% if archived %}
+        <h3>{% trans "Archived drawers" %}</h3>
+        <p class="text-muted">
+            {% blocktrans trimmed %}
+                Offered to no till, their evenings kept. A drawer that has been opened cannot be
+                deleted: its ledger and the sales filed under it are part of the books.
+            {% endblocktrans %}
+        </p>
+        <div class="table-responsive">
+            <table class="table table-condensed">
+                <thead>
+                <tr>
+                    <th>{% trans "Drawer" %}</th>
+                    <th>{% trans "Archived" %}</th>
+                    <th>{% trans "Last closing" %}</th>
+                    {% if can_manage %}<th></th>{% endif %}
+                </tr>
+                </thead>
+                <tbody>
+                {% for row in archived %}
+                    <tr>
+                        <td><a href="{{ row.url }}">{{ row.drawer.name }}</a></td>
+                        <td>{{ row.drawer.archived_at|date:"SHORT_DATETIME_FORMAT" }}</td>
+                        <td>
+                            {% if row.last %}
+                                <a href="{% url "plugins:pretix_openpos:drawer.session" organizer=request.organizer.slug drawer=row.drawer.pk session=row.last.session.pk %}">
+                                    {{ row.last.session.closed_at|date:"SHORT_DATETIME_FORMAT" }}
+                                </a>
+                            {% else %}
+                                <span class="text-muted">—</span>
+                            {% endif %}
+                        </td>
+                        {% if can_manage %}
+                            <td>
+                                <form action="" method="post" class="form-inline">
+                                    {% csrf_token %}
+                                    <input type="hidden" name="drawer" value="{{ row.drawer.pk }}">
+                                    <button type="submit" name="action" value="restore" class="btn btn-default btn-sm">
+                                        {% trans "Bring back" %}
+                                    </button>
+                                </form>
+                            </td>
+                        {% endif %}
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
         </div>
     {% endif %}
 

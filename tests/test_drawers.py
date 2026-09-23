@@ -3,7 +3,7 @@ The cash drawer, as a till meets it.
 
 A till given a drawer takes cash into an opening of that drawer and nowhere
 else: opened on a counted float, fed by the cash sales, topped up or emptied
-by hand with a reason, counted blind, closed. Every one of those steps is
+by hand with a reason, counted, closed. Every one of those steps is
 checked here over HTTP, with a real device token, because the refusals are
 the point — a stale or edited app has to meet them exactly as a fresh one
 does. What the drawer should hold is never stored, so every test that cares
@@ -17,8 +17,8 @@ from django.utils.timezone import now
 from pretix.base.models import Order
 
 from pretix_openpos.drawers import (
-    DrawerError, check_denominations, close_drawer, count_drawer, denominations_for, figures, move_cash, open_drawer,
-    session_at,
+    DrawerError, archive_drawer, check_denominations, close_drawer, count_drawer, denominations_for, figures,
+    move_cash, open_drawer, restore_drawer, session_at,
 )
 from pretix_openpos.models import GENESIS_HASH, PosDevice, PosDrawer, PosDrawerEntry, PosDrawerSession, PosSale
 
@@ -433,21 +433,46 @@ def test_the_ledger_refuses_what_the_api_would_never_send(device):
 
 
 @pytest.mark.django_db
-def test_the_count_is_blind_until_it_is_written_down(till, device, beer):
+def test_the_till_is_told_what_the_drawer_should_hold_all_evening(till, device, beer, deposit):
+    # Asked for on 2026-09-23 by the organizer opening a drawer on 150 and
+    # selling in cash: the drawer panel showed the float and nothing else, so
+    # nobody behind the bar knew what should be in it until the count.
+    give_drawer(device)
+    open_it(till, amount="150.00")
+
+    assert till.get("drawer").json()["session"]["expected"] == "150.00"
+
+    sell(till, a_beer(beer, 4), idempotency_key="sale-00001")
+    sell(till, a_beer(beer), idempotency_key="sale-00002", payment_type="card")
+    sell(till, [{"item": deposit.pk, "count": 2, "refund": True}], idempotency_key="cups-00001")
+    move(till, "in", "20.00", key="move-00001")
+    move(till, "out", "5.00", key="move-00002")
+
+    session = till.get("drawer").json()["session"]
+
+    assert session["opening_float"] == "150.00"
+    assert session["cash_sales"] == "12.00"
+    assert session["cash_returned"] == "-2.00"  # two cups handed back
+    assert session["cash_in"] == "20.00"
+    assert session["cash_out"] == "5.00"
+    # The card sale is not in the drawer.
+    assert session["expected"] == "175.00"
+
+
+@pytest.mark.django_db
+def test_the_count_says_what_the_drawer_should_have_held_and_the_difference(till, device, beer):
     give_drawer(device)
     open_it(till)
     sell(till, a_beer(beer, 4))
 
-    before = till.get("drawer").json()
     counted = count_it(till, "110.00")
 
-    # Nothing the till is handed before the count says what it should find.
-    assert "expected" not in str(before)
     assert counted.status_code == 200, counted.content
     entry = counted.json()["entry"]
     assert entry["expected"] == "112.00"
     assert entry["difference"] == "-2.00"
     assert counted.json()["session"]["count"]["current"] is True
+    assert counted.json()["session"]["expected"] == "112.00"
 
 
 @pytest.mark.django_db
@@ -600,6 +625,67 @@ def test_the_back_office_can_close_on_an_amount(device):
     assert entry.source == PosDrawerEntry.SOURCE_BACKOFFICE
 
 
+# -- an archived drawer -------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_an_archived_drawer_lets_its_tills_go_and_they_sell_cash_as_before(till, device, beer):
+    drawer = give_drawer(device)
+    open_it(till)
+    count = count_it(till, "100.00").json()["entry"]
+    close_it(till, count["seq"])
+
+    tills = archive_drawer(drawer)
+
+    drawer.refresh_from_db()
+    assert drawer.archived_at is not None
+    assert [d.pk for d in tills] == [device.pk]
+    assert till.get("drawer").json()["drawer"] is None
+    assert sell(till, a_beer(beer), idempotency_key="sale-00001").status_code == 201
+    assert PosSale.objects.get().drawer_session is None
+    # Twice is once.
+    assert archive_drawer(drawer) == []
+
+
+@pytest.mark.django_db
+def test_an_open_drawer_cannot_be_archived(till, device):
+    drawer = give_drawer(device)
+    open_it(till)
+
+    with pytest.raises(DrawerError) as refused:
+        archive_drawer(drawer)
+
+    assert refused.value.code == "drawer_open"
+    drawer.refresh_from_db()
+    assert drawer.archived_at is None
+    assert PosDevice.objects.get(device=device).drawer == drawer
+
+
+@pytest.mark.django_db
+def test_a_till_that_had_not_heard_cannot_open_an_archived_drawer(device):
+    drawer = give_drawer(device)
+    archive_drawer(drawer)
+
+    with pytest.raises(DrawerError) as refused:
+        open_drawer(drawer, idempotency_key="open-late", amount=Decimal("100.00"))
+
+    assert refused.value.code == "no_drawer"
+    assert not drawer.sessions.exists()
+
+
+@pytest.mark.django_db
+def test_a_drawer_brought_back_opens_again(till, device):
+    drawer = give_drawer(device)
+    archive_drawer(drawer)
+
+    restore_drawer(drawer)
+    give_drawer(device)
+
+    drawer.refresh_from_db()
+    assert drawer.archived_at is None
+    assert open_it(till).status_code == 200
+
+
 # -- the takings screen is not the drawer ------------------------------------
 
 
@@ -608,7 +694,7 @@ def test_the_takings_screen_counts_sales_and_never_what_the_drawer_holds(till, d
     # The event's takings stay whole on a till with a drawer: they are what
     # the evening sold, and were asked for as such. What the drawer should
     # hold is another figure — the float, money put in and taken out — and
-    # the till is only ever given it next to a count.
+    # the till reads it in the drawer panel.
     give_drawer(device)
     open_it(till)
     sell(till, a_beer(beer), idempotency_key="sale-00001")

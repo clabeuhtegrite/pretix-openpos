@@ -6,7 +6,7 @@ import { describeError } from "../errors";
 import { t } from "../i18n";
 import { formatMoney, fromCents, toCents } from "../money";
 import { newNonce } from "../nonce";
-import type { DrawerAnswer, DrawerEntry, DrawerState, Pairing } from "../types";
+import type { DrawerAnswer, DrawerEntry, DrawerSession, DrawerState, Pairing } from "../types";
 import CashCount from "./CashCount";
 
 interface Props {
@@ -71,6 +71,46 @@ function Figures({
   );
 }
 
+/**
+ * What the drawer should hold right now, and what that is made of: the float,
+ * the cash taken, the cash handed back, the money put in and taken out. The
+ * lines that are still zero stay off, except the sales, which is the one
+ * everybody behind the bar looks for.
+ */
+function Holds({ session, currency }: { session: DrawerSession; currency: string }) {
+  const lines: { label: string; cents: number; always?: boolean }[] = [
+    { label: t("drawer.cashSales"), cents: toCents(session.cash_sales), always: true },
+    { label: t("drawer.cashReturned"), cents: toCents(session.cash_returned) },
+    { label: t("drawer.cashIn"), cents: toCents(session.cash_in) },
+    { label: t("drawer.cashOut"), cents: -toCents(session.cash_out) },
+  ];
+  return (
+    <div className="drawer-sum">
+      <dl className="drawer-sum-lines">
+        <div>
+          <dt>{t("drawer.float")}</dt>
+          <dd>{formatMoney(toCents(session.opening_float), currency)}</dd>
+        </div>
+        {lines
+          .filter((line) => line.always || line.cents !== 0)
+          .map((line) => (
+            <div key={line.label}>
+              <dt>{line.label}</dt>
+              <dd>
+                {line.cents < 0 ? "−" : "+"}
+                {formatMoney(Math.abs(line.cents), currency)}
+              </dd>
+            </div>
+          ))}
+      </dl>
+      <div className="amount-display drawer-holds">
+        <span>{t("drawer.holds")}</span>
+        <span className="value">{formatMoney(toCents(session.expected), currency)}</span>
+      </div>
+    </div>
+  );
+}
+
 /** Who did it and when, in one line. */
 function stamp(
   entry: { datetime: string; cashier: string },
@@ -100,13 +140,13 @@ function Movement({ entry, currency }: { entry: DrawerEntry; currency: string })
 
 /**
  * The till's cash drawer: opened on a counted float, topped up or emptied
- * with a reason, counted blind, closed on that count.
+ * with a reason, counted, closed on that count.
  *
- * Blind is the point of the count. What the drawer should hold is never on
- * this screen before a count has been written down — the server does not
- * even send it — because a count made with the answer in view is a copy.
- * Once the count is in, the answer comes back with it, and the difference is
- * something to explain on the spot rather than discover at the treasurer's.
+ * What the drawer should hold is on this screen all evening, worked out by
+ * the server from the float and every euro moved since, so whoever stands at
+ * the till knows what is supposed to be in it. The count at the end says
+ * what is actually there, and the difference is something to explain on the
+ * spot rather than discover at the treasurer's.
  *
  * Nothing here works offline, deliberately: an opening or a count is a fact
  * about the drawer at a moment, and one queued for later would be recorded
@@ -463,6 +503,7 @@ export default function DrawerPanel({ pairing, cashier, online, onState, onClose
           <div className="drawer-warn">
             <strong>{t("drawer.staleSince", { time: since })}</strong> {t("drawer.staleHelp")}
           </div>
+          <Holds session={session} currency={currency} />
           {countBlock}
         </>
       );
@@ -474,10 +515,7 @@ export default function DrawerPanel({ pairing, cashier, online, onState, onClose
               ? t("drawer.openedBy", { time: since, cashier: session.opened_by })
               : t("drawer.openedAt", { time: since })}
           </p>
-          <div className="amount-display">
-            <span>{t("drawer.float")}</span>
-            <span className="value">{formatMoney(toCents(session.opening_float), currency)}</span>
-          </div>
+          <Holds session={session} currency={currency} />
           {countBlock}
           <h3 className="drawer-subtitle">{t("drawer.movements")}</h3>
           {session.movements.length ? (

@@ -249,8 +249,9 @@ def test_the_organizer_history_opens_with_every_kind_of_entry_on_it(
     })
     backoffice.post(sumup_url(organizer), {"action": "free", "reader_id": reader})
     backoffice.post(sumup_url(organizer), {"action": "forget", "reader_id": reader})
-    # And the drawers: one created, renamed, given to the till, opened there
-    # and closed from the back office; another created and deleted.
+    # And the drawers: one created, renamed, given to the till, opened there,
+    # closed from the back office, archived and brought back; another created
+    # and deleted.
     drawers = f"/control/organizer/{organizer.slug}/openpos/drawers/"
     backoffice.post(drawers, {"action": "create", "new-name": "Bar", "new-opening_float": "100"})
     backoffice.post(drawers, {"action": "create", "new-name": "Vestiaire"})
@@ -267,6 +268,8 @@ def test_the_organizer_history_opens_with_every_kind_of_entry_on_it(
     })
     till.post("drawer/open", {"idempotency_key": "open-00001", "amount": "100.00"})
     backoffice.post(f"{drawers}{bar.pk}/{bar.sessions.get().pk}/", {"amount": ""})
+    backoffice.post(f"{drawers}{bar.pk}/", {"action": "archive"})
+    backoffice.post(drawers, {"action": "restore", "drawer": bar.pk})
     # One of every kind the plugin writes on the organizer, or this proves less
     # than its name says.
     written = set(
@@ -291,6 +294,8 @@ def test_the_organizer_history_opens_with_every_kind_of_entry_on_it(
     assert "The cash drawer Vestiaire was deleted." in page
     assert f"{device.name}: cash drawer Bar du haut" in page
     assert "The cash drawer Bar du haut was closed from the back office, without a count." in page
+    assert f"The cash drawer Bar du haut was archived, and taken away from {device.name}." in page
+    assert "The cash drawer Bar du haut was brought back from the archive." in page
     for action_type in organizer_entry_types:
         assert action_type not in page
     # The key itself, which is the other thing this page must never show.

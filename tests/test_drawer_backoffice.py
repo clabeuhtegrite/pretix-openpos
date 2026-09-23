@@ -90,9 +90,10 @@ def test_two_drawers_with_one_name_are_refused(backoffice, organizer):
 
 
 @pytest.mark.django_db
-def test_the_list_says_where_each_drawer_stands(backoffice, organizer, evening, another_till):
+def test_the_list_says_where_each_drawer_stands(backoffice, organizer, evening, another_till, beer):
     give_drawer(another_till.device, name="Porte")
-    open_it(another_till)
+    open_it(another_till, amount="150.00")
+    sell(another_till, [{"item": beer.pk, "count": 1}], idempotency_key="door-00001")
 
     page = backoffice.get(drawers_url(organizer)).content.decode()
 
@@ -100,6 +101,8 @@ def test_the_list_says_where_each_drawer_stands(backoffice, organizer, evening, 
     assert "Caisse bar" in page  # the till feeding the bar drawer
     assert "Difference -€1.00" in page
     assert "since" in page  # the door's drawer, open
+    # What the open one should hold now: the float and the beer, not just the float.
+    assert "Should hold <strong>€153.00</strong>" in page
 
 
 @pytest.mark.django_db
@@ -179,6 +182,103 @@ def test_a_drawer_with_a_history_keeps_it(backoffice, organizer, evening):
 
     assert PosDrawer.objects.filter(pk=evening.drawer_id).exists()
     assert "history stays" in response.content.decode()
+    assert "Archive it instead" in response.content.decode()
+
+
+# -- archiving -----------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_a_closed_drawer_with_a_history_is_archived_from_its_own_page(backoffice, organizer, evening):
+    drawer = evening.drawer
+    listing = backoffice.get(drawers_url(organizer)).content.decode()
+    page = backoffice.get(drawer_url(drawer)).content.decode()
+
+    # The list sends to the page that says what archiving does to its tills.
+    assert f'href="{drawer_url(drawer)}#archive"' in listing
+    assert 'id="archive"' in page
+    assert "This till will take cash with no drawer" in page and "Caisse bar" in page
+
+    response = backoffice.post(drawer_url(drawer), {"action": "archive"}, follow=True)
+
+    drawer.refresh_from_db()
+    assert drawer.archived_at is not None
+    assert "archived, and taken away from Caisse bar" in response.content.decode()
+    assert "Archived on" in response.content.decode()
+    assert not PosDevice.objects.filter(drawer=drawer).exists()
+    entry = latest(organizer, "pretix_openpos.drawer.archived")
+    assert str(entry.display()) == (
+        "The cash drawer Bar was archived, and taken away from Caisse bar."
+    )
+
+    listing = backoffice.get(drawers_url(organizer))
+    assert listing.context["rows"] == []
+    assert [row["drawer"] for row in listing.context["archived"]] == [drawer]
+    assert "Archived drawers" in listing.content.decode()
+    # Offered to no till any more.
+    assert f'value="{drawer.pk}"' not in backoffice.get(devices_url(organizer)).content.decode()
+    # Its evenings are still there.
+    assert backoffice.get(session_url(evening)).status_code == 200
+
+
+@pytest.mark.django_db
+def test_an_open_drawer_is_not_archived(backoffice, organizer, till, device):
+    drawer = give_drawer(device)
+    open_it(till)
+
+    page = backoffice.get(drawer_url(drawer)).content.decode()
+    response = backoffice.post(drawer_url(drawer), {"action": "archive"}, follow=True)
+
+    assert "Close tonight" in page
+    assert "still holds tonight" in response.content.decode()
+    drawer.refresh_from_db()
+    assert drawer.archived_at is None
+
+
+@pytest.mark.django_db
+def test_an_archived_drawer_is_brought_back_from_the_list(backoffice, organizer):
+    drawer = PosDrawer.objects.create(organizer=organizer, name="Bar")
+    backoffice.post(drawer_url(drawer), {"action": "archive"})
+    assert str(latest(organizer, "pretix_openpos.drawer.archived").display()) == (
+        "The cash drawer Bar was archived."
+    )
+
+    response = backoffice.post(
+        drawers_url(organizer), {"action": "restore", "drawer": drawer.pk}, follow=True
+    )
+
+    drawer.refresh_from_db()
+    assert drawer.archived_at is None
+    assert "is back" in response.content.decode()
+    assert str(latest(organizer, "pretix_openpos.drawer.restored").display()) == (
+        "The cash drawer Bar was brought back from the archive."
+    )
+    # Once is enough: nothing more is written for a drawer already back, or
+    # already away.
+    backoffice.post(drawers_url(organizer), {"action": "restore", "drawer": drawer.pk})
+    backoffice.post(drawer_url(drawer), {"action": "archive"})
+    backoffice.post(drawer_url(drawer), {"action": "archive"})
+    assert organizer.all_logentries().filter(action_type="pretix_openpos.drawer.restored").count() == 1
+    assert organizer.all_logentries().filter(action_type="pretix_openpos.drawer.archived").count() == 2
+
+
+@pytest.mark.django_db
+def test_the_name_of_an_archived_drawer_is_not_taken_twice(backoffice, organizer):
+    drawer = PosDrawer.objects.create(organizer=organizer, name="Bar")
+    backoffice.post(drawer_url(drawer), {"action": "archive"})
+
+    response = backoffice.post(drawers_url(organizer), {"action": "create", "new-name": "bar"})
+
+    assert "name of an archived drawer" in response.content.decode()
+    assert PosDrawer.objects.count() == 1
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("action", ["sideways", ""])
+def test_a_drawer_page_post_that_is_not_archiving_is_not_found(backoffice, organizer, action):
+    drawer = PosDrawer.objects.create(organizer=organizer, name="Bar")
+
+    assert backoffice.post(drawer_url(drawer), {"action": action}).status_code == 404
 
 
 @pytest.mark.django_db
@@ -218,7 +318,9 @@ def test_whoever_reads_every_order_reads_the_drawers_and_changes_nothing(reader,
 
     assert reader.post(drawers_url(organizer), {"action": "create", "new-name": "X"}).status_code == 403
     assert reader.post(session_url(evening), {"amount": "1"}).status_code == 403
+    assert reader.post(drawer_url(evening.drawer), {"action": "archive"}).status_code == 403
     assert "Close from here" not in reader.get(session_url(evening)).content.decode()
+    assert 'id="archive"' not in reader.get(drawer_url(evening.drawer)).content.decode()
 
 
 @pytest.mark.django_db
@@ -261,6 +363,8 @@ def test_a_drawer_s_evenings_are_listed_with_their_difference(backoffice, evenin
     rows = response.context["rows"]
     assert len(rows) == 2
     assert rows[0]["closing"] is None  # tonight, still open
+    assert rows[0]["expected_now"] == Decimal("100.00")  # and what it should hold now
+    assert rows[1]["expected_now"] is None
     assert rows[1]["difference"] == Decimal("-1.00")
     assert response.context["tampered_with"] is None
     assert "Caisse bar" in response.content.decode()
@@ -548,6 +652,33 @@ def test_the_drawer_screens_read_in_french(backoffice, organizer, evening):
     assert "<th>Ouverture</th>" in history
     assert "<th>Fermeture</th>" in history
     assert "Comptage" in report
+    assert "Archiver cette caisse" in history
+
+
+@pytest.mark.django_db
+def test_what_an_open_drawer_should_hold_and_an_archived_one_read_in_french(
+    backoffice, organizer, till, device
+):
+    from pretix.base.models import User
+
+    User.objects.filter(email="boss@example.org").update(locale="fr")
+    drawer = give_drawer(device)
+    open_it(till, amount="150.00")
+
+    listing = backoffice.get(drawers_url(organizer)).content.decode()
+    history = backoffice.get(drawer_url(drawer)).content.decode()
+
+    assert "Doit contenir <strong>150,00" in listing
+    assert "maintenant" in history
+    assert "Fermez d’abord l’ouverture de ce soir" in history
+
+    PosDrawerSession.objects.filter(drawer=drawer).update(closed_at=now())
+    backoffice.post(drawer_url(drawer), {"action": "archive"})
+    listing = backoffice.get(drawers_url(organizer)).content.decode()
+    history = backoffice.get(drawer_url(drawer)).content.decode()
+
+    assert "Caisses archivées" in listing and "Réactiver" in listing
+    assert "Archivée le" in history
 
 
 # -- the audit -----------------------------------------------------------------

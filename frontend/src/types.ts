@@ -141,13 +141,7 @@ export interface DrawerEntry {
   device: string;
 }
 
-/**
- * A blind count, with what the drawer should have held when it was made.
- *
- * The server only ever hands out `expected` beside a count that is already
- * written down: before that, the count would be copying a figure off the
- * screen rather than counting.
- */
+/** A count, with what the drawer should have held when it was made. */
 export interface DrawerCount extends DrawerEntry {
   expected: string;
   difference: string;
@@ -161,6 +155,13 @@ export interface DrawerSession {
   opened_at: string;
   opened_by: string;
   opening_float: string;
+  /** What the drawer should hold now: the float and every euro moved since. */
+  expected: string;
+  cash_sales: string;
+  /** Cash handed back, cancellations and returned deposits: negative, or zero. */
+  cash_returned: string;
+  cash_in: string;
+  cash_out: string;
   /** Opened on an earlier till day and never closed. */
   stale: boolean;
   movements: DrawerEntry[];
@@ -180,7 +181,7 @@ export interface DrawerClosing {
   difference: string | null;
 }
 
-/** Everything the drawer panel shows, and deliberately not what the drawer holds. */
+/** Everything the drawer panel shows. */
 export interface DrawerState {
   drawer: {
     id: number;

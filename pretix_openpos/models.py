@@ -838,6 +838,11 @@ class PosDrawer(models.Model):
         verbose_name=_("Usual opening float"),
     )
     created = models.DateTimeField(auto_now_add=True)
+    #: When the drawer was put away. A drawer that has been opened cannot be
+    #: deleted — its ledger, and the sales filed under its openings, would go
+    #: with it — so this is how one stops being offered: out of the list and
+    #: out of the tills' choice, its evenings still there to read.
+    archived_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         verbose_name = _("Cash drawer")
@@ -863,9 +868,9 @@ class PosDrawerSession(models.Model):
     One opening of a drawer, from the float counted in to the cash counted out.
 
     Opened on a till by whoever sets up the counter, with the float they
-    counted into it; closed at the end of the evening by a blind count — the
-    cash is counted before anybody is shown what it should come to — and the
-    difference between the two is the one figure the evening is judged by.
+    counted into it; closed at the end of the evening on a count of the cash,
+    and the difference between what was counted and what the drawer should
+    hold is the one figure the evening is judged by.
 
     A cash sale on a device that has a drawer is refused while its drawer is
     not open: the sale has to land in an opening, or the count at the end of

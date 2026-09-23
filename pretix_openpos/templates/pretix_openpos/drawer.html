@@ -23,6 +23,20 @@
         </div>
     {% endif %}
 
+    {% if drawer.archived_at %}
+        <form action="" method="post" class="alert alert-warning">
+            {% csrf_token %}
+            {% blocktrans trimmed with when=drawer.archived_at|date:"SHORT_DATETIME_FORMAT" %}
+                Archived on {{ when }}: no till can put its cash in this drawer.
+            {% endblocktrans %}
+            {% if can_manage %}
+                <button type="submit" name="action" value="restore" class="btn btn-default btn-sm">
+                    {% trans "Bring back" %}
+                </button>
+            {% endif %}
+        </form>
+    {% endif %}
+
     <p class="text-muted">
         {% if devices %}
             {% trans "Tills putting their cash in it:" %}
@@ -60,7 +74,14 @@
                         {% endif %}
                     </td>
                     <td class="text-right">{{ row.float|money:currency }}</td>
-                    <td class="text-right">{% if row.expected is not None %}{{ row.expected|money:currency }}{% else %}—{% endif %}</td>
+                    <td class="text-right">
+                        {% if row.expected is not None %}
+                            {{ row.expected|money:currency }}
+                        {% elif row.expected_now is not None %}
+                            <strong>{{ row.expected_now|money:currency }}</strong>
+                            <br><small class="text-muted">{% trans "now" context "cash drawer" %}</small>
+                        {% else %}—{% endif %}
+                    </td>
                     <td class="text-right">
                         {% if row.counted is not None %}
                             {{ row.counted|money:currency }}
@@ -90,5 +111,48 @@
             {% if previous_page %}<li class="previous"><a href="?page={{ previous_page }}">{% trans "More recent" %}</a></li>{% endif %}
             {% if next_page %}<li class="next"><a href="?page={{ next_page }}">{% trans "Older" %}</a></li>{% endif %}
         </ul>
+    {% endif %}
+
+    {% if can_manage and not drawer.archived_at %}
+        <div class="panel panel-default" id="archive">
+            <div class="panel-heading">
+                <h3 class="panel-title">{% trans "Archive this drawer" %}</h3>
+            </div>
+            <div class="panel-body">
+                {% if is_open %}
+                    <p class="text-muted">
+                        {% trans "Close tonight's opening first: the drawer still holds its cash." %}
+                    </p>
+                {% else %}
+                    <p>
+                        {% blocktrans trimmed %}
+                            An archived drawer leaves the list and is offered to no till; every
+                            evening above stays here to read, and it can be brought back. A drawer
+                            that has been opened cannot be deleted: its ledger and the sales filed
+                            under it are part of the books.
+                        {% endblocktrans %}
+                    </p>
+                    {% if devices %}
+                        <p>
+                            <strong>
+                                {% blocktrans trimmed count counter=devices|length %}
+                                    This till will take cash with no drawer until it is given another one:
+                                {% plural %}
+                                    These tills will take cash with no drawer until they are given another one:
+                                {% endblocktrans %}
+                            </strong>
+                            {% for device in devices %}{{ device.name }}{% if not forloop.last %}, {% endif %}{% endfor %}.
+                        </p>
+                    {% endif %}
+                    <form action="" method="post">
+                        {% csrf_token %}
+                        <button type="submit" name="action" value="archive" class="btn btn-default">
+                            <span class="fa fa-archive"></span>
+                            {% trans "Archive" %}
+                        </button>
+                    </form>
+                {% endif %}
+            </div>
+        </div>
     {% endif %}
 {% endblock %}
