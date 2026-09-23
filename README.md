@@ -119,8 +119,19 @@ it was written for. Read the scope section before deciding it fits.
   called off — is reversed in the journal too, in the name of whoever did it,
   and pretix' own refund dialog sends a reader's card payment back through
   SumUp.
+- **Cash drawers**, as many as the venue has. Create one per physical drawer
+  in the back office and give it its tills — two tablets at one bar can share
+  one. A drawer is opened on the till with a float counted note by note or
+  typed in, takes money in and out with a reason each time, is counted blind
+  at closing (the till shows what it should hold only once the count is
+  written down) and closes on that count. Each evening gets a closing report in
+  the back office, with every figure the expected cash is made of and the
+  difference it closed on. A till with a drawer takes cash only while that
+  drawer is open — except a sale replayed from the offline queue, which is
+  never refused and lands in the opening that was running when the customer
+  paid. Card money never goes near a drawer.
 - An **append-only journal**, hash-chained so that editing history after the
-  fact is detectable.
+  fact is detectable. Each drawer's ledger is chained the same way.
 - **Takings for the event**, on the till and in the back office: cash and
   card, per till and per cashier, product by product under each category,
   deposits apart and cancellations netted off. In a series, the takings of
@@ -145,6 +156,8 @@ Being clear about this up front will save you an evaluation:
   unlimited quota), and cancelling a mixed sale credits the order without
   undoing the return that rode along with it.
 - **No receipt printing** and no ticket printing.
+- **No drawer kick.** A cash drawer here is the money and its ledger; nothing
+  opens a physical drawer, which would need a receipt printer to hang it from.
 - **No check-in questions.** Scanning sends `questions_supported: false`, so a
   product that requires answers at the door is refused with a clear reason
   rather than half-checked-in. Use pretixSCAN for those.
@@ -171,6 +184,7 @@ iPad / iPhone / laptop                pretix server
 │  history           │   order + QR  │  /openpos/history            │
 └────────────────────┘               │  /openpos/cancel             │
                                      │  /openpos/summary            │
+                                     │  /openpos/drawer             │
                                      │                              │
                                      │  → OrderCreateSerializer     │
                                      │  → PosSale journal           │
@@ -229,7 +243,7 @@ If you run pretix in Docker or Kubernetes, [`deploy/Dockerfile`](deploy/Dockerfi
 bakes the plugin into the official image:
 
 ```bash
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.20.0 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.21.0 .
 ```
 
 The PWA bundle is built inside the image, from the tree you are building, so the
@@ -288,6 +302,12 @@ rather than to a rolling minor.
    devices* screen, and that till takes card payments through it and nowhere
    else — the server refuses a card sale the reader did not validate. Every
    other device goes on as before.
+10. **Optionally, set up cash drawers.** Under *Open POS → Cash drawers*, create
+    one per physical drawer, with the float it usually starts on, then give
+    each till its drawer on the *Till devices* screen. From then on that till
+    asks for its drawer to be opened on a counted float before it takes cash,
+    and closes the evening on a blind count. A device with no drawer takes cash
+    exactly as before.
 
 One device can sell for several events: every event it has access to and that
 has the plugin enabled can be picked in *Settings → Event*, whether or not its
@@ -405,10 +425,9 @@ Roughly in the order they would earn their keep:
 1. **A permission model for cancelling.** Reversing a sale works today and is
    scoped to the till that made it; what is missing is a way to say that not
    every volunteer may do it.
-2. **A real cash session**: opening float, blind count at close, Z report.
-3. **Partial refunds**, so two of three beers can be given back without
+2. **Partial refunds**, so two of three beers can be given back without
    cancelling the sale whole and ringing it up again.
-4. **Receipt printing** over Star CloudPRNT or Epson ePOS, both of which work
+3. **Receipt printing** over Star CloudPRNT or Epson ePOS, both of which work
    from iOS because they are network protocols rather than Bluetooth.
 
 ## License

@@ -1,7 +1,7 @@
 from django.urls import re_path
 from pretix.api.urls import event_router, orga_router
 
-from . import arrivals, devices, pwa, sumup_views, views, webhook
+from . import arrivals, devices, drawer_views, pwa, sumup_views, views, webhook
 from .api.views import OpenPosOrganizerViewSet, OpenPosViewSet
 
 urlpatterns = [
@@ -62,6 +62,23 @@ urlpatterns = [
         r"^control/organizer/(?P<organizer>[^/]+)/openpos/sumup/$",
         sumup_views.SumUpView.as_view(),
         name="sumup",
+    ),
+    # Organizer-level too: a drawer is the bar's drawer whichever event is on,
+    # and its tills are given to it on the devices screen next door.
+    re_path(
+        r"^control/organizer/(?P<organizer>[^/]+)/openpos/drawers/$",
+        drawer_views.DrawersView.as_view(),
+        name="drawers",
+    ),
+    re_path(
+        r"^control/organizer/(?P<organizer>[^/]+)/openpos/drawers/(?P<drawer>\d+)/$",
+        drawer_views.DrawerView.as_view(),
+        name="drawer",
+    ),
+    re_path(
+        r"^control/organizer/(?P<organizer>[^/]+)/openpos/drawers/(?P<drawer>\d+)/(?P<session>\d+)/$",
+        drawer_views.DrawerSessionView.as_view(),
+        name="drawer.session",
     ),
 ]
 

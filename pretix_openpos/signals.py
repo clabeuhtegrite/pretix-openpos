@@ -8,6 +8,7 @@ from pretix.base.signals import (
 from pretix.control.signals import nav_event, nav_organizer
 
 from .channels import PosSalesChannelType
+from .drawer_views import can_read_drawers
 from .payment import OpenPosCardProvider, OpenPosCashProvider
 from .security import OpenPosSecurityProfile
 from .views import CategoriesView, SalesView
@@ -160,6 +161,20 @@ def openpos_nav_organizer(sender, request=None, **kwargs):
                 ),
                 "icon": "credit-card",
                 "active": here and url.url_name == "sumup",
+            }
+        )
+    # Read by whoever keeps the books as well as by whoever sets up the tills,
+    # so the entry follows the screen's own gate rather than the devices'.
+    if can_read_drawers(request):
+        nav.append(
+            {
+                "label": _("Cash drawers"),
+                "url": reverse(
+                    "plugins:pretix_openpos:drawers",
+                    kwargs={"organizer": request.organizer.slug},
+                ),
+                "icon": "money",
+                "active": here and url.url_name in ("drawers", "drawer", "drawer.session"),
             }
         )
     return nav

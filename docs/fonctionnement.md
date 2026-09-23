@@ -1,6 +1,6 @@
 # Fonctionnement de pretix-openpos
 
-Documentation de fonctionnement du plugin, version 0.20.0. Elle couvre trois
+Documentation de fonctionnement du plugin, version 0.21.0. Elle couvre trois
 choses, dans cet ordre : ce que le plugin ajoute à pretix, comment le mettre en
 service, et ce qui se passe exactement quand un bénévole encaisse.
 
@@ -34,7 +34,8 @@ Tablette / téléphone                        Serveur pretix
 │  scan QR (jsQR)          │  commande +   │  GET  /openpos/summary           │
 │  historique + annulation │  verdict      │  GET  /openpos/attendance        │
 │  recette de l'événement  │               │  GET  /openpos/history           │
-│                          │               │  POST /openpos/cancel            │
+│  caisse espèces          │               │  POST /openpos/cancel            │
+│                          │               │  GET  /openpos/drawer (+4 POST)  │
 └──────────────────────────┘               │  ├─ OrderCreateSerializer        │
         localStorage :                     │  ├─ journal PosSale (chaîné)     │
         token, caissier                    │  └─ perform_checkin()            │
@@ -124,7 +125,7 @@ de tous les événements visibles ; celui-ci réduit à :
 - le cycle de vie du device (`initialize` implicite, `info`, `update`, `roll`,
   `revoke`, `eventselection`) ;
 - la lecture des événements (nom, devise) ;
-- les huit endpoints Open POS ;
+- les dix-sept endpoints Open POS du §8, caisse espèces comprise ;
 - `checkinrpc.redeem` et `checkinrpc.search` pour le scan à la porte.
 
 ### 2.4 Le journal
@@ -160,13 +161,18 @@ jamais supprimée : `save()` sur une ligne existante et `delete()` lèvent une
 
 Deux modèles de réglage s'y ajoutent, chacun décrit là où il sert :
 **`PosDevice`** dit à quoi sert un appareil (§2.7) et **`PosCategory`** dit
-quel poste vend une catégorie (§2.7bis).
+quel poste vend une catégorie (§2.7bis). La caisse espèces en ajoute trois —
+**`PosDrawer`** (un tiroir réel), **`PosDrawerSession`** (une ouverture, du fond
+de caisse à la fermeture) et **`PosDrawerEntry`** (le journal du tiroir, chaîné
+lui aussi) — décrits au §5septies. Une vente porte l'ouverture de caisse dans
+laquelle son argent est entré, dans le champ `drawer_session`.
 
-### 2.5 Six écrans de back-office
+### 2.5 Sept écrans de back-office
 
 [views.py](../pretix_openpos/views.py), [arrivals.py](../pretix_openpos/arrivals.py),
-[devices.py](../pretix_openpos/devices.py) et
-[sumup_views.py](../pretix_openpos/sumup_views.py), montés par
+[devices.py](../pretix_openpos/devices.py),
+[sumup_views.py](../pretix_openpos/sumup_views.py) et
+[drawer_views.py](../pretix_openpos/drawer_views.py), montés par
 [urls.py](../pretix_openpos/urls.py).
 
 | URL | Écran | Permission exigée |
@@ -175,24 +181,26 @@ quel poste vend une catégorie (§2.7bis).
 | `…/openpos/categories/` | Qui vend quoi : la catégorie réservée au bar ou à la porte | `event.items:write` |
 | `…/openpos/sales/` | Journal des ventes + recette par caisse et par produit | `event.orders:read` |
 | `/control/organizer/<org>/openpos/arrivals/` | Affluence à l'entrée, tous événements passés | `event.orders:read` sur ≥ 1 événement |
-| `/control/organizer/<org>/openpos/devices/` | Appareils de caisse : rôle et lecteur de chacun | `organizer.devices:write` |
+| `/control/organizer/<org>/openpos/devices/` | Appareils de caisse : rôle, lecteur et caisse espèces de chacun | `organizer.devices:write` |
 | `/control/organizer/<org>/openpos/sumup/` | Lecteurs de carte : le compte SumUp et ses lecteurs | `organizer.devices:write` |
+| `/control/organizer/<org>/openpos/drawers/` | Caisses espèces : les tiroirs, l'historique de chacun et le rapport de chaque soirée (§5septies) | `organizer.devices:write` ; en lecture, `event.orders:read` sur **tous** les événements |
 
 La page Ventes porte aussi une action, `…/openpos/sales/catch-up/` (POST,
 `event.orders:write`), qui écrit au journal les annulations que pretix a faites
 sans lui (§5bis).
 
-Les trois derniers sont au niveau *organisateur*, et pas par événement : une
-caisse est appairée une fois, un lecteur appartient à l'association, et
-« à quelle heure les gens arrivent-ils ? » est une question qui porte sur toutes
-les soirées passées. Les deux écrans matériels sont gardés par la permission des
-devices de pretix — qui peut appairer une caisse peut dire à quoi elle sert.
+Les quatre derniers sont au niveau *organisateur*, et pas par événement : une
+caisse est appairée une fois, un lecteur et un tiroir appartiennent à
+l'association, et « à quelle heure les gens arrivent-ils ? » est une question
+qui porte sur toutes les soirées passées. Les écrans matériels sont gardés par
+la permission des devices de pretix — qui peut appairer une caisse peut dire à
+quoi elle sert.
 
-Cinq d'entre eux ont leur entrée dans le menu latéral de pretix : *Qui vend
-quoi* et *Ventes* sous **Open POS** dans celui de l'événement, les trois écrans
+Six d'entre eux ont leur entrée dans le menu latéral de pretix : *Qui vend
+quoi* et *Ventes* sous **Open POS** dans celui de l'événement, les quatre écrans
 d'organisateur dans celui de l'organisateur. Un lien n'y apparaît qu'à qui a la
 permission de l'écran derrière lui, et le menu **Open POS** n'apparaît pas du
-tout à qui ne peut ouvrir ni l'un ni l'autre. Le sixième, *Réglages*, reste sur
+tout à qui ne peut ouvrir ni l'un ni l'autre. Le septième, *Réglages*, reste sur
 la carte du plugin, sous *Paramètres → Plugins*.
 
 L'écran Affluence est strictement en lecture — un histogramme des
@@ -350,7 +358,7 @@ En Docker/Kubernetes, [`deploy/Dockerfile`](../deploy/Dockerfile) intègre le pl
 
 ```bash
 cd frontend && npm run build && cd ..
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.20.0 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.21.0 .
 ```
 
 Deux pièges :
@@ -1548,6 +1556,166 @@ jamais eu lieu, devant la personne qui compte la caisse à deux heures du matin.
 
 ---
 
+## 5septies. La caisse espèces
+
+[drawers.py](../pretix_openpos/drawers.py) pour les règles,
+[drawer_views.py](../pretix_openpos/drawer_views.py) pour le back-office,
+[DrawerPanel.tsx](../frontend/src/components/DrawerPanel.tsx) pour la caisse.
+
+Une **caisse espèces** est un tiroir réel : l'argent liquide d'un comptoir, et
+le journal de ce qui lui est arrivé. On en crée autant qu'il y a de tiroirs, au
+niveau de l'organisateur, et chaque appareil qui encaisse des espèces est
+rattaché à l'un d'eux. Deux tablettes au même bar partagent le même tiroir ; la
+porte a le sien, ou n'en a pas.
+
+Pour un tiroir, une soirée est une **ouverture** : le fond de caisse compté en
+début de soirée, les ventes en espèces qui s'y ajoutent, l'argent apporté ou
+retiré en cours de route, un comptage à l'aveugle à la fin, et la fermeture sur
+ce comptage. L'écart entre ce qui a été compté et ce que le tiroir aurait dû
+contenir est le chiffre sur lequel la soirée se juge. Un tiroir n'a qu'une
+ouverture à la fois, et la base de données le garantit même si deux tablettes
+appuient sur *Ouvrir* à la même seconde.
+
+### Mise en route
+
+1. *Open POS → Caisses espèces* : créer un tiroir par tiroir réel — « Bar »,
+   « Porte » — avec son **fond de caisse habituel**. Ce montant n'est qu'une
+   proposition faite sur la caisse au moment d'ouvrir : ce qui est compté ce
+   soir-là fait foi.
+2. *Open POS → Appareils de caisse* : dans la colonne **Caisse espèces**, donner
+   à chaque appareil son tiroir. Plusieurs appareils peuvent partager un tiroir.
+   Un appareil sans tiroir encaisse les espèces exactement comme avant : rien
+   ne change tant que personne n'a rien choisi.
+
+Un tiroir déjà ouvert une fois ne se supprime plus : son journal reste, on le
+renomme au besoin. Créer, renommer, supprimer, rattacher un appareil et fermer
+depuis le back-office s'écrivent dans l'historique de l'organisateur.
+
+### Sur la caisse
+
+Un appareil rattaché à un tiroir a un bouton billet (💶) dans la barre du haut.
+Tant que le tiroir n'est pas ouvert, ce bouton est signalé, un bandeau « La
+caisse Bar est fermée : ouvrez-la avant d'encaisser des espèces » reste affiché,
+et le panneau de la caisse s'ouvre tout seul au lancement de l'app — une fois,
+et jamais par-dessus un client en cours.
+
+- **Ouvrir la caisse** : compter le fond, billet par billet ou en tapant le
+  total. *Billets et pièces* liste les coupures de la devise, avec un − et un +
+  par ligne et un champ où taper directement un tas de pièces ; *Montant total*
+  est un clavier qui propose le fond habituel en un geste. Le serveur vérifie un
+  comptage par coupures : elles doivent exister dans la devise (euro, franc
+  suisse, livre, dollars américain et canadien), et leur somme égaler le
+  montant. Une autre devise se compte en tapant le total.
+- **Entrée d'argent** et **Sortie d'argent** : un montant et un motif,
+  obligatoire — « apport de monnaie », « enveloppe au trésorier ». Un retrait
+  sans motif est la première ligne qu'on interroge dans un contrôle, et la
+  dernière dont quelqu'un se souvient.
+- **Compter la caisse** : le comptage est **à l'aveugle**. L'app ne montre ce
+  que le tiroir devrait contenir qu'une fois le compte enregistré, avec l'écart
+  et son verdict (« La caisse est juste », « Il manque 5,00 € »). Recompter est
+  toujours possible, et chaque comptage est gardé : le premier chiffre auquel
+  quelqu'un est arrivé fait partie de la soirée autant que celui sur lequel elle
+  a fermé.
+- **Fermer la caisse** : sur le dernier comptage, s'il est encore à jour. Une
+  vente passée sur l'autre tablette pendant le comptage le rend périmé, et
+  l'app demande de recompter plutôt que de fermer sur un chiffre qui n'a pas vu
+  cette vente. Une note peut accompagner la fermeture.
+
+Le résumé de la fermeture reste affiché dans le panneau jusqu'à l'ouverture
+suivante : c'est le reçu de la soirée.
+
+Ce que le tiroir devrait contenir n'apparaît nulle part avant le comptage, ni
+dans ce panneau ni ailleurs dans l'app. *Réglages* montre la recette de
+l'événement, qui est autre chose : ce que l'événement a vendu, sans le fond ni
+les entrées et sorties d'argent. Elle reste donc affichée.
+
+### Ce que le serveur refuse, et ce qu'il ne refuse jamais
+
+- Une **vente en espèces** sur un appareil dont le tiroir est fermé est refusée
+  avant que quoi que ce soit ne soit écrit (`drawer_closed`). Le panneau de
+  paiement le dit dès qu'on choisit *Espèces*, avec un bouton qui ouvre le
+  tiroir ; le client est encore devant le comptoir quand on revient au clavier.
+  Une **consigne rendue** et l'**annulation** d'une vente en espèces sortent de
+  l'argent du tiroir, et demandent donc le même tiroir ouvert.
+- Un tiroir **ouvert un jour précédent** et jamais fermé est refusé de la même
+  façon (`drawer_stale`) : l'argent qu'il contenait est parti depuis chez qui
+  tient les comptes, et le fond de ce soir n'y a jamais été compté. La caisse
+  propose de le **fermer sans compter**, puis d'ouvrir celui du soir. La
+  journée de caisse commence à 6 h, comme le relevé : une soirée qui passe
+  minuit reste une seule ouverture.
+- Une **vente carte** n'est jamais refusée : son argent ne passe pas par le
+  tiroir. Elle est rattachée à l'ouverture du soir, pour le rapport.
+- Une vente **rejouée depuis la file hors ligne** n'est jamais refusée non plus :
+  le client a payé. Elle est rattachée à l'ouverture qui tournait au moment où
+  elle a été encaissée, même si ce tiroir a été fermé depuis ; en espèces, le
+  rapport de cette soirée signale qu'elle est arrivée après le comptage. Hors
+  ligne, l'app ne bloque donc pas les espèces : elle ne sait plus où en est le
+  tiroir, et le serveur prendra la vente quoi qu'il arrive.
+
+Une vente annulée depuis le back-office de pretix (§5bis) n'est rattachée à
+aucun tiroir : personne n'y dit quelle caisse a rendu l'argent. Si le
+remboursement sort d'un tiroir, l'inscrire en **sortie d'argent** sur la
+caisse, avec le numéro de la commande en motif.
+
+Deux tablettes sur un même tiroir passent chacune leur tour : toute écriture
+dans le journal d'un tiroir verrouille sa ligne, et une vente en train de
+s'écrire se termine avant qu'un comptage ou une fermeture ne fasse ses calculs.
+
+### Ce que le tiroir devrait contenir
+
+Jamais stocké, recalculé à chaque fois :
+
+```
+  fond de caisse
++ ventes en espèces
+− annulations en espèces et consignes rendues
++ entrées d'argent
+− sorties d'argent
+```
+
+Les ventes viennent du journal des ventes, où chacune porte son ouverture ; le
+reste vient du journal du tiroir. Un total courant stocké serait un troisième
+registre, et le premier à se tromper. Les ventes en mode test en sont exclues
+et comptées à part, comme partout (§6.5).
+
+### Dans le back-office
+
+*Open POS → Caisses espèces* liste les tiroirs, leurs appareils, l'ouverture en
+cours et la dernière soirée fermée avec son écart. Chaque tiroir a son
+historique, soirée par soirée, avec l'état de sa chaîne d'intégrité et un
+**Export CSV** : une ligne par ouverture, recalculée plutôt que recopiée, pour
+qu'un export fait le lendemain compte la vente rejouée le matin.
+
+Chaque soirée a son **rapport de fermeture** : le fond, les ventes, les
+annulations, les consignes rendues, les entrées et sorties, l'attendu, le
+compté, l'écart, la carte à part, la recette par appareil et par caissier, les
+événements dont les ventes y sont entrées, et chaque ligne du journal du tiroir,
+premier comptage compris. Une vente arrivée après la fermeture y est signalée,
+avec l'écart recalculé.
+
+Une ouverture qu'une caisse a oublié de fermer se ferme depuis ce rapport, avec
+le montant si quelqu'un a compté le tiroir, sans sinon. Le journal dit que la
+fermeture vient du back-office, et de qui.
+
+Créer, renommer, supprimer et fermer demandent la permission des appareils
+(`organizer.devices:write`). Lire les rapports est ouvert en plus à qui peut
+lire les commandes de **tous** les événements de l'organisateur : une ouverture
+mélange les ventes de tous les événements pour lesquels ses caisses ont vendu.
+
+### Le journal du tiroir
+
+`PosDrawerEntry` enregistre l'ouverture, les entrées, les sorties, chaque
+comptage et la fermeture. En ajout seul, et chaîné par tiroir comme le journal
+des ventes l'est par événement (§6.4) : un fond de caisse rabaissé après coup
+ou un retrait qui disparaît, c'est exactement ce qu'un contrôle de caisse
+cherche. Chaque ligne porte le montant, l'attendu au moment d'un comptage ou
+d'une fermeture, les coupures comptées, le motif, qui l'a fait, depuis quel
+appareil ou depuis le back-office, et une clé d'idempotence : une ouverture
+renvoyée après une coupure réseau revient comme l'originale, sans ouvrir deux
+fois.
+
+---
+
 ## 6. Les garde-fous
 
 ### 6.1 Le serveur est seul maître des prix
@@ -1666,7 +1834,8 @@ l'écran *Ventes* : une chaîne cassée est visible, pas silencieusement accept�
 Le hash porte sur : `seq`, événement, date, série du device, caissier, code de
 commande, type de paiement, total, reçu, rendu, positions, hash précédent — puis,
 par version : `testmode` (v2), `kind`, `cancels_seq` et `reason` (v3, tout ce qui
-distingue un contre-passage d'une vente), `offline` (v4). `device_name` n'est
+distingue un contre-passage d'une vente), `offline` (v4), `drawer_session` (v5,
+l'ouverture de caisse où l'argent est entré). `device_name` n'est
 **pas** haché : c'est la série qui identifie une caisse, le nom n'est qu'un
 libellé de rapport.
 
@@ -1686,12 +1855,15 @@ qui sonne à chaque retour de Redis est une alarme que plus personne n'écoute.
 L'audit qui ne rate rien est le parcours complet depuis la première ligne :
 
 ```bash
-python -m pretix openpos_verify_journal              # tous les événements
+python -m pretix openpos_verify_journal              # tous les événements, et tous les tiroirs
 python -m pretix openpos_verify_journal --event org/slug
 ```
 
 C'est celui à mettre dans un cron, et celui à lancer le jour où quelqu'un doute
-du journal.
+du journal. Sans `--event`, il parcourt aussi le journal de chaque caisse
+espèces (§5septies), chaîné de la même façon, par tiroir ; la page d'un tiroir,
+elle, le vérifie en entier à chaque affichage, puisqu'il ne compte que quelques
+lignes par soirée.
 
 ### 6.5 Le mode test ne se mélange pas à la recette
 
@@ -1764,6 +1936,17 @@ ligne est là parce que son absence coûte cher une fois la porte ouverte.
     pendant une vente est géré, mais c'est une seconde de flottement devant un
     client.
 
+**Les caisses espèces**
+
+12. *Open POS → Caisses espèces* : aucun tiroir n'est resté ouvert depuis une
+    soirée précédente. S'il y en a un, le fermer depuis son rapport, avec le
+    montant si quelqu'un a compté le tiroir, sans sinon — ou le laisser faire à
+    la caisse, qui le proposera.
+13. Juste avant l'ouverture des portes, sur un appareil de chaque tiroir :
+    compter le fond et **ouvrir la caisse**. Une fois par tiroir ; les autres
+    appareils du même tiroir le voient ouvert dans la minute, ou dès qu'on
+    touche leur bandeau.
+
 ### 7.0bis Si SumUp tombe en pleine soirée
 
 Ça arrive, et la réponse tient en une ligne : **les espèces continuent**. La
@@ -1797,7 +1980,10 @@ caisse ne dépend de SumUp que pour la carte.
   appareil, écrit sur `<html data-theme>` ; les deux palettes sont des jeux de
   variables CSS, donc changer d'avis ne coûte pas un rendu ;
 - la **recette de l'événement** : ventes, espèces, carte et total, pour cet
-  appareil et pour tous les appareils, et le bouton **Détail de la recette** ;
+  appareil et pour tous les appareils, et le bouton **Détail de la recette**.
+  Elle reste entière sur un appareil rattaché à une caisse espèces : c'est ce
+  que l'événement a vendu, pas ce que le tiroir devrait contenir, qui ne
+  s'affiche qu'à côté d'un comptage (§5septies) ;
 - *Recharger* et *Dépairer*. Dépairer révoque aussi l'appareil dans pretix,
   comme pretix le demande à toute app qui retire un appareil (`/device/revoke`) :
   il passe *révoqué* dans la liste des appareils de l'organisateur au lieu d'y
@@ -1859,9 +2045,11 @@ Vider un panier qui porte un avoir demande confirmation. Seulement dans ce cas :
 un panier de consommations se resaisit en dix secondes, et une confirmation à
 chaque *Vider* est une confirmation que plus personne ne lit à la troisième.
 
-C'est l'alternative légère à une vraie session de caisse : pas de fonds de
-caisse, pas de comptage aveugle, juste ce que l'événement a encaissé, pour qu'un
-bénévole rapproche le tiroir en fin de soirée.
+Sans caisse espèces, c'est tout ce que la caisse offre pour rapprocher le
+tiroir en fin de soirée : ce que l'événement a encaissé. Le fond de caisse, les
+entrées et sorties d'argent, le comptage à l'aveugle et le rapport de fermeture
+viennent avec la caisse espèces (§5septies), qu'on active en rattachant
+l'appareil à un tiroir.
 
 ### 7.2 Dans le back-office
 
@@ -1971,6 +2159,11 @@ l'annulation, elle, tient, et pretix ne réessaie pas de lui-même. Comme les
 paiements carte sans vente, elle ignore le filtre par soirée : une dette envers un
 client ne cesse pas de compter parce que l'écran montre une autre soirée.
 
+**Les caisses espèces** ont leur propre écran, *Open POS → Caisses espèces* :
+chaque tiroir, chaque soirée, et le rapport de fermeture de chacune, avec
+l'écart sur lequel elle a fermé (§5septies). C'est là, et plus sur *Ventes*,
+qu'on rapproche un tiroir qui en a un.
+
 Les commandes elles-mêmes sont des commandes pretix ordinaires : elles
 apparaissent dans les listes, les exports et les rapports habituels, sur le canal
 Open POS, avec la répartition espèces/carte. Le bloc de paiement de la page de
@@ -1999,6 +2192,11 @@ Base : `/api/v1`. Authentification : `Authorization: Device <token>`.
 | `POST` | `…/openpos/terminal/start/` | Met le panier sur le lecteur de cette caisse |
 | `GET` | `…/openpos/terminal/status/?idempotency_key=<clé>` | Où en est ce paiement lecteur |
 | `POST` | `…/openpos/terminal/cancel/` | Retire le panier du lecteur |
+| `GET` | `…/openpos/drawer/` | La caisse espèces de cet appareil : ouverte ou non, fond, entrées et sorties, dernier comptage ; jamais ce qu'elle devrait contenir avant qu'un comptage soit enregistré |
+| `POST` | `…/openpos/drawer/open/` | Ouvre la caisse sur le fond compté (`amount`, `denominations` facultatif) |
+| `POST` | `…/openpos/drawer/movement/` | Entrée (`in`) ou sortie (`out`) d'argent, avec son motif |
+| `POST` | `…/openpos/drawer/count/` | Comptage à l'aveugle, répondu avec l'attendu et l'écart |
+| `POST` | `…/openpos/drawer/close/` | Ferme sur un comptage encore à jour (`count_seq`), ou sans comptage (`uncounted`) une caisse ouverte un jour précédent |
 | `POST` | `/organizers/<org>/checkinrpc/redeem/` | Pointage (endpoint pretix natif) |
 | `GET` | `/organizers/<org>/checkinrpc/search/` | Recherche de participant (natif) |
 | `POST` | `…/checkinlists/<id>/failed_checkins/` | Refus donné hors ligne, envoyé à la reprise (natif) |
@@ -2008,7 +2206,10 @@ que soit l'accès du device : c'est ce qui empêche une app périmée de vendre 
 un événement pour lequel l'organisateur n'a jamais ouvert de caisse.
 
 Les trois endpoints `terminal/` n'existent que pour une caisse à qui un lecteur
-est attribué ; les autres reçoivent `no_terminal`. En dehors de `/api/v1`, le
+est attribué ; les autres reçoivent `no_terminal`. De même, les écritures
+`drawer/` n'existent que pour un appareil rattaché à une caisse espèces ; les
+autres reçoivent `no_drawer`, et `GET drawer/` leur répond `"drawer": null`.
+Chaque écriture `drawer/` porte une `idempotency_key`, comme l'encaissement. En dehors de `/api/v1`, le
 plugin expose aussi `POST /openpos/sumup/<org>/<jeton>/`, où SumUp signale qu'un
 paiement lecteur s'est terminé — non authentifié par conception de SumUp, donc
 rien de ce qu'il dit n'est cru (§5quinquies).
@@ -2222,6 +2423,13 @@ le tarif d'hier.
 | 400 `sold_out` | Produit épuisé, vérifié avant de demander la carte | Affiche le message tel quel |
 | 400 `terminal_unreachable` | SumUp a refusé de solliciter le lecteur : lecteur hors ligne, encore occupé par la demande précédente, clé refusée… | Affiche le motif, avec *Réessayer* (nouvelle clé) |
 | 400 `no_payment` | `terminal/status` ou `terminal/cancel` sur un panier jamais démarré | Affiche le motif |
+| 400 `drawer_closed` | Espèces (vente, consigne rendue, annulation) alors que la caisse espèces de l'appareil n'est pas ouverte | Relit l'état de la caisse ; le panneau de paiement propose de l'ouvrir |
+| 400 `drawer_stale` | Espèces alors que la caisse espèces est ouverte depuis un jour précédent | Idem ; le panneau de la caisse propose de la fermer sans compter |
+| 400 `drawer_open` | Ouverture d'une caisse déjà ouverte, par exemple depuis l'autre tablette | Revient à la vue de la caisse, relue |
+| 400 `count_stale` | Fermeture sur un comptage qu'une vente ou un mouvement a rendu périmé | Revient à la vue de la caisse et demande de recompter |
+| 400 `count_required` | Fermeture sans comptage d'une caisse ouverte ce soir | Idem |
+| 400 `no_drawer` | Écriture `drawer/` depuis un appareil sans caisse espèces | Relit l'état : le bouton de la caisse disparaît |
+| 400 `reason_required` | Entrée ou sortie d'argent sans motif | Affiche le message |
 | 401 / 403 | Device révoqué, ou plugin désactivé sur l'événement | Affiche le motif, avec *Réessayer* et *Dépairer* ; l'appairage n'est jamais effacé tout seul |
 
 ---
@@ -2352,7 +2560,10 @@ l'installation — donc `npm i --no-save playwright` avant de s'en servir.
 | « Faites entrer » ne s'affiche jamais | Aucune liste de contrôle choisie dans *Open POS → Réglages*, ou aucun produit d'admission dans la vente |
 | Un billet refuse de se scanner | Code-barres non-QR : passer par la recherche par nom ou une douchette clavier |
 | La caméra ne démarre pas | Contexte non sécurisé (HTTP), ou autorisation refusée dans les réglages du navigateur |
-| La recette ne correspond pas au tiroir | Vérifier la ligne « mode test » sur l'écran *Ventes* : elle est comptée à part |
+| La recette ne correspond pas au tiroir | Vérifier la ligne « mode test » sur l'écran *Ventes* : elle est comptée à part. Sur un appareil rattaché à une caisse espèces, c'est le rapport de fermeture qui se rapproche du tiroir, pas la recette : elle ne compte ni le fond ni les entrées et sorties d'argent |
+| La caisse refuse les espèces : « La caisse … n'est pas ouverte » | Ouvrir la caisse espèces (bouton billet de la barre du haut) sur un fond compté. Le client peut attendre : rien n'a été enregistré |
+| « Ouverte … et jamais fermée » | La caisse espèces n'a pas été fermée une soirée précédente. *Fermer sans compter* sur la caisse, ou fermer depuis son rapport avec le montant si quelqu'un l'a compté, puis ouvrir celle du soir |
+| « La caisse a bougé depuis le comptage » à la fermeture | Une vente ou un mouvement est passé depuis, souvent sur l'autre tablette du même tiroir : recompter, puis fermer |
 | L'app reste sur un vieux build | Une caisse ouverte compare sa version à celle du serveur au rafraîchissement du catalogue et affiche « Nouvelle version — recharger » entre deux clients ; sinon, fermer et rouvrir l'app force la reprise |
 | La liste des appareils affiche une ancienne version | Le device n'a pas été rouvert avec du réseau depuis la mise à jour : il déclare sa version à la première ouverture connectée. C'est aussi le moyen de voir, après un déploiement, quels appareils ont repris le nouveau JavaScript |
 

@@ -569,6 +569,10 @@ class SalesView(EventPermissionRequiredMixin, ListView):
             # positions column by eye.
             "offline", "tariff_total", "off_tariff", "cancels_seq", "reason",
             "positions",
+            # The cash drawer the money went into and which opening of it, for
+            # a till that has one. Last, so a spreadsheet built on the columns
+            # before them keeps working.
+            "drawer", "drawer_opening",
         ]
 
         def rows():
@@ -578,7 +582,7 @@ class SalesView(EventPermissionRequiredMixin, ListView):
             yield writer.writerow(header)
             journal = self.in_window(
                 PosSale.objects.filter(event=event)
-            ).order_by("seq").iterator()
+            ).select_related("drawer_session__drawer").order_by("seq").iterator()
             for sale in journal:
                 positions = " + ".join(
                     "{}× {}{}{}".format(
@@ -613,6 +617,8 @@ class SalesView(EventPermissionRequiredMixin, ListView):
                     "" if sale.cancels_seq is None else sale.cancels_seq,
                     sale.reason,
                     positions,
+                    sale.drawer_session.drawer.name if sale.drawer_session else "",
+                    sale.drawer_session_id or "",
                 ])
 
         response = StreamingHttpResponse(rows(), content_type="text/csv; charset=utf-8")
@@ -633,7 +639,7 @@ class SalesView(EventPermissionRequiredMixin, ListView):
     def get_queryset(self):
         return (
             self.in_window(PosSale.objects.filter(event=self.request.event))
-            .select_related("device", "order")
+            .select_related("device", "order", "drawer_session__drawer")
             .order_by("-seq")
         )
 

@@ -23,8 +23,15 @@ from rest_framework.response import Response
 from .. import __version__
 from ..backoffice import till_cancelling
 from ..channels import POS_CHANNEL, PosSalesChannelType
+from ..drawers import (
+    DrawerError, check_denominations, close_drawer, count_drawer, count_is_current, denominations_for, drawer_closed,
+    drawer_stale, is_stale, move_cash, open_drawer, open_session_of, session_at,
+)
 from ..invoicing import pos_invoices_enabled
-from ..models import PosCategory, PosDevice, PosSale, PosTerminalPayment, refund_key, reversed_positions
+from ..models import (
+    PosCategory, PosDevice, PosDrawerEntry, PosDrawerSession, PosSale, PosTerminalPayment, refund_key,
+    reversed_positions,
+)
 from ..payment import CARD, CASH
 from ..sumup import CHECKOUT_CLOSED, SumUpAccount, SumUpError, still_running, succeeded
 from ..webhook import webhook_url
@@ -727,6 +734,68 @@ def plugin_enabled(event) -> bool:
     return "pretix_openpos" in event.get_plugins()
 
 
+def refuse(error: DrawerError):
+    """A drawer refusal as the till reads it: a code to act on, a sentence to show."""
+    raise ValidationError({"drawer": [error.message], "code": error.code})
+
+
+def drawer_session_for(event, drawer, payment_type, recorded_at=None):
+    """
+    The drawer opening a sale's money belongs to — refusing live cash when none is.
+
+    ``None`` for a till with no drawer, which sells exactly as it always has.
+
+    A sale rung up now, in cash, needs its drawer open: its money is going
+    into that drawer, and an opening is what the count at the end of the night
+    reconciles against. Refused before anything is written, so the volunteer
+    opens the drawer and taps again with the customer still there. A drawer
+    left open since an earlier day is refused too — the money it held is
+    long gone to whoever keeps the books, and tonight's float was never
+    counted into it.
+
+    Card money never reaches the drawer, so a card sale is never refused and
+    is only attached to an opening that is running tonight, for the report.
+
+    A sale already paid for (``recorded_at``, a replay from a till that was cut
+    off) goes into whichever opening was running when the customer paid, and
+    is never refused either: refusing would not take the cash back out.
+    """
+    if drawer is None:
+        return None
+    if recorded_at is not None:
+        return session_at(drawer, recorded_at)
+    session = open_session_of(drawer)
+    cash = payment_type == PosSale.PAYMENT_CASH
+    if session is not None and is_stale(session, event):
+        if cash:
+            refuse(drawer_stale())
+        return None
+    if session is None and cash:
+        refuse(drawer_closed())
+    return session
+
+
+def hold_drawer_session(session, payment_type):
+    """
+    Lock the opening a live sale is going into, until the sale is written.
+
+    Taken inside the sale's own transaction, before anything is written: a
+    closing on the other tablet then waits for this sale rather than counting
+    without it, and a closing that got there first is seen here — cash is then
+    refused, with nothing written, and a card sale simply goes unattached.
+    """
+    if session is None:
+        return None
+    held = (
+        PosDrawerSession.objects.select_for_update()
+        .filter(pk=session.pk, closed_at__isnull=True)
+        .first()
+    )
+    if held is None and payment_type == PosSale.PAYMENT_CASH:
+        refuse(drawer_closed())
+    return held
+
+
 class OpenPosOrganizerViewSet(viewsets.ViewSet):
     """
     Organizer-level endpoint, so a till can find out which events it may sell for.
@@ -859,6 +928,8 @@ class OpenPosViewSet(viewsets.ViewSet):
         # is an ordinary product, and its return has to be worth exactly what
         # taking it was worth.
         deposit_price = resolve_price(deposit) if deposit else None
+        drawer = pos_device.drawer
+        drawer_session = open_session_of(drawer)
         return Response(
             {
                 # The plugin's version, which is also the version the bundle is
@@ -933,6 +1004,17 @@ class OpenPosViewSet(viewsets.ViewSet):
                     # So the till can show what a return takes off the basket,
                     # and price one while it is cut off from the network.
                     "price": str(deposit_price) if deposit else None,
+                },
+                # The cash drawer this device's cash goes into, and whether it
+                # is open. Absent for a device with none, which takes cash the
+                # way it always has. The app reads it to say, before anybody
+                # taps a payment, that the drawer has to be opened first; the
+                # checkout refuses cash into a closed drawer all the same.
+                "drawer": None if drawer is None else {
+                    "id": drawer.pk,
+                    "name": drawer.name,
+                    "open": drawer_session is not None,
+                    "stale": drawer_session is not None and is_stale(drawer_session, event),
                 },
             }
         )
@@ -1103,8 +1185,15 @@ class OpenPosViewSet(viewsets.ViewSet):
                     }
                 )
 
-        channel = get_pos_channel(event.organizer)
         offline = data.get("offline")
+        drawer_session = drawer_session_for(
+            event,
+            pos_device.drawer,
+            data["payment_type"],
+            offline["recorded_at"] if offline else None,
+        )
+
+        channel = get_pos_channel(event.organizer)
         # The money is already out of the customer's hands: replayed from a
         # till that was cut off, or taken by the card reader a moment ago.
         settled = bool(offline) or terminal is not None
@@ -1367,6 +1456,9 @@ class OpenPosViewSet(viewsets.ViewSet):
         recorded_at = offline["recorded_at"] if offline else None
 
         with transaction.atomic():
+            if not offline:
+                drawer_session = hold_drawer_session(drawer_session, data["payment_type"])
+
             # No order when the basket is nothing but returned cups, which is
             # the whole of the queue at the end of an evening. There is nothing
             # for pretix to hold: an order cannot be worth less than nothing.
@@ -1433,6 +1525,7 @@ class OpenPosViewSet(viewsets.ViewSet):
                     testmode=event.testmode,
                     offline=bool(offline),
                     recorded_at=recorded_at,
+                    drawer_session=drawer_session,
                 )
 
                 # Cross-reference the journal entry from the payment so the
@@ -1466,6 +1559,7 @@ class OpenPosViewSet(viewsets.ViewSet):
                     kind=PosSale.KIND_DEPOSIT_REFUND,
                     offline=bool(offline),
                     recorded_at=recorded_at,
+                    drawer_session=drawer_session,
                 )
 
         # Everything below runs after the sale is durably committed: a failure
@@ -1976,7 +2070,15 @@ class OpenPosViewSet(viewsets.ViewSet):
                 )]}
             )
 
+        # Cash handed back comes out of the drawer the till stands at now,
+        # which has to be open for it — the same rule as taking cash, and for
+        # the same reason: the count at the end of the night has to see it.
+        drawer_session = drawer_session_for(
+            event, PosDevice.for_device(device).drawer, sale.payment_type
+        )
+
         with transaction.atomic():
+            drawer_session = hold_drawer_session(drawer_session, sale.payment_type)
             try:
                 # pretix' own cancellation, so the credit note, the invalidated
                 # ticket secrets and the log entry are the ones the back office
@@ -2023,6 +2125,7 @@ class OpenPosViewSet(viewsets.ViewSet):
                 kind=PosSale.KIND_CANCELLATION,
                 cancels_seq=sale.seq,
                 reason=data["reason"],
+                drawer_session=drawer_session,
             )
 
             # The deposit handed back with this sale is a journal row of its
@@ -2059,6 +2162,7 @@ class OpenPosViewSet(viewsets.ViewSet):
                     kind=PosSale.KIND_CANCELLATION,
                     cancels_seq=deposit_refund.seq,
                     reason=data["reason"],
+                    drawer_session=drawer_session,
                 )
 
         body = self._cancellation_payload(cancellation, sale, replayed=False)
@@ -2134,7 +2238,8 @@ class OpenPosViewSet(viewsets.ViewSet):
         week's figures and leaves tonight's alone.
 
         Figures only, and not a cash session: no float, no count, no drawer.
-        What each drawer should hold is the till session's job. This is the
+        What a drawer should hold is worked out by :mod:`..drawers`, and shown
+        on the till only next to a count, never here. This is the
         event as a whole, broken down every way it is read — by payment type,
         by category and product, with the deposits apart, by device, and by
         evening when the event spans several — from one pass over the journal.
@@ -2173,6 +2278,241 @@ class OpenPosViewSet(viewsets.ViewSet):
                 "computed_at": now().isoformat(),
                 **report,
             }
+        )
+
+    # -- cash drawer -------------------------------------------------------
+
+    @staticmethod
+    def _drawer_entry_payload(entry):
+        return {
+            "seq": entry.seq,
+            "kind": entry.kind,
+            "datetime": entry.datetime.isoformat(),
+            "amount": None if entry.amount is None else str(entry.amount),
+            "reason": entry.reason,
+            "cashier": entry.cashier,
+            "device": entry.device_name,
+        }
+
+    def _drawer_state(self, event, drawer):
+        """
+        The drawer as the till shows it — and deliberately not what it holds.
+
+        What the drawer should hold is only ever given next to a count, once
+        the count has been written down. Handing it out before would turn the
+        count into copying a figure off the screen.
+        """
+        if drawer is None:
+            return {"drawer": None, "session": None, "last_closed": None}
+        body = {
+            "drawer": {
+                "id": drawer.pk,
+                "name": drawer.name,
+                "opening_float": (
+                    None if drawer.opening_float is None else str(drawer.opening_float)
+                ),
+                "currency": event.currency,
+                "denominations": denominations_for(event.currency),
+            },
+            "session": None,
+            "last_closed": None,
+        }
+        session = open_session_of(drawer)
+        if session is not None:
+            entries = list(session.entries.order_by("seq"))
+            opening = next((e for e in entries if e.kind == PosDrawerEntry.KIND_OPEN), None)
+            count = next(
+                (e for e in reversed(entries) if e.kind == PosDrawerEntry.KIND_COUNT), None
+            )
+            body["session"] = {
+                "id": session.pk,
+                "opened_at": session.opened_at.isoformat(),
+                "opened_by": opening.cashier if opening else "",
+                "opening_float": str(opening.amount) if opening else "0.00",
+                "stale": is_stale(session, event),
+                "movements": [
+                    self._drawer_entry_payload(e)
+                    for e in entries
+                    if e.kind in (PosDrawerEntry.KIND_IN, PosDrawerEntry.KIND_OUT)
+                ],
+                "count": None if count is None else {
+                    **self._drawer_entry_payload(count),
+                    "expected": str(count.expected),
+                    "difference": str(count.difference),
+                    # Whether the drawer can still be closed on it: nothing
+                    # sold or moved since. The closing asks again.
+                    "current": count_is_current(session, count),
+                },
+            }
+        else:
+            last = (
+                drawer.sessions.filter(closed_at__isnull=False)
+                .order_by("-closed_at", "-pk")
+                .first()
+            )
+            closing = (
+                last.entries.filter(kind=PosDrawerEntry.KIND_CLOSE).order_by("-seq").first()
+                if last else None
+            )
+            if closing is not None:
+                body["last_closed"] = {
+                    "id": last.pk,
+                    "opened_at": last.opened_at.isoformat(),
+                    "closed_at": last.closed_at.isoformat(),
+                    "cashier": closing.cashier,
+                    "amount": None if closing.amount is None else str(closing.amount),
+                    "expected": str(closing.expected),
+                    "difference": (
+                        None if closing.difference is None else str(closing.difference)
+                    ),
+                }
+        return body
+
+    def _drawer_of(self, request):
+        """The calling till and its drawer, refusing a till that has none."""
+        device = request.auth if isinstance(request.auth, Device) else None
+        drawer = PosDevice.for_device(device).drawer
+        if drawer is None:
+            raise ValidationError(
+                {"drawer": [_("No cash drawer is assigned to this till.")], "code": "no_drawer"}
+            )
+        return device, drawer
+
+    def _drawer_counted(self, request, serializer_class):
+        data = serializer_class(data=request.data)
+        data.is_valid(raise_exception=True)
+        data = data.validated_data
+        problem = check_denominations(
+            data.get("denominations"), data["amount"], request.event.currency
+        )
+        if problem:
+            raise ValidationError({"denominations": [problem]})
+        return data
+
+    @action(detail=False, methods=["get"], url_path="drawer", url_name="drawer")
+    def drawer(self, request, **kwargs):
+        """Whether this till's drawer is open, and what has happened to it tonight."""
+        device = request.auth if isinstance(request.auth, Device) else None
+        return Response(self._drawer_state(request.event, PosDevice.for_device(device).drawer))
+
+    @action(detail=False, methods=["post"], url_path="drawer/open", url_name="drawer-open")
+    def drawer_open(self, request, **kwargs):
+        """Open the drawer on the float just counted into it."""
+        from .serializers import DrawerCountSerializer
+
+        device, drawer = self._drawer_of(request)
+        data = self._drawer_counted(request, DrawerCountSerializer)
+        try:
+            entry = open_drawer(
+                drawer,
+                idempotency_key=data["idempotency_key"],
+                amount=data["amount"],
+                denominations=data["denominations"],
+                cashier=data["cashier"],
+                device=device,
+            )
+        except DrawerError as error:
+            refuse(error)
+        return Response(
+            {**self._drawer_state(request.event, drawer), "entry": self._drawer_entry_payload(entry)}
+        )
+
+    @action(detail=False, methods=["post"], url_path="drawer/movement", url_name="drawer-movement")
+    def drawer_movement(self, request, **kwargs):
+        """Money put into the open drawer, or taken out, other than by a sale."""
+        from .serializers import DrawerMovementSerializer
+
+        device, drawer = self._drawer_of(request)
+        serializer = DrawerMovementSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        try:
+            entry = move_cash(
+                drawer,
+                idempotency_key=data["idempotency_key"],
+                kind=data["kind"],
+                amount=data["amount"],
+                reason=data["reason"],
+                cashier=data["cashier"],
+                device=device,
+            )
+        except DrawerError as error:
+            refuse(error)
+        return Response(
+            {**self._drawer_state(request.event, drawer), "entry": self._drawer_entry_payload(entry)}
+        )
+
+    @action(detail=False, methods=["post"], url_path="drawer/count", url_name="drawer-count")
+    def drawer_count(self, request, **kwargs):
+        """
+        A blind count, answered with what the drawer should have held.
+
+        The answer comes after the figure is written down, never before.
+        """
+        from .serializers import DrawerCountSerializer
+
+        device, drawer = self._drawer_of(request)
+        data = self._drawer_counted(request, DrawerCountSerializer)
+        try:
+            entry = count_drawer(
+                drawer,
+                idempotency_key=data["idempotency_key"],
+                amount=data["amount"],
+                denominations=data["denominations"],
+                cashier=data["cashier"],
+                device=device,
+            )
+        except DrawerError as error:
+            refuse(error)
+        return Response(
+            {
+                **self._drawer_state(request.event, drawer),
+                "entry": {
+                    **self._drawer_entry_payload(entry),
+                    "expected": None if entry.expected is None else str(entry.expected),
+                    "difference": None if entry.difference is None else str(entry.difference),
+                },
+            }
+        )
+
+    @action(detail=False, methods=["post"], url_path="drawer/close", url_name="drawer-close")
+    def drawer_close(self, request, **kwargs):
+        """
+        Close the drawer on the count just made.
+
+        Or on no count at all, for a drawer opened on an earlier day and never
+        closed: whoever stands at the till tonight never saw the money it held,
+        and a figure they made up would be worse than the plain word that
+        nobody counted it.
+        """
+        from .serializers import DrawerCloseSerializer
+
+        device, drawer = self._drawer_of(request)
+        serializer = DrawerCloseSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        session = open_session_of(drawer)
+        uncounted_ok = (
+            data["count_seq"] is None
+            and session is not None
+            and is_stale(session, request.event)
+        )
+        if data["count_seq"] is None and session is not None and not uncounted_ok:
+            refuse(DrawerError("count_required", _("Count the drawer before closing it.")))
+        try:
+            entry = close_drawer(
+                drawer,
+                idempotency_key=data["idempotency_key"],
+                count_seq=data["count_seq"],
+                uncounted_ok=uncounted_ok,
+                reason=data["reason"],
+                cashier=data["cashier"],
+                device=device,
+            )
+        except DrawerError as error:
+            refuse(error)
+        return Response(
+            {**self._drawer_state(request.event, drawer), "entry": self._drawer_entry_payload(entry)}
         )
 
     # -- attendance --------------------------------------------------------

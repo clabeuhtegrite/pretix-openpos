@@ -5,6 +5,7 @@ import { basketFromJournal, customKey, refundKey, repriceCart } from "./basket";
 import CheckinScreen from "./components/CheckinScreen";
 import CustomSalePanel from "./components/CustomSalePanel";
 import DoneScreen from "./components/DoneScreen";
+import DrawerPanel from "./components/DrawerPanel";
 import { OtherEvents } from "./components/EventChoice";
 import HistoryPanel from "./components/HistoryPanel";
 import InstallGate, { browserAllowed, isStandalone } from "./components/InstallGate";
@@ -13,6 +14,7 @@ import PaymentPanel from "./components/PaymentPanel";
 import SaleScreen, { type Sellable } from "./components/SaleScreen";
 import SettingsPanel from "./components/SettingsPanel";
 import SyncPanel from "./components/SyncPanel";
+import { briefOf, cashBlockedBy, drawerIcon } from "./drawer";
 import { describeError } from "./errors";
 import { t } from "./i18n";
 import { fromCents, toCents } from "./money";
@@ -27,8 +29,8 @@ import { useConnectivity } from "./connectivity";
 import { drainQueue } from "./sync";
 import { applyTheme, loadTheme, saveTheme, watchDeviceTheme, type Theme } from "./theme";
 import type {
-  Catalog, CartLine, Credit, DeviceRole, Pairing, PaymentType, PosConfig, QueuedSale,
-  SaleResult, SyncReport,
+  Catalog, CartLine, Credit, DeviceRole, DrawerState, Pairing, PaymentType, PosConfig,
+  QueuedSale, SaleResult, SyncReport,
 } from "./types";
 import { useBackClose } from "./useBackClose";
 import { markDeviceReported, useDeviceReport } from "./useDeviceReport";
@@ -169,6 +171,7 @@ export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [checkinOpen, setCheckinOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   /**
    * Money already taken off the customer by a cancellation they are correcting.
    *
@@ -335,6 +338,7 @@ export default function App() {
   useBackClose(checkinOpen, () => setCheckinOpen(false));
   useBackClose(historyOpen, () => setHistoryOpen(false));
   useBackClose(syncOpen, () => setSyncOpen(false));
+  useBackClose(drawerOpen, () => setDrawerOpen(false));
   useBackClose(sale !== null, () => setSale(null));
 
   const load = useCallback(async (p: Pairing) => {
@@ -434,6 +438,39 @@ export default function App() {
       document.removeEventListener("visibilitychange", onVisible);
     };
   }, [pairing, servingCustomer]);
+
+  /**
+   * The drawer panel, once, when the till starts on a drawer that cannot take cash.
+   *
+   * The start of an evening is when a float gets counted in, and a till that
+   * waited for the first customer paying cash to say so would be asking for a
+   * count with the customer standing there. Once per launch and no more: a
+   * volunteer who closes it has a reason, and the banner under the top bar
+   * keeps saying it. Never over a basket restored mid-sale, nor offline, where
+   * a drawer can be neither read nor opened.
+   */
+  const drawerAsked = useRef(false);
+  useEffect(() => {
+    if (!config || drawerAsked.current) return;
+    drawerAsked.current = true;
+    if (cashBlockedBy(config.drawer, online) && cart.length === 0 && credit === null) {
+      setDrawerOpen(true);
+    }
+    // Keyed on the config alone: only the first one counts, and what the
+    // later ones say is the banner's job.
+  }, [config]);
+
+  /**
+   * What the drawer panel just read or did, as the rest of the till sees it.
+   *
+   * Written into the config rather than kept beside it, so the banner, the
+   * payment panel and the idle refresh all read one answer — and the refresh,
+   * which asks the server every minute, is the one that keeps it right when
+   * the drawer is opened or closed on another tablet.
+   */
+  const applyDrawer = useCallback((state: DrawerState) => {
+    setConfig((current) => (current ? { ...current, drawer: briefOf(state) } : current));
+  }, []);
 
   function onPaired(next: Pairing) {
     markDeviceReported(next.serial);
@@ -768,7 +805,15 @@ export default function App() {
         }
         return;
       }
-      if (err instanceof ApiError && (err.body as { code?: string } | undefined)?.code === "price_changed") {
+      const code = errorCode(err);
+      if (code === "drawer_closed" || code === "drawer_stale") {
+        // The drawer was closed under this till — on the other tablet, or from
+        // the back office — or never opened. Nothing was recorded. Reading it
+        // again is what lets the panel, which stays open with the message,
+        // offer to open it rather than only say no.
+        void api.drawer(pairing).then(applyDrawer).catch(() => {});
+      }
+      if (code === "price_changed") {
         // Prices moved under an open basket. Nothing was charged. Pull the new
         // catalogue and re-price the basket in place, so the payment panel —
         // which stays open with the message — shows the figure that will
@@ -859,6 +904,9 @@ export default function App() {
     config.version !== __APP_VERSION__ &&
     config.version !== updateTried;
 
+  // The drawer this till's cash goes into, when it is not open to take any.
+  const drawerBlocked = cashBlockedBy(config.drawer, online);
+
   return (
     <div className="app">
       <div className="topbar">
@@ -899,10 +947,31 @@ export default function App() {
         >
           🧾
         </button>
+        {config.drawer && (
+          <button
+            className={`icon-button${drawerBlocked ? " is-alert" : ""}`}
+            onClick={() => setDrawerOpen(true)}
+            aria-label={t("drawer.title", { name: config.drawer.name })}
+            title={t("drawer.title", { name: config.drawer.name })}
+          >
+            {drawerIcon(config.event.currency)}
+          </button>
+        )}
         <button className="icon-button" onClick={() => setSettingsOpen(true)} aria-label="settings">
           ⚙
         </button>
       </div>
+
+      {/* Said as long as it is true, basket or not: it is the one thing that
+          will stop the next cash payment, and the moment to find out is not
+          with the customer's note in hand. */}
+      {drawerBlocked && (
+        <button className="update-bar drawer-bar" onClick={() => setDrawerOpen(true)}>
+          {drawerBlocked.stale
+            ? t("drawer.bannerStale", { name: drawerBlocked.name })
+            : t("drawer.bannerClosed", { name: drawerBlocked.name })}
+        </button>
+      )}
 
       {updateAvailable && !servingCustomer && (
         <button
@@ -962,6 +1031,8 @@ export default function App() {
           busy={busy}
           error={payError}
           credit={credit}
+          drawer={drawerBlocked}
+          onOpenDrawer={() => setDrawerOpen(true)}
           onConfirm={confirmPayment}
           onCancel={() => setPaying(null)}
         />
@@ -1063,6 +1134,18 @@ export default function App() {
           onUnpair={unpair}
           onClose={() => setSettingsOpen(false)}
           onEventChange={switchEvent}
+        />
+      )}
+
+      {/* Last, so it lands over the payment panel it may have been opened
+          from; its layer also clears the scanner, for a door that has one. */}
+      {drawerOpen && (
+        <DrawerPanel
+          pairing={pairing}
+          cashier={cashier}
+          online={online}
+          onState={applyDrawer}
+          onClose={() => setDrawerOpen(false)}
         />
       )}
     </div>

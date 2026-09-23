@@ -42,6 +42,7 @@
                             {% for value, label in roles %}
                                 <th>{{ label }}</th>
                             {% endfor %}
+                            <th>{% trans "Cash drawer" %}</th>
                             <th>{% trans "Card reader" %}</th>
                         </tr>
                     </thead>
@@ -63,6 +64,17 @@
                                         </label>
                                     </td>
                                 {% endfor %}
+                                <td>
+                                    <select name="drawer_{{ row.device.pk }}" class="form-control input-sm">
+                                        <option value="">{% trans "None" %}</option>
+                                        {% for drawer in drawers %}
+                                            <option value="{{ drawer.pk }}"
+                                                    {% if row.drawer == drawer.pk %}selected{% endif %}>
+                                                {{ drawer.name }}
+                                            </option>
+                                        {% endfor %}
+                                    </select>
+                                </td>
                                 <td>
                                     <select name="reader_{{ row.device.pk }}" class="form-control input-sm">
                                         <option value="">{% trans "None" %}</option>
@@ -106,6 +118,17 @@
                 {% endblocktrans %}
                 <br>
                 <a href="{{ sumup_url }}">{% trans "Set up the card readers" %}</a>
+            </div>
+
+            <div class="alert alert-info">
+                {% blocktrans trimmed %}
+                    A device given a cash drawer takes cash only while that drawer is open: it is
+                    opened on the till, on a counted float, and counted blind when it is closed.
+                    Several devices can share one drawer. A device with none takes cash as it
+                    always has.
+                {% endblocktrans %}
+                <br>
+                <a href="{{ drawers_url }}">{% trans "Set up the cash drawers" %}</a>
             </div>
 
             <div class="form-group submit-group">

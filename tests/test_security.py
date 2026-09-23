@@ -29,7 +29,7 @@ def api(event, path):
 
 @pytest.mark.django_db
 @pytest.mark.parametrize(
-    "action", ["config", "catalog", "history", "summary"]
+    "action", ["config", "catalog", "history", "summary", "drawer"]
 )
 def test_the_till_reaches_what_the_app_needs(till, action):
     assert till.get(action).status_code == 200

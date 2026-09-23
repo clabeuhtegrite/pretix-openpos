@@ -57,6 +57,14 @@ def _money(value, currency):
         return str(value)
 
 
+def _amount(value):
+    """A stored amount as a number, so "100" and "100.00" compare equal."""
+    try:
+        return None if value in (None, "") else Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return value
+
+
 def _named(line):
     """An item, with its variation, as it was called when this was written."""
     name = line.get("item_name") or _("(deleted product)")
@@ -299,6 +307,10 @@ class DevicesChanged(OrganizerLogEntryType):
             )
         if row.get("reader") != row.get("reader_before"):
             parts.append(self._reader(row.get("reader_before"), row.get("reader")))
+        # Entries written before drawers existed carry neither key, and read
+        # as they always did.
+        if row.get("drawer", "") != row.get("drawer_before", ""):
+            parts.append(self._drawer(row.get("drawer_before"), row.get("drawer")))
         if not parts:
             return name
         # The colon inside the translated string, like every other line here:
@@ -321,6 +333,95 @@ class DevicesChanged(OrganizerLogEntryType):
             _("card reader {before} → {after}"),
             before=escape(before), after=escape(after),
         )
+
+    @staticmethod
+    def _drawer(before, after):
+        if not before:
+            return format_html(_("cash drawer {drawer}"), drawer=escape(after))
+        if not after:
+            return format_html(
+                _("cash drawer {drawer} taken away"), drawer=escape(before)
+            )
+        return format_html(
+            _("cash drawer {before} → {after}"),
+            before=escape(before), after=escape(after),
+        )
+
+
+@organizer_entry_types.new()
+class DrawerCreated(OrganizerLogEntryType):
+    action_type = "pretix_openpos.drawer.created"
+
+    def display(self, logentry, data):
+        if data.get("opening_float") is None:
+            return _("A cash drawer was created: {name}.").format(name=data.get("name") or "?")
+        return _("A cash drawer was created: {name}, usual float {amount}.").format(
+            name=data.get("name") or "?",
+            amount=_money(data.get("opening_float"), data.get("currency") or ""),
+        )
+
+
+@organizer_entry_types.new()
+class DrawerChanged(OrganizerLogEntryType):
+    action_type = "pretix_openpos.drawer.changed"
+
+    def display(self, logentry, data):
+        currency = data.get("currency") or ""
+        parts = []
+        if data.get("name") != data.get("name_before"):
+            parts.append(
+                _("renamed from {before}").format(before=data.get("name_before") or "?")
+            )
+        if _amount(data.get("opening_float")) != _amount(data.get("opening_float_before")):
+            parts.append(
+                _("usual float {before} → {after}").format(
+                    before=_money(data.get("opening_float_before"), currency),
+                    after=_money(data.get("opening_float"), currency),
+                )
+            )
+        return _("The cash drawer {name} was changed: {changes}.").format(
+            name=data.get("name") or "?",
+            changes=", ".join(str(part) for part in parts) or _("nothing"),
+        )
+
+
+@organizer_entry_types.new()
+class DrawerDeleted(OrganizerLogEntryType):
+    action_type = "pretix_openpos.drawer.deleted"
+
+    def display(self, logentry, data):
+        devices = data.get("devices") or []
+        if not devices:
+            return _("The cash drawer {name} was deleted.").format(name=data.get("name") or "?")
+        return _("The cash drawer {name} was deleted, and taken away from {devices}.").format(
+            name=data.get("name") or "?", devices=", ".join(devices)
+        )
+
+
+@organizer_entry_types.new()
+class DrawerClosed(OrganizerLogEntryType):
+    """A drawer a till left open, closed from the back office."""
+
+    action_type = "pretix_openpos.drawer.closed"
+
+    def display(self, logentry, data):
+        currency = data.get("currency") or ""
+        if data.get("amount") is None:
+            text = _("The cash drawer {name} was closed from the back office, without a "
+                     "count. It should have held {expected}.").format(
+                name=data.get("name") or "?",
+                expected=_money(data.get("expected"), currency),
+            )
+        else:
+            text = _("The cash drawer {name} was closed from the back office on a count of "
+                     "{amount}. It should have held {expected}.").format(
+                name=data.get("name") or "?",
+                amount=_money(data.get("amount"), currency),
+                expected=_money(data.get("expected"), currency),
+            )
+        if data.get("reason"):
+            return format_html("{} <em>{}</em>", text, data["reason"])
+        return text
 
 
 @organizer_entry_types.new_from_dict({

@@ -1,6 +1,6 @@
 """
-Which paired device is the bar till, which one is the door, and which reader
-each till drives.
+Which paired device is the bar till, which one is the door, which reader each
+till drives, and which cash drawer each one's cash goes into.
 
 One screen, organizer-level because that is where pretix keeps devices: a till
 is paired once and sells for whichever event is running tonight, so what it is
@@ -21,7 +21,7 @@ from pretix.base.models import Device
 from pretix.control.permissions import OrganizerPermissionRequiredMixin
 from pretix.control.views.organizer import OrganizerDetailViewMixin
 
-from .models import PosDevice
+from .models import PosDevice, PosDrawer
 from .sumup import SumUpAccount, SumUpError
 
 #: What may be stored, so a hand-made POST cannot invent a role.
@@ -92,6 +92,9 @@ class DevicesView(OrganizerDetailViewMixin, OrganizerPermissionRequiredMixin, Te
             if reader.get("id")
         ], None
 
+    def _drawers(self):
+        return list(PosDrawer.objects.filter(organizer=self.request.organizer).order_by("name", "pk"))
+
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
         readers, reader_error = self._readers()
@@ -102,6 +105,7 @@ class DevicesView(OrganizerDetailViewMixin, OrganizerPermissionRequiredMixin, Te
                 {
                     "device": device,
                     "role": pos_device.role,
+                    "drawer": pos_device.drawer_id,
                     "reader": pos_device.sumup_reader_id,
                     # A reader assigned here but not in SumUp's list — unpaired
                     # from their dashboard, or simply unreachable right now. It
@@ -123,6 +127,11 @@ class DevicesView(OrganizerDetailViewMixin, OrganizerPermissionRequiredMixin, Te
             row["shares_reader"] = row["reader"] in shared
         ctx["rows"] = rows
         ctx["roles"] = PosDevice.ROLE_CHOICES
+        ctx["drawers"] = self._drawers()
+        ctx["drawers_url"] = reverse(
+            "plugins:pretix_openpos:drawers",
+            kwargs={"organizer": self.request.organizer.slug},
+        )
         ctx["readers"] = readers
         ctx["reader_error"] = reader_error
         ctx["sumup_url"] = reverse(
@@ -141,8 +150,20 @@ class DevicesView(OrganizerDetailViewMixin, OrganizerPermissionRequiredMixin, Te
             )
             for device in devices
         }
+        drawers = {str(drawer.pk): drawer for drawer in self._drawers()}
+        chosen = {
+            device.pk: (request.POST.get(f"drawer_{device.pk}") or "").strip()
+            for device in devices
+        }
 
-        error = self._problem(devices, submitted)
+        error = self._problem(devices, submitted) or next(
+            (
+                _("This organizer has no cash drawer “{drawer}”.").format(drawer=value)
+                for value in chosen.values()
+                if value and value not in drawers
+            ),
+            None,
+        )
         if error:
             # Nothing is written, and the page comes back with what is stored
             # rather than what was posted: every one of these is either a
@@ -159,16 +180,23 @@ class DevicesView(OrganizerDetailViewMixin, OrganizerPermissionRequiredMixin, Te
         with transaction.atomic():
             for device in devices:
                 role, reader = submitted[device.pk]
+                drawer = drawers.get(chosen[device.pk])
                 current = PosDevice.for_device(device)
-                if current.pk and current.role == role and current.sumup_reader_id == reader:
+                if (
+                    current.pk
+                    and current.role == role
+                    and current.sumup_reader_id == reader
+                    and current.drawer_id == (drawer.pk if drawer else None)
+                ):
                     continue
-                if not current.pk and role == PosDevice.ROLE_UNSET and not reader:
+                if not current.pk and role == PosDevice.ROLE_UNSET and not reader and not drawer:
                     # Leave the unassigned unassigned rather than writing a row
                     # that says nothing: "nobody has said" is a state of its own
                     # and the absence of a row is how it is spelled.
                     continue
                 PosDevice.objects.update_or_create(
-                    device=device, defaults={"role": role, "sumup_reader_id": reader}
+                    device=device,
+                    defaults={"role": role, "sumup_reader_id": reader, "drawer": drawer},
                 )
                 changed.append({
                     "device": device.pk,
@@ -177,6 +205,10 @@ class DevicesView(OrganizerDetailViewMixin, OrganizerPermissionRequiredMixin, Te
                     "role_before": current.role,
                     "reader": reader,
                     "reader_before": current.sumup_reader_id,
+                    # By name, like the device: the log is read long after a
+                    # drawer may have been renamed or deleted.
+                    "drawer": drawer.name if drawer else "",
+                    "drawer_before": current.drawer.name if current.drawer_id else "",
                 })
 
         request.organizer.log_action(

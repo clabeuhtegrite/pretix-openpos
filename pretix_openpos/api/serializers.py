@@ -215,3 +215,75 @@ class CancelSerializer(serializers.Serializer):
     reason = serializers.CharField(
         max_length=190, required=False, allow_blank=True, default=""
     )
+
+
+class DrawerCountSerializer(serializers.Serializer):
+    """
+    Cash counted into or out of a drawer: the float at opening, or a count.
+
+    ``denominations`` is how it was counted when it was counted note by note,
+    ``{"20.00": 3, "0.50": 4}``; the view checks that it names this currency's
+    notes and coins and adds up to ``amount``.
+    """
+
+    idempotency_key = serializers.CharField(max_length=190, min_length=8)
+    amount = serializers.DecimalField(max_digits=13, decimal_places=2, min_value=Decimal("0.00"))
+    denominations = serializers.DictField(
+        child=serializers.IntegerField(min_value=0, max_value=100000),
+        required=False, default=dict,
+    )
+    cashier = serializers.CharField(
+        max_length=190, required=False, allow_blank=True, default=""
+    )
+
+    def validate_denominations(self, value):
+        # Rows left at zero say nothing, and a key spelt "20" or "20.0" is
+        # the same note as "20.00": normalised here, so the ledger keeps one
+        # spelling and the view compares like with like.
+        clean = {}
+        for key, number in value.items():
+            try:
+                note = Decimal(str(key)).quantize(Decimal("0.01"))
+            except ArithmeticError:
+                raise serializers.ValidationError(_("“{value}” is not an amount.").format(value=key))
+            if number:
+                clean[str(note)] = clean.get(str(note), 0) + number
+        return clean
+
+
+class DrawerMovementSerializer(serializers.Serializer):
+    """Money put into the open drawer, or taken out of it, and why."""
+
+    idempotency_key = serializers.CharField(max_length=190, min_length=8)
+    kind = serializers.ChoiceField(choices=["in", "out"])
+    amount = serializers.DecimalField(max_digits=13, decimal_places=2, min_value=Decimal("0.01"))
+    reason = serializers.CharField(max_length=190)
+    cashier = serializers.CharField(
+        max_length=190, required=False, allow_blank=True, default=""
+    )
+
+
+class DrawerCloseSerializer(serializers.Serializer):
+    """
+    End the evening on the count just made.
+
+    ``count_seq`` names that count. ``uncounted`` closes with no count at all,
+    which the server only accepts for a drawer opened on an earlier day.
+    """
+
+    idempotency_key = serializers.CharField(max_length=190, min_length=8)
+    count_seq = serializers.IntegerField(min_value=1, required=False, allow_null=True, default=None)
+    uncounted = serializers.BooleanField(required=False, default=False)
+    reason = serializers.CharField(
+        max_length=190, required=False, allow_blank=True, default=""
+    )
+    cashier = serializers.CharField(
+        max_length=190, required=False, allow_blank=True, default=""
+    )
+
+    def validate(self, data):
+        if data["count_seq"] is None and not data["uncounted"]:
+            raise serializers.ValidationError(
+                {"count_seq": [_("Count the drawer before closing it.")]}
+            )
+        return data

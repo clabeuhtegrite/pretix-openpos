@@ -18,7 +18,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: pretix-openpos\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-09-23 09:16+0000\n"
+"POT-Creation-Date: 2026-09-23 09:53+0000\n"
 "PO-Revision-Date: 2026-09-22 09:51+0000\n"
 "Last-Translator: clabeuhtegrite\n"
 "Language-Team: French\n"
@@ -76,7 +76,16 @@ msgstr "Le montant reçu ne peut pas être négatif."
 msgid "The amount received only applies to cash payments."
 msgstr "Le montant reçu ne s’applique qu’aux paiements en espèces."
 
-#: api/views.py:410
+#: api/serializers.py:248
+#, python-brace-format
+msgid "“{value}” is not an amount."
+msgstr "« {value} » n’est pas un montant."
+
+#: api/serializers.py:287 api/views.py:2501 drawers.py:379 drawers.py:388
+msgid "Count the drawer before closing it."
+msgstr "Comptez la caisse avant de la fermer."
+
+#: api/views.py:417
 msgid ""
 "Nothing is on tonight. This event is a series, and the till sells for the "
 "date that is on — add one for tonight, or check that it is switched on."
@@ -85,49 +94,49 @@ msgstr ""
 "la date qui a lieu — ajoutez-en une pour ce soir, ou vérifiez qu’elle est "
 "activée."
 
-#: api/views.py:537
+#: api/views.py:544
 #, python-brace-format
 msgid "Product {id} is not on sale at the till."
 msgstr "Le produit {id} n’est pas en vente à la caisse."
 
-#: api/views.py:550
+#: api/views.py:557
 #, python-brace-format
 msgid "This till does not sell {category}."
 msgstr "Cette caisse ne vend pas {category}."
 
-#: api/views.py:564
+#: api/views.py:571
 #, python-brace-format
 msgid "Unknown option for product {name}."
 msgstr "Déclinaison inconnue pour le produit {name}."
 
-#: api/views.py:568
+#: api/views.py:575
 #, python-brace-format
 msgid "Product {name} requires an option to be chosen."
 msgstr "Le produit {name} demande de choisir une déclinaison."
 
-#: api/views.py:589
+#: api/views.py:596
 msgid "This product is not the one deposits are taken on."
 msgstr "Ce produit n’est pas celui sur lequel les consignes sont prises."
 
-#: api/views.py:594
+#: api/views.py:601
 msgid "Free amounts can only be sold on the product set aside for them."
 msgstr ""
 "Les montants libres ne peuvent être vendus que sur le produit prévu pour eux."
 
-#: api/views.py:598
+#: api/views.py:605
 msgid "A free amount has to be more than nothing."
 msgstr "Un montant libre doit être supérieur à zéro."
 
-#: api/views.py:834
+#: api/views.py:903
 #, python-brace-format
 msgid "Open POS is not enabled for the event {slug}."
 msgstr "Open POS n’est pas activé sur l’événement {slug}."
 
-#: api/views.py:1016
+#: api/views.py:1098
 msgid "Uncategorised"
 msgstr "Sans catégorie"
 
-#: api/views.py:1097
+#: api/views.py:1179
 msgid ""
 "This till has a card reader assigned, so a card payment has to be validated "
 "by the reader. Take this payment on the reader, or in cash."
@@ -135,25 +144,25 @@ msgstr ""
 "Cette caisse a un lecteur attribué : un paiement par carte doit être validé "
 "par le lecteur. Encaissez sur le lecteur, ou en espèces."
 
-#: api/views.py:1287
+#: api/views.py:1376
 #, python-brace-format
 msgid "Prices changed: this basket now comes to {total}, not {expected}."
 msgstr ""
 "Les prix ont changé : ce panier fait maintenant {total}, et non {expected}."
 
-#: api/views.py:1304
+#: api/views.py:1393
 msgid "Nothing is due: this transaction pays money out."
 msgstr "Rien n’est dû : cette opération sort de l’argent."
 
-#: api/views.py:1308
+#: api/views.py:1397
 msgid "The amount received is less than the total due."
 msgstr "Le montant reçu est inférieur au total dû."
 
-#: api/views.py:1503
+#: api/views.py:1597
 msgid "No card reader is assigned to this till."
 msgstr "Aucun lecteur n’est attribué à cette caisse."
 
-#: api/views.py:1559
+#: api/views.py:1653
 msgid ""
 "The card reader is taking another payment. Wait for it to finish, or take "
 "this basket in cash."
@@ -161,52 +170,56 @@ msgstr ""
 "Le lecteur encaisse un autre paiement. Attendez la fin, ou prenez ce panier "
 "en espèces."
 
-#: api/views.py:1652
+#: api/views.py:1746
 #, python-brace-format
 msgid "{name} is sold out."
 msgstr "{name} est épuisé."
 
-#: api/views.py:1675
+#: api/views.py:1769
 msgid "Nothing is due on this basket. Settle it in cash."
 msgstr "Rien n’est dû sur ce panier. Réglez-le en espèces."
 
-#: api/views.py:1755 api/views.py:1778
+#: api/views.py:1849 api/views.py:1872
 msgid "No card payment was started for this basket."
 msgstr "Aucun paiement par carte n’a été lancé pour ce panier."
 
-#: api/views.py:1812 api/views.py:2204
+#: api/views.py:1906 api/views.py:2544
 msgid "Unknown check-in list."
 msgstr "Liste de contrôle inconnue."
 
-#: api/views.py:1957
+#: api/views.py:2051
 msgid "No such entry in this event's journal."
 msgstr "Cette écriture n’existe pas dans le journal de cet événement."
 
-#: api/views.py:1962
+#: api/views.py:2056
 msgid "This sale was made on another till and can only be corrected there."
 msgstr ""
 "Cette vente a été faite sur une autre caisse et ne peut être corrigée que là-"
 "bas."
 
-#: api/views.py:1965
+#: api/views.py:2059
 msgid "This journal entry is not a sale."
 msgstr "Cette écriture du journal n’est pas une vente."
 
-#: api/views.py:1967
+#: api/views.py:2061
 msgid "This sale has already been cancelled."
 msgstr "Cette vente a déjà été annulée."
 
-#: api/views.py:1969
+#: api/views.py:2063
 msgid "The order behind this sale no longer exists."
 msgstr "La commande derrière cette vente n’existe plus."
 
-#: api/views.py:1974
+#: api/views.py:2068
 #, python-brace-format
 msgid "pretix will not let this order be cancelled: {status}."
 msgstr "pretix refuse l’annulation de cette commande : {status}."
 
+#: api/views.py:2377
+msgid "No cash drawer is assigned to this till."
+msgstr "Aucune caisse espèces n’est attribuée à cet appareil."
+
 #: apps.py:13 apps.py:25 apps.py:28 apps.py:29 channels.py:12 security.py:18
-#: signals.py:103 templates/pretix_openpos/settings.html:4
+#: signals.py:104 templates/pretix_openpos/settings.html:4
 #: templates/pretix_openpos/settings.html:6
 msgid "Open POS"
 msgstr "Open POS"
@@ -223,12 +236,13 @@ msgstr ""
 msgid "Settings"
 msgstr "Réglages"
 
-#: apps.py:28 signals.py:92 templates/pretix_openpos/categories.html:3
+#: apps.py:28 signals.py:93 templates/pretix_openpos/categories.html:3
 #: templates/pretix_openpos/categories.html:5
 msgid "Who sells what"
 msgstr "Qui vend quoi"
 
-#: apps.py:29 signals.py:93 templates/pretix_openpos/sales.html:25
+#: apps.py:29 signals.py:94 templates/pretix_openpos/drawer_session.html:129
+#: templates/pretix_openpos/sales.html:25
 msgid "Sales"
 msgstr "Ventes"
 
@@ -236,21 +250,26 @@ msgstr "Ventes"
 msgid "On-site sales made at the till through the Open POS cash register."
 msgstr "Ventes sur place faites à la caisse Open POS."
 
-#: devices.py:185
+#: devices.py:161
+#, python-brace-format
+msgid "This organizer has no cash drawer “{drawer}”."
+msgstr "Cet organisateur n’a pas de caisse espèces « {drawer} »."
+
+#: devices.py:217
 msgid "The roles have been saved."
 msgstr "Les rôles ont été enregistrés."
 
-#: devices.py:197
+#: devices.py:229
 #, python-brace-format
 msgid "“{role}” is not a role."
 msgstr "« {role} » n’est pas un rôle."
 
-#: devices.py:215
+#: devices.py:247
 #, python-brace-format
 msgid "This organizer has no card reader “{reader}”."
 msgstr "Cet organisateur n’a pas de lecteur « {reader} »."
 
-#: devices.py:223
+#: devices.py:255
 #, python-brace-format
 msgid ""
 "A card reader can only be given to a till. Set “{device}” to till, or take "
@@ -258,6 +277,124 @@ msgid ""
 msgstr ""
 "Un lecteur ne peut être donné qu’à une caisse. Passez « {device} » en "
 "caisse, ou retirez-lui son lecteur."
+
+#: drawer_views.py:87 models.py:831 templates/pretix_openpos/sumup.html:214
+msgid "Name"
+msgstr "Nom"
+
+#: drawer_views.py:89 models.py:838
+msgid "Usual opening float"
+msgstr "Fond de caisse habituel"
+
+#: drawer_views.py:95
+msgid ""
+"Offered on the till when the drawer is opened. What is counted then is what "
+"counts."
+msgstr ""
+"Proposé sur l’appareil à l’ouverture de la caisse. C’est ce qui est compté à "
+"ce moment-là qui fait foi."
+
+#: drawer_views.py:121
+#, python-brace-format
+msgid "There is already a drawer called “{name}”."
+msgstr "Il existe déjà une caisse espèces nommée « {name} »."
+
+#: drawer_views.py:128
+msgid "Cash counted"
+msgstr "Espèces comptées"
+
+#: drawer_views.py:134
+msgid "Leave it empty if nobody counted the drawer."
+msgstr "Laissez vide si personne n’a compté la caisse."
+
+#: drawer_views.py:136
+msgid "Note"
+msgstr "Commentaire"
+
+#: drawer_views.py:278
+#, python-brace-format
+msgid ""
+"The drawer “{name}” has been created. Give it its tills on the till devices "
+"screen."
+msgstr ""
+"La caisse espèces « {name} » a été créée. Attribuez-lui ses appareils sur "
+"l’écran Appareils de caisse."
+
+#: drawer_views.py:296
+#, python-brace-format
+msgid ""
+"The drawer “{name}” has been opened before, so its history stays. Rename it "
+"instead."
+msgstr ""
+"La caisse espèces « {name} » a déjà été ouverte : son historique reste. "
+"Renommez-la plutôt."
+
+#: drawer_views.py:307
+msgid "The drawer has been deleted."
+msgstr "La caisse espèces a été supprimée."
+
+#: drawer_views.py:332
+msgid "The drawer has been saved."
+msgstr "La caisse espèces a été enregistrée."
+
+#: drawer_views.py:478 views.py:696
+msgid "unknown till"
+msgstr "caisse inconnue"
+
+#: drawer_views.py:551
+msgid "This opening has already been closed."
+msgstr "Cette ouverture de caisse est déjà fermée."
+
+#: drawer_views.py:581
+msgid "The drawer has been closed."
+msgstr "La caisse a été fermée."
+
+#: drawers.py:86
+msgid ""
+"This till's cash drawer is not open. Open it on a counted float before "
+"taking or handing back cash."
+msgstr ""
+"La caisse espèces de cet appareil n’est pas ouverte. Ouvrez-la sur un fond "
+"compté avant d’encaisser ou de rendre des espèces."
+
+#: drawers.py:94
+msgid ""
+"This till's cash drawer was opened on an earlier day and never closed. Close "
+"it, then open tonight's, before taking or handing back cash."
+msgstr ""
+"La caisse espèces de cet appareil a été ouverte un autre jour et jamais "
+"fermée. Fermez-la, puis ouvrez celle de ce soir, avant d’encaisser ou de "
+"rendre des espèces."
+
+#: drawers.py:255
+msgid "This cash drawer is already open."
+msgstr "Cette caisse espèces est déjà ouverte."
+
+#: drawers.py:276
+msgid "Money can only go in or out."
+msgstr "L’argent ne peut qu’entrer ou sortir."
+
+#: drawers.py:278
+msgid "The amount has to be more than zero."
+msgstr "Le montant doit être supérieur à zéro."
+
+#: drawers.py:282
+msgid "Say what the money is for."
+msgstr "Indiquez à quoi sert cet argent."
+
+#: drawers.py:383
+msgid "The drawer has moved since it was counted. Count it again."
+msgstr "La caisse a bougé depuis le comptage. Recomptez-la."
+
+#: drawers.py:423
+#, python-brace-format
+msgid "“{value}” is not a note or a coin of this currency."
+msgstr "« {value} » n’est ni un billet ni une pièce de cette monnaie."
+
+#: drawers.py:426
+#, python-brace-format
+msgid "The notes and coins come to {total}, not {amount}."
+msgstr "Les billets et pièces font {total}, et non {amount}."
 
 #: forms.py:18
 msgid "Merchant code"
@@ -271,7 +408,7 @@ msgstr ""
 "Le code court qui identifie votre compte SumUp, visible dans le tableau de "
 "bord SumUp — quelque chose comme MH4H92C7."
 
-#: forms.py:30 logdisplay.py:352
+#: forms.py:30 logdisplay.py:453
 msgid "API key"
 msgstr "Clé d’API"
 
@@ -376,29 +513,29 @@ msgstr "Pas de bouton consigne"
 msgid "none"
 msgstr "aucun"
 
-#: logdisplay.py:62
+#: logdisplay.py:70
 msgid "(deleted product)"
 msgstr "(produit supprimé)"
 
-#: logdisplay.py:130
+#: logdisplay.py:138
 #, python-brace-format
 msgid "The on-site prices were changed ({count} products)."
 msgstr "Les tarifs sur place ont été modifiés ({count} produits)."
 
-#: logdisplay.py:134
+#: logdisplay.py:142
 msgid "The on-site prices were saved with nothing changed."
 msgstr "Les tarifs sur place ont été enregistrés sans modification."
 
-#: logdisplay.py:137
+#: logdisplay.py:145
 msgid "The on-site prices were changed:"
 msgstr "Les tarifs sur place ont été modifiés :"
 
-#: logdisplay.py:151
+#: logdisplay.py:159
 #, python-brace-format
 msgid "{item}: {price} on site, where the normal price was charged before"
 msgstr "{item} : {price} sur place, là où le prix normal était encaissé avant"
 
-#: logdisplay.py:156
+#: logdisplay.py:164
 #, python-brace-format
 msgid ""
 "{item}: the on-site price of {price} was removed, so the normal price "
@@ -407,12 +544,12 @@ msgstr ""
 "{item} : le tarif sur place de {price} a été retiré, le prix normal "
 "s’applique donc à nouveau"
 
-#: logdisplay.py:161
+#: logdisplay.py:169
 #, python-brace-format
 msgid "{item}: {before} → {after}"
 msgstr "{item} : {before} → {after}"
 
-#: logdisplay.py:190
+#: logdisplay.py:198
 #, python-brace-format
 msgid ""
 "The on-site price list was removed ({count} products). None of them changed "
@@ -421,7 +558,7 @@ msgstr ""
 "Les tarifs sur place ont été supprimés ({count} produits). Aucun n’a changé "
 "de prix : chacun valait déjà son prix pretix."
 
-#: logdisplay.py:195
+#: logdisplay.py:203
 #, python-brace-format
 msgid ""
 "The on-site price list was removed, and {count} product(s) changed price at "
@@ -430,110 +567,182 @@ msgstr ""
 "Les tarifs sur place ont été supprimés, et {count} produit(s) ont changé de "
 "prix à la caisse :"
 
-#: logdisplay.py:201
+#: logdisplay.py:209
 #, python-brace-format
 msgid " The other {count} were already worth their pretix price."
 msgstr " Les {count} autres valaient déjà leur prix pretix."
 
-#: logdisplay.py:218
+#: logdisplay.py:226
 #, python-brace-format
 msgid "{item}: {before} at the till, now {after}"
 msgstr "{item} : {before} à la caisse, désormais {after}"
 
-#: logdisplay.py:232
+#: logdisplay.py:240
 msgid "every till"
 msgstr "toutes les caisses"
 
-#: logdisplay.py:233
+#: logdisplay.py:241
 msgid "the bar till only"
 msgstr "la caisse du bar seulement"
 
-#: logdisplay.py:234
+#: logdisplay.py:242
 msgid "the door only"
 msgstr "la porte seulement"
 
-#: logdisplay.py:243
+#: logdisplay.py:251
 msgid "Who sells what was saved with nothing changed."
 msgstr "Qui vend quoi a été enregistré sans modification."
 
-#: logdisplay.py:246
+#: logdisplay.py:254
 msgid "Who sells what was changed:"
 msgstr "Qui vend quoi a été modifié :"
 
-#: logdisplay.py:254
+#: logdisplay.py:262
 #, python-brace-format
 msgid "{category}: {before} → {after}"
 msgstr "{category} : {before} → {after}"
 
-#: logdisplay.py:255
+#: logdisplay.py:263
 msgid "(deleted category)"
 msgstr "(catégorie supprimée)"
 
-#: logdisplay.py:268
+#: logdisplay.py:276
 msgid "no role"
 msgstr "aucun rôle"
 
-#: logdisplay.py:269
+#: logdisplay.py:277
 msgid "till"
 msgstr "caisse"
 
-#: logdisplay.py:270
+#: logdisplay.py:278
 msgid "door"
 msgstr "porte"
 
-#: logdisplay.py:276
+#: logdisplay.py:284
 #, python-brace-format
 msgid "Till roles were changed ({count} devices)."
 msgstr "Les rôles des caisses ont été modifiés ({count} appareils)."
 
-#: logdisplay.py:280
+#: logdisplay.py:288
 msgid "Till roles were saved with nothing changed."
 msgstr "Les rôles des caisses ont été enregistrés sans modification."
 
-#: logdisplay.py:283
+#: logdisplay.py:291
 msgid "Till roles were changed:"
 msgstr "Les rôles des caisses ont été modifiés :"
 
-#: logdisplay.py:290
+#: logdisplay.py:298
 msgid "(deleted device)"
 msgstr "(appareil supprimé)"
 
-#: logdisplay.py:295
+#: logdisplay.py:303
 #, python-brace-format
 msgid "{before} → {after}"
 msgstr "{before} → {after}"
 
-#: logdisplay.py:307
+#: logdisplay.py:319
 #, python-brace-format
 msgid "{device}: {changes}"
 msgstr "{device} : {changes}"
 
-#: logdisplay.py:315
+#: logdisplay.py:327
 #, python-brace-format
 msgid "card reader {reader}"
 msgstr "lecteur de carte {reader}"
 
-#: logdisplay.py:318
+#: logdisplay.py:330
 #, python-brace-format
 msgid "card reader {reader} taken away"
 msgstr "lecteur de carte {reader} retiré"
 
-#: logdisplay.py:321
+#: logdisplay.py:333
 #, python-brace-format
 msgid "card reader {before} → {after}"
 msgstr "lecteur de carte {before} → {after}"
 
-#: logdisplay.py:327
+#: logdisplay.py:340
+#, python-brace-format
+msgid "cash drawer {drawer}"
+msgstr "caisse espèces {drawer}"
+
+#: logdisplay.py:343
+#, python-brace-format
+msgid "cash drawer {drawer} taken away"
+msgstr "caisse espèces {drawer} retirée"
+
+#: logdisplay.py:346
+#, python-brace-format
+msgid "cash drawer {before} → {after}"
+msgstr "caisse espèces {before} → {after}"
+
+#: logdisplay.py:357
+#, python-brace-format
+msgid "A cash drawer was created: {name}."
+msgstr "Une caisse espèces a été créée : {name}."
+
+#: logdisplay.py:358
+#, python-brace-format
+msgid "A cash drawer was created: {name}, usual float {amount}."
+msgstr "Une caisse espèces a été créée : {name}, fond habituel {amount}."
+
+#: logdisplay.py:373
+#, python-brace-format
+msgid "renamed from {before}"
+msgstr "anciennement {before}"
+
+#: logdisplay.py:377
+#, python-brace-format
+msgid "usual float {before} → {after}"
+msgstr "fond habituel {before} → {after}"
+
+#: logdisplay.py:382
+#, python-brace-format
+msgid "The cash drawer {name} was changed: {changes}."
+msgstr "La caisse espèces {name} a été modifiée : {changes}."
+
+#: logdisplay.py:384
+msgid "nothing"
+msgstr "rien"
+
+#: logdisplay.py:395
+#, python-brace-format
+msgid "The cash drawer {name} was deleted."
+msgstr "La caisse espèces {name} a été supprimée."
+
+#: logdisplay.py:396
+#, python-brace-format
+msgid "The cash drawer {name} was deleted, and taken away from {devices}."
+msgstr "La caisse espèces {name} a été supprimée et retirée de {devices}."
+
+#: logdisplay.py:410
+#, python-brace-format
+msgid ""
+"The cash drawer {name} was closed from the back office, without a count. It "
+"should have held {expected}."
+msgstr ""
+"La caisse espèces {name} a été fermée depuis le back office, sans comptage. "
+"Elle aurait dû contenir {expected}."
+
+#: logdisplay.py:416
+#, python-brace-format
+msgid ""
+"The cash drawer {name} was closed from the back office on a count of "
+"{amount}. It should have held {expected}."
+msgstr ""
+"La caisse espèces {name} a été fermée depuis le back office sur un comptage "
+"de {amount}. Elle aurait dû contenir {expected}."
+
+#: logdisplay.py:428
 #, python-brace-format
 msgid "A card reader was paired: {reader}"
 msgstr "Un lecteur de carte a été appairé : {reader}"
 
-#: logdisplay.py:328
+#: logdisplay.py:429
 #, python-brace-format
 msgid "A card reader was removed: {reader}"
 msgstr "Un lecteur de carte a été retiré : {reader}"
 
-#: logdisplay.py:330
+#: logdisplay.py:431
 #, python-brace-format
 msgid ""
 "A card reader was asked to clear its screen: {reader}. Whether the card had "
@@ -542,15 +751,15 @@ msgstr ""
 "Il a été demandé à un lecteur de carte de libérer son écran : {reader}. Cela "
 "ne dit pas si la carte avait déjà été débitée — SumUp seul le sait."
 
-#: logdisplay.py:351
+#: logdisplay.py:452
 msgid "merchant code"
 msgstr "code marchand"
 
-#: logdisplay.py:359
+#: logdisplay.py:460
 msgid "The SumUp account settings were saved with nothing changed."
 msgstr "Les réglages du compte SumUp ont été enregistrés sans modification."
 
-#: logdisplay.py:360
+#: logdisplay.py:461
 #, python-brace-format
 msgid ""
 "The SumUp account was changed: {fields}. The key itself is never written to "
@@ -559,50 +768,50 @@ msgstr ""
 "Le compte SumUp a été modifié : {fields}. La clé elle-même n’est jamais "
 "écrite dans cet historique."
 
-#: logdisplay.py:385
+#: logdisplay.py:486
 msgid "Rung up offline at a price that had changed since:"
 msgstr "Encaissé hors ligne à un prix qui avait changé depuis :"
 
-#: logdisplay.py:391
+#: logdisplay.py:492
 #, python-brace-format
 msgid "{item}: charged {charged}, the price list said {tariff}"
 msgstr "{item} : {charged} encaissé, le tarif disait {tariff}"
 
-#: logdisplay.py:427
+#: logdisplay.py:528
 #, python-brace-format
 msgid "Replayed by {device}, from outside what that till sells:"
 msgstr "Rejoué par {device}, hors de ce que cette caisse vend :"
 
-#: logdisplay.py:431
+#: logdisplay.py:532
 msgid "Replayed from outside what that till sells:"
 msgstr "Rejoué hors de ce que cette caisse vend :"
 
-#: logdisplay.py:441
+#: logdisplay.py:542
 #, python-brace-format
 msgid "{count}× {item}, in {category}"
 msgstr "{count}× {item}, dans {category}"
 
-#: logdisplay.py:445
+#: logdisplay.py:546
 msgid "no category"
 msgstr "aucune catégorie"
 
-#: logdisplay.py:462
+#: logdisplay.py:563
 #, python-brace-format
 msgid "#{seq}, reversing #{target}: {total}"
 msgstr "n°{seq}, qui annule le n°{target} : {total}"
 
-#: logdisplay.py:487
+#: logdisplay.py:588
 msgid "Cancelled earlier in pretix, and written to the till journal only now:"
 msgstr ""
 "Annulée plus tôt dans pretix, et écrite au journal de caisse seulement "
 "maintenant :"
 
-#: logdisplay.py:489
+#: logdisplay.py:590
 msgid "Written to the till journal, so the takings no longer count this sale:"
 msgstr ""
 "Écrit au journal de caisse, la recette ne compte donc plus cette vente :"
 
-#: logdisplay.py:505
+#: logdisplay.py:606
 msgid ""
 "Back in the till journal: the order came back paid, so the cancellation is "
 "undone."
@@ -610,7 +819,7 @@ msgstr ""
 "De retour au journal de caisse : la commande est revenue payée, l’annulation "
 "est donc défaite."
 
-#: logdisplay.py:525
+#: logdisplay.py:626
 msgid ""
 "Reactivated after the money was paid back, so the till journal keeps this "
 "sale cancelled. If the customer pays again, that payment is not a till sale "
@@ -620,7 +829,7 @@ msgstr ""
 "cette vente annulée. Si le client paie à nouveau, ce paiement n’est pas une "
 "vente en caisse et ne compte pas dans la recette de caisse."
 
-#: logdisplay.py:538
+#: logdisplay.py:639
 msgid ""
 "The reactivation could not be written to the till journal. The server log "
 "has the details."
@@ -628,7 +837,7 @@ msgstr ""
 "La réactivation n’a pas pu être écrite au journal de caisse. Le journal du "
 "serveur donne le détail."
 
-#: logdisplay.py:540
+#: logdisplay.py:641
 msgid ""
 "The cancellation could not be written to the till journal. The Open POS "
 "Sales page lists this sale until it is."
@@ -636,44 +845,47 @@ msgstr ""
 "L’annulation n’a pas pu être écrite au journal de caisse. La page Ventes "
 "d’Open POS liste cette vente tant qu’elle ne l’est pas."
 
-#: models.py:59 payment.py:87 templates/pretix_openpos/sales.html:26
+#: models.py:62 payment.py:87 templates/pretix_openpos/drawer_session.html:48
+#: templates/pretix_openpos/drawer_session.html:130
+#: templates/pretix_openpos/sales.html:26
 msgid "Cash"
 msgstr "Espèces"
 
-#: models.py:60
+#: models.py:63
 msgid "Card terminal"
 msgstr "Carte"
 
-#: models.py:84
+#: models.py:87
 msgid "Sale"
 msgstr "Vente"
 
-#: models.py:85
+#: models.py:88
 msgid "Cancellation"
 msgstr "Annulation"
 
-#: models.py:86
+#: models.py:89
 msgid "Deposit refund"
 msgstr "Rendu de consigne"
 
-#: models.py:87
+#: models.py:90
 msgid "Reactivation"
 msgstr "Réactivation"
 
-#: models.py:179
+#: models.py:197
 msgid "Till sale"
 msgstr "Vente en caisse"
 
-#: models.py:180 templates/pretix_openpos/sales.html:4
+#: models.py:198 templates/pretix_openpos/sales.html:4
 #: templates/pretix_openpos/sales.html:6
 msgid "Till sales"
 msgstr "Ventes en caisse"
 
-#: models.py:489
+#: models.py:513
 msgid "Not assigned"
 msgstr "Non attribué"
 
-#: models.py:490 templates/pretix_openpos/payment_control.html:14
+#: models.py:514 models.py:944 templates/pretix_openpos/drawer_session.html:128
+#: templates/pretix_openpos/payment_control.html:14
 #: templates/pretix_openpos/sales.html:24
 #: templates/pretix_openpos/sales.html:100
 #: templates/pretix_openpos/sales.html:207
@@ -682,71 +894,122 @@ msgstr "Non attribué"
 msgid "Till"
 msgstr "Caisse"
 
-#: models.py:491
+#: models.py:515
 msgid "Door"
 msgstr "Porte"
 
-#: models.py:499
+#: models.py:523
 msgid "Role"
 msgstr "Rôle"
 
-#: models.py:519
+#: models.py:543
 msgid "SumUp reader"
 msgstr "Lecteur SumUp"
 
-#: models.py:523
+#: models.py:554 models.py:843 templates/pretix_openpos/devices.html:45
+msgid "Cash drawer"
+msgstr "Caisse espèces"
+
+#: models.py:558
 msgid "Till device"
 msgstr "Appareil de caisse"
 
-#: models.py:524 signals.py:145 templates/pretix_openpos/categories.html:18
+#: models.py:559 signals.py:146 templates/pretix_openpos/categories.html:18
 #: templates/pretix_openpos/devices.html:3
 #: templates/pretix_openpos/devices.html:5
 msgid "Till devices"
 msgstr "Appareils de caisse"
 
-#: models.py:575
+#: models.py:610
 msgid "Waiting for the cardholder"
 msgstr "En attente du porteur de carte"
 
-#: models.py:576
+#: models.py:611
 msgid "Paid"
 msgstr "Payé"
 
-#: models.py:577
+#: models.py:612
 msgid "Not paid"
 msgstr "Non payé"
 
-#: models.py:631
+#: models.py:666
 msgid "Terminal payment"
 msgstr "Paiement sur lecteur"
 
-#: models.py:632
+#: models.py:667
 msgid "Terminal payments"
 msgstr "Paiements sur lecteur"
 
-#: models.py:721
+#: models.py:756
 msgid "Every till"
 msgstr "Toutes les caisses"
 
-#: models.py:722
+#: models.py:757
 msgid "The bar till only"
 msgstr "La caisse du bar seulement"
 
-#: models.py:723
+#: models.py:758
 msgid "The door only"
 msgstr "La porte seulement"
 
-#: models.py:731 templates/pretix_openpos/categories.html:32
+#: models.py:766 templates/pretix_openpos/categories.html:32
 msgid "Sold by"
 msgstr "Vendu par"
 
-#: models.py:735
+#: models.py:770
 msgid "Category at the till"
 msgstr "Catégorie à la caisse"
 
-#: models.py:736
+#: models.py:771
 msgid "Categories at the till"
 msgstr "Catégories à la caisse"
+
+#: models.py:844 signals.py:171 templates/pretix_openpos/drawer.html:8
+#: templates/pretix_openpos/drawers.html:5
+#: templates/pretix_openpos/drawers.html:7
+msgid "Cash drawers"
+msgstr "Caisses espèces"
+
+#: models.py:884
+msgid "Cash drawer opening"
+msgstr "Ouverture de caisse"
+
+#: models.py:885
+msgid "Cash drawer openings"
+msgstr "Ouvertures de caisse"
+
+#: models.py:930 templates/pretix_openpos/drawer_session.html:52
+msgid "Opening float"
+msgstr "Fond de caisse"
+
+#: models.py:931
+msgid "Cash in"
+msgstr "Entrée d’espèces"
+
+#: models.py:932
+msgid "Cash out"
+msgstr "Sortie d’espèces"
+
+#: models.py:935
+msgctxt "cash drawer entry"
+msgid "Count"
+msgstr "Comptage"
+
+#: models.py:936
+msgid "Closing"
+msgstr "Fermeture"
+
+#: models.py:945
+msgid "Back office"
+msgstr "Back office"
+
+#: models.py:1000
+msgid "Cash drawer entry"
+msgstr "Écriture de caisse"
+
+#: models.py:1001
+msgid "Cash drawer entries"
+msgstr "Écritures de caisse"
 
 #: payment.py:86
 msgid "Cash (Open POS)"
@@ -756,7 +1019,8 @@ msgstr "Espèces (Open POS)"
 msgid "Card terminal (Open POS)"
 msgstr "Lecteur de carte (Open POS)"
 
-#: payment.py:93 templates/pretix_openpos/sales.html:27
+#: payment.py:93 templates/pretix_openpos/drawer_session.html:131
+#: templates/pretix_openpos/sales.html:27
 msgid "Card"
 msgstr "Carte"
 
@@ -794,12 +1058,12 @@ msgstr ""
 msgid "Point of sale for pretix"
 msgstr "Caisse pour pretix"
 
-#: signals.py:128 templates/pretix_openpos/arrivals.html:4
+#: signals.py:129 templates/pretix_openpos/arrivals.html:4
 #: templates/pretix_openpos/arrivals.html:12
 msgid "Arrivals"
 msgstr "Arrivées"
 
-#: signals.py:156 templates/pretix_openpos/sumup.html:4
+#: signals.py:157 templates/pretix_openpos/sumup.html:4
 #: templates/pretix_openpos/sumup.html:6
 msgid "Card readers"
 msgstr "Lecteurs de carte"
@@ -1050,7 +1314,8 @@ msgstr[1] ""
 "catégorie pour qu’ils suivent les lignes ci-dessus."
 
 #: templates/pretix_openpos/categories.html:93
-#: templates/pretix_openpos/devices.html:113
+#: templates/pretix_openpos/devices.html:136
+#: templates/pretix_openpos/drawers.html:94
 #: templates/pretix_openpos/settings.html:45
 #: templates/pretix_openpos/sumup.html:26
 msgid "Save"
@@ -1096,23 +1361,24 @@ msgstr ""
 msgid "Device"
 msgstr "Appareil"
 
-#: templates/pretix_openpos/devices.html:45
+#: templates/pretix_openpos/devices.html:46
 msgid "Card reader"
 msgstr "Lecteur de carte"
 
-#: templates/pretix_openpos/devices.html:68
+#: templates/pretix_openpos/devices.html:69
+#: templates/pretix_openpos/devices.html:80
 msgid "None"
 msgstr "Aucun"
 
-#: templates/pretix_openpos/devices.html:77
+#: templates/pretix_openpos/devices.html:89
 msgid "unknown to SumUp"
 msgstr "inconnu de SumUp"
 
-#: templates/pretix_openpos/devices.html:83
+#: templates/pretix_openpos/devices.html:95
 msgid "Shared with another till — they take turns on the card."
 msgstr "Partagé avec une autre caisse — elles se relaient sur la carte."
 
-#: templates/pretix_openpos/devices.html:94
+#: templates/pretix_openpos/devices.html:106
 msgid ""
 "A till with a card reader takes card payments through it and nowhere else: "
 "the server refuses a card sale the reader did not validate, so a stale or "
@@ -1127,7 +1393,7 @@ msgstr ""
 "caisse prend la carte dans l’application du fournisseur et le signale à la "
 "caisse. Un lecteur ne peut aller qu’à une caisse, jamais à une porte."
 
-#: templates/pretix_openpos/devices.html:102
+#: templates/pretix_openpos/devices.html:114
 msgid ""
 "Two tills may share one reader — a bar with two tablets and one machine "
 "between them. They take turns: while one has a basket on the reader the "
@@ -1138,9 +1404,346 @@ msgstr ""
 "panier sur le lecteur, l’autre est informée qu’il est occupé et prend cette "
 "vente en espèces."
 
-#: templates/pretix_openpos/devices.html:108
+#: templates/pretix_openpos/devices.html:120
 msgid "Set up the card readers"
 msgstr "Configurer les lecteurs de carte"
+
+#: templates/pretix_openpos/devices.html:124
+msgid ""
+"A device given a cash drawer takes cash only while that drawer is open: it "
+"is opened on the till, on a counted float, and counted blind when it is "
+"closed. Several devices can share one drawer. A device with none takes cash "
+"as it always has."
+msgstr ""
+"Un appareil qui a une caisse espèces n’encaisse d’espèces que lorsqu’elle "
+"est ouverte : elle s’ouvre sur l’appareil, sur un fond compté, et se compte "
+"à l’aveugle à la fermeture. Plusieurs appareils peuvent partager une caisse. "
+"Un appareil sans caisse encaisse les espèces comme avant."
+
+#: templates/pretix_openpos/devices.html:131
+msgid "Set up the cash drawers"
+msgstr "Configurer les caisses espèces"
+
+#: templates/pretix_openpos/drawer.html:11
+#: templates/pretix_openpos/sales.html:453
+msgid "Export CSV"
+msgstr "Exporter en CSV"
+
+#: templates/pretix_openpos/drawer.html:17
+msgid "This drawer's ledger does not add up."
+msgstr "Le journal de cette caisse ne se recoupe pas."
+
+#: templates/pretix_openpos/drawer.html:18
+#, python-format
+msgid ""
+"Entry #%(seq)s does not match the hash of the entry before it. The ledger is "
+"meant to be append-only, so this means rows were changed or removed directly "
+"in the database."
+msgstr ""
+"L’écriture n°%(seq)s ne correspond pas à l’empreinte de celle qui la "
+"précède. Le journal de caisse ne reçoit que des ajouts : des lignes ont donc "
+"été changées ou supprimées directement en base."
+
+#: templates/pretix_openpos/drawer.html:28
+msgid "Tills putting their cash in it:"
+msgstr "Appareils qui y mettent leurs espèces :"
+
+#: templates/pretix_openpos/drawer.html:31
+msgid "No till puts its cash in this drawer at the moment."
+msgstr "Aucun appareil ne met ses espèces dans cette caisse pour l’instant."
+
+#: templates/pretix_openpos/drawer.html:39
+msgctxt "cash drawer column"
+msgid "Opened"
+msgstr "Ouverture"
+
+#: templates/pretix_openpos/drawer.html:40
+msgctxt "cash drawer column"
+msgid "Closed"
+msgstr "Fermeture"
+
+#: templates/pretix_openpos/drawer.html:41
+msgid "Float"
+msgstr "Fond de caisse"
+
+#: templates/pretix_openpos/drawer.html:42
+#: templates/pretix_openpos/drawer_session.html:183
+msgid "Expected"
+msgstr "Attendu"
+
+#: templates/pretix_openpos/drawer.html:43
+#: templates/pretix_openpos/drawer_session.html:97
+msgid "Counted"
+msgstr "Compté"
+
+#: templates/pretix_openpos/drawer.html:44
+#: templates/pretix_openpos/drawer_session.html:104
+#: templates/pretix_openpos/drawer_session.html:184
+msgid "Difference"
+msgstr "Écart"
+
+#: templates/pretix_openpos/drawer.html:59
+#: templates/pretix_openpos/drawers.html:51
+msgctxt "cash drawer state"
+msgid "Open"
+msgstr "Ouverte"
+
+#: templates/pretix_openpos/drawer.html:68
+#: templates/pretix_openpos/drawer_session.html:99
+#: templates/pretix_openpos/drawers.html:71
+msgid "Not counted"
+msgstr "Non comptée"
+
+#: templates/pretix_openpos/drawer.html:82
+msgid "This drawer has never been opened."
+msgstr "Cette caisse n’a jamais été ouverte."
+
+#: templates/pretix_openpos/drawer.html:90
+msgid "More recent"
+msgstr "Plus récentes"
+
+#: templates/pretix_openpos/drawer.html:91
+msgid "Older"
+msgstr "Plus anciennes"
+
+#: templates/pretix_openpos/drawer_session.html:10
+msgid "Every opening"
+msgstr "Toutes les ouvertures"
+
+#: templates/pretix_openpos/drawer_session.html:15
+#, python-format
+msgid "Opened by %(who)s on %(when)s."
+msgstr "Ouverte par %(who)s le %(when)s."
+
+#: templates/pretix_openpos/drawer_session.html:19
+#, python-format
+msgid "Opened on %(when)s."
+msgstr "Ouverte le %(when)s."
+
+#: templates/pretix_openpos/drawer_session.html:24
+#, python-format
+msgid "Closed by %(who)s on %(when)s."
+msgstr "Fermée par %(who)s le %(when)s."
+
+#: templates/pretix_openpos/drawer_session.html:28
+msgid "from the back office"
+msgstr "depuis le back office"
+
+#: templates/pretix_openpos/drawer_session.html:31
+msgid "Still open"
+msgstr "Toujours ouverte"
+
+#: templates/pretix_openpos/drawer_session.html:37
+#, python-format
+msgid ""
+"Sales reached this opening after it was closed — rung up on a till that had "
+"lost its network, and sent once it was back. The drawer should have held "
+"%(at_closing)s at the closing, as far as anybody could know then; with those "
+"sales, it should have held %(now)s."
+msgstr ""
+"Des ventes sont arrivées après la fermeture — passées sur un appareil qui "
+"avait perdu le réseau, et envoyées à son retour. La caisse devait contenir "
+"%(at_closing)s à la fermeture, pour autant qu’on pouvait le savoir alors ; "
+"avec ces ventes, elle aurait dû contenir %(now)s."
+
+#: templates/pretix_openpos/drawer_session.html:56
+#, python-format
+msgid "Cash sales (%(n)s)"
+msgstr "Ventes en espèces (%(n)s)"
+
+#: templates/pretix_openpos/drawer_session.html:61
+#, python-format
+msgid "Cancellations (%(n)s)"
+msgstr "Annulations (%(n)s)"
+
+#: templates/pretix_openpos/drawer_session.html:67
+#, python-format
+msgid "Deposits handed back (%(n)s)"
+msgstr "Consignes rendues (%(n)s)"
+
+#: templates/pretix_openpos/drawer_session.html:73
+#, python-format
+msgid "Cash put in (%(n)s)"
+msgstr "Entrées d’espèces (%(n)s)"
+
+#: templates/pretix_openpos/drawer_session.html:79
+#, python-format
+msgid "Cash taken out (%(n)s)"
+msgstr "Sorties d’espèces (%(n)s)"
+
+#: templates/pretix_openpos/drawer_session.html:86
+msgid "Expected at the closing"
+msgstr "Attendu à la fermeture"
+
+#: templates/pretix_openpos/drawer_session.html:86
+msgid "Expected now"
+msgstr "Attendu maintenant"
+
+#: templates/pretix_openpos/drawer_session.html:91
+msgid "First count"
+msgstr "Premier comptage"
+
+#: templates/pretix_openpos/drawer_session.html:112
+msgid "Difference with the late sales"
+msgstr "Écart avec les ventes arrivées après"
+
+#: templates/pretix_openpos/drawer_session.html:124
+msgid "By till"
+msgstr "Par appareil"
+
+#: templates/pretix_openpos/drawer_session.html:143
+msgid "Nothing was sold into this opening."
+msgstr "Rien n’a été vendu pendant cette ouverture."
+
+#: templates/pretix_openpos/drawer_session.html:149
+#, python-format
+msgid "Card, for reference (%(n)s sale) — never in the drawer"
+msgid_plural "Card, for reference (%(n)s sales) — never in the drawer"
+msgstr[0] "Carte, pour mémoire (%(n)s vente) — jamais dans la caisse"
+msgstr[1] "Carte, pour mémoire (%(n)s ventes) — jamais dans la caisse"
+
+#: templates/pretix_openpos/drawer_session.html:157
+#, python-format
+msgid "One sale was made in test mode and is not counted."
+msgid_plural "%(n)s sales were made in test mode and are not counted."
+msgstr[0] "Une vente a été passée en mode test et n’est pas comptée."
+msgstr[1] "%(n)s ventes ont été passées en mode test et ne sont pas comptées."
+
+#: templates/pretix_openpos/drawer_session.html:166
+msgid "Journal:"
+msgstr "Journal :"
+
+#: templates/pretix_openpos/drawer_session.html:173
+msgid "Ledger"
+msgstr "Journal de caisse"
+
+#: templates/pretix_openpos/drawer_session.html:179
+msgid "Time"
+msgstr "Heure"
+
+#: templates/pretix_openpos/drawer_session.html:180
+msgid "What"
+msgstr "Quoi"
+
+#: templates/pretix_openpos/drawer_session.html:181
+msgid "Who"
+msgstr "Qui"
+
+#: templates/pretix_openpos/drawer_session.html:182
+#: templates/pretix_openpos/sales.html:103
+#: templates/pretix_openpos/sales.html:160
+#: templates/pretix_openpos/sales.html:341
+msgid "Amount"
+msgstr "Montant"
+
+#: templates/pretix_openpos/drawer_session.html:199
+msgid "back office"
+msgstr "back office"
+
+#: templates/pretix_openpos/drawer_session.html:214
+msgid "Close from here"
+msgstr "Fermer d’ici"
+
+#: templates/pretix_openpos/drawer_session.html:216
+msgid ""
+"For an opening a till never closed. Give the cash counted if somebody "
+"counted it, or leave it empty. The ledger records that it was closed from "
+"the back office, and by whom."
+msgstr ""
+"Pour une ouverture qu’aucun appareil n’a fermée. Indiquez les espèces "
+"comptées si quelqu’un les a comptées, sinon laissez vide. Le journal de "
+"caisse garde la trace de la fermeture depuis le back office, et de qui l’a "
+"faite."
+
+#: templates/pretix_openpos/drawer_session.html:226
+msgid "Close the drawer"
+msgstr "Fermer la caisse"
+
+#: templates/pretix_openpos/drawers.html:9
+msgid ""
+"One drawer here for every drawer of notes and coins behind a counter. A till "
+"given a drawer asks for it to be opened, on a counted float, before it takes "
+"any cash; at the end of the evening the drawer is counted blind and closed, "
+"and the difference is written down. A till with no drawer takes cash as it "
+"always has."
+msgstr ""
+"Une caisse espèces ici pour chaque caisse de billets et de pièces derrière "
+"un comptoir. Un appareil qui a une caisse demande qu’elle soit ouverte, sur "
+"un fond compté, avant d’encaisser des espèces ; en fin de soirée, la caisse "
+"est comptée à l’aveugle puis fermée, et l’écart est noté. Un appareil sans "
+"caisse encaisse les espèces comme avant."
+
+#: templates/pretix_openpos/drawers.html:22
+msgid "Drawer"
+msgstr "Caisse"
+
+#: templates/pretix_openpos/drawers.html:23
+msgid "Tills"
+msgstr "Appareils"
+
+#: templates/pretix_openpos/drawers.html:24
+msgid "Tonight"
+msgstr "Ce soir"
+
+#: templates/pretix_openpos/drawers.html:25
+msgid "Last closing"
+msgstr "Dernière fermeture"
+
+#: templates/pretix_openpos/drawers.html:36
+#, python-format
+msgid "Usual float %(amount)s"
+msgstr "Fond habituel %(amount)s"
+
+#: templates/pretix_openpos/drawers.html:46
+msgid "No till yet"
+msgstr "Aucun appareil pour l’instant"
+
+#: templates/pretix_openpos/drawers.html:53
+#, python-format
+msgid "since %(when)s"
+msgstr "depuis %(when)s"
+
+#: templates/pretix_openpos/drawers.html:61
+msgctxt "cash drawer state"
+msgid "Closed"
+msgstr "Fermée"
+
+#: templates/pretix_openpos/drawers.html:73
+msgid "No difference"
+msgstr "Pas d’écart"
+
+#: templates/pretix_openpos/drawers.html:76
+#, python-format
+msgid "Difference %(amount)s"
+msgstr "Écart %(amount)s"
+
+#: templates/pretix_openpos/drawers.html:98
+msgid "Delete"
+msgstr "Supprimer"
+
+#: templates/pretix_openpos/drawers.html:112
+msgid "No cash drawer yet. Every till takes cash the way it always has."
+msgstr ""
+"Aucune caisse espèces pour l’instant. Chaque appareil encaisse les espèces "
+"comme avant."
+
+#: templates/pretix_openpos/drawers.html:117
+msgid "New drawer"
+msgstr "Nouvelle caisse"
+
+#: templates/pretix_openpos/drawers.html:125
+msgid "Create"
+msgstr "Créer"
+
+#: templates/pretix_openpos/drawers.html:129
+#, python-format
+msgid ""
+"Then say which tills put their cash in it, on the <a href=\"%(url)s\">till "
+"devices</a> screen. Two tablets at one bar can share one drawer."
+msgstr ""
+"Indiquez ensuite quels appareils y mettent leurs espèces, sur l’écran <a "
+"href=\"%(url)s\">Appareils de caisse</a>. Deux tablettes d’un même bar "
+"peuvent partager une caisse."
 
 #: templates/pretix_openpos/payment_control.html:10
 #: templates/pretix_openpos/sales.html:464
@@ -1223,12 +1826,6 @@ msgstr "État"
 #: templates/pretix_openpos/sales.html:159
 msgid "SumUp reference"
 msgstr "Référence SumUp"
-
-#: templates/pretix_openpos/sales.html:103
-#: templates/pretix_openpos/sales.html:160
-#: templates/pretix_openpos/sales.html:341
-msgid "Amount"
-msgstr "Montant"
 
 #: templates/pretix_openpos/sales.html:113
 msgid "Charged"
@@ -1405,19 +2002,15 @@ msgstr "Toutes les soirées"
 msgid "Journal"
 msgstr "Journal"
 
-#: templates/pretix_openpos/sales.html:453
-msgid "Export CSV"
-msgstr "Exporter en CSV"
-
 #: templates/pretix_openpos/sales.html:465
 msgid "Payment"
 msgstr "Paiement"
 
-#: templates/pretix_openpos/sales.html:494 views.py:601 views.py:688
+#: templates/pretix_openpos/sales.html:494 views.py:605 views.py:694
 msgid "pretix back office"
 msgstr "back-office pretix"
 
-#: templates/pretix_openpos/sales.html:507
+#: templates/pretix_openpos/sales.html:513
 msgid "No sales recorded."
 msgstr "Aucune vente enregistrée."
 
@@ -1596,10 +2189,6 @@ msgstr "Code d’appairage"
 msgid "Shown on the reader's own screen, and good for a few minutes only."
 msgstr "Affiché sur l’écran du lecteur, et valable quelques minutes seulement."
 
-#: templates/pretix_openpos/sumup.html:214
-msgid "Name"
-msgstr "Nom"
-
 #: templates/pretix_openpos/sumup.html:220
 msgid "For you, so you can tell two readers apart — “Bar” or “Entrance”."
 msgstr "Pour vous, afin de distinguer deux lecteurs — « Bar » ou « Entrée »."
@@ -1667,18 +2256,14 @@ msgstr "« {value} » n'est pas une date. La dernière soirée s'écrit AAAA-MM-
 msgid "The end of the range is before its beginning."
 msgstr "La fin de l'intervalle est avant son début."
 
-#: views.py:690
-msgid "unknown till"
-msgstr "caisse inconnue"
-
-#: views.py:777
+#: views.py:783
 #, python-format
 msgid "%(count)d cancelled sale was written to the journal."
 msgid_plural "%(count)d cancelled sales were written to the journal."
 msgstr[0] "%(count)d vente annulée a été écrite au journal."
 msgstr[1] "%(count)d ventes annulées ont été écrites au journal."
 
-#: views.py:789
+#: views.py:795
 #, python-format
 msgid ""
 "%(count)d cancelled sale could not be written. Its order's history says so."
@@ -1692,6 +2277,6 @@ msgstr[1] ""
 "%(count)d ventes annulées n’ont pas pu être écrites. L’historique de leurs "
 "commandes le dit."
 
-#: views.py:797
+#: views.py:803
 msgid "Every sale pretix cancelled is already in the journal."
 msgstr "Toutes les ventes annulées dans pretix sont déjà au journal."

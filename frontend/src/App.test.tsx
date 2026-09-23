@@ -22,6 +22,11 @@ const { apiMock, sound } = vi.hoisted(() => ({
     initialize: vi.fn(),
     updateDevice: vi.fn(),
     revokeDevice: vi.fn(),
+    drawer: vi.fn(),
+    drawerOpen: vi.fn(),
+    drawerMovement: vi.fn(),
+    drawerCount: vi.fn(),
+    drawerClose: vi.fn(),
   },
 }));
 
@@ -60,7 +65,7 @@ import {
 } from "./storage";
 import { fillStorage } from "./test/setup";
 import { noTakings } from "./test/takings";
-import type { Catalog, JournalLine, PosConfig, SaleResult } from "./types";
+import type { Catalog, DrawerState, JournalLine, PosConfig, SaleResult } from "./types";
 
 /**
  * The till as a whole.
@@ -1972,5 +1977,137 @@ describe("emptying the basket", () => {
     expect(
       screen.getByRole("button", { name: t("sale.charge") }),
     ).toHaveProperty("disabled", true);
+  });
+});
+
+describe("the cash drawer", () => {
+  const closedDrawer = { id: 3, name: "Bar", open: false, stale: false };
+  const drawerInfo = {
+    id: 3, name: "Bar", opening_float: "100.00", currency: "EUR",
+    denominations: [{ value: "20.00", kind: "note" as const }],
+  };
+  const closedState: DrawerState = { drawer: drawerInfo, session: null, last_closed: null };
+  const openState: DrawerState = {
+    drawer: drawerInfo,
+    session: {
+      id: 9, opened_at: new Date().toISOString(), opened_by: "Ana", opening_float: "100.00",
+      stale: false, movements: [], count: null,
+    },
+    last_closed: null,
+  };
+  const panelTitle = () => screen.queryByRole("heading", { name: t("drawer.title", { name: "Bar" }) });
+  const banner = () => screen.queryByText(t("drawer.bannerClosed", { name: "Bar" }));
+
+  beforeEach(() => {
+    apiMock.drawer.mockResolvedValue(closedState);
+  });
+
+  it("asks for the drawer to be opened when the till starts on it closed", async () => {
+    apiMock.config.mockResolvedValue(config({ drawer: closedDrawer }));
+    const { user } = show();
+
+    expect(await screen.findByRole("heading", { name: t("drawer.title", { name: "Bar" }) })).toBeDefined();
+    await user.click(await screen.findByRole("button", { name: t("drawer.back") }));
+
+    // Asked once; after that the banner keeps saying it, and is the way back.
+    expect(panelTitle()).toBeNull();
+    await user.click(banner() as HTMLElement);
+    expect(await screen.findByRole("heading", { name: t("drawer.title", { name: "Bar" }) })).toBeDefined();
+  });
+
+  it("says nothing of a drawer that is open, and keeps it one tap away", async () => {
+    apiMock.config.mockResolvedValue(config({ drawer: { ...closedDrawer, open: true } }));
+    apiMock.drawer.mockResolvedValue(openState);
+    const { user } = show();
+    await ready();
+
+    expect(panelTitle()).toBeNull();
+    expect(banner()).toBeNull();
+    await user.click(screen.getByRole("button", { name: t("drawer.title", { name: "Bar" }) }));
+    expect(await screen.findByText(t("drawer.float"))).toBeDefined();
+  });
+
+  it("names a drawer left open since an earlier day", async () => {
+    apiMock.config.mockResolvedValue(config({ drawer: { ...closedDrawer, open: true, stale: true } }));
+    show();
+
+    expect(await screen.findByText(t("drawer.bannerStale", { name: "Bar" }))).toBeDefined();
+  });
+
+  it("neither asks nor warns with no network, where the drawer can be neither read nor opened", async () => {
+    apiMock.config.mockResolvedValue(config({ drawer: closedDrawer }));
+    const { user } = show();
+    await ready();
+    act(() => markUnreachable());
+
+    expect(banner()).toBeNull();
+    await ringUp(user);
+    await payCash(user);
+    // Offline the sale is queued as always; the server takes it when it arrives.
+    expect(screen.getByRole("button", { name: t("payment.confirm") })).toBeDefined();
+  });
+
+  it("does not ask over a basket that was interrupted mid-sale", async () => {
+    saveBasket("festival", [{
+      key: "10:", itemId: 10, variationId: null, label: "Bière",
+      unitPrice: 300, count: 1, available: null,
+    }], null);
+    apiMock.config.mockResolvedValue(config({ drawer: closedDrawer }));
+    show();
+    await ready();
+
+    expect(banner()).not.toBeNull();
+    expect(panelTitle()).toBeNull();
+    clearBasket();
+  });
+
+  it("opens the drawer from the payment, and then takes the cash", async () => {
+    apiMock.config.mockResolvedValue(config({ drawer: closedDrawer }));
+    apiMock.drawerOpen.mockResolvedValue({
+      ...openState,
+      entry: { seq: 1, kind: "open", datetime: new Date().toISOString(), amount: "100.00", reason: "", cashier: "", device: "" },
+    });
+    const { user } = show();
+    await user.click(await screen.findByRole("button", { name: t("drawer.back") }));
+    await ready();
+    await ringUp(user);
+    await payCash(user);
+
+    expect(screen.getByText(t("payment.drawerClosed", { name: "Bar" }))).toBeDefined();
+    await user.click(screen.getByRole("button", { name: t("drawer.openAction") }));
+    // The drawer panel lands over the payment, which keeps its own button.
+    await screen.findByText(t("drawer.isClosed"));
+    const drawerPanel = within(document.querySelector(".drawer-panel") as HTMLElement);
+    await user.click(drawerPanel.getByRole("button", { name: t("drawer.openAction") }));
+    await user.click(screen.getByRole("button", { name: t("drawer.openWith", { amount: formatMoney(0, "EUR") }) }));
+
+    await waitFor(() => expect(panelTitle()).toBeNull());
+    expect(banner()).toBeNull();
+    await user.click(screen.getByRole("button", { name: t("payment.confirm") }));
+    expect(apiMock.checkout).toHaveBeenCalledWith(pairing, expect.objectContaining({ payment_type: "cash" }));
+  });
+
+  it("finds out the drawer was closed when the server refuses the cash for it", async () => {
+    apiMock.config.mockResolvedValue(config({ drawer: { ...closedDrawer, open: true } }));
+    apiMock.checkout.mockRejectedValue(new ApiError(400, "La caisse n’est pas ouverte.", {
+      drawer: ["La caisse n’est pas ouverte."], code: "drawer_closed",
+    }));
+    const { user } = show();
+    await ready();
+    await ringUp(user);
+
+    await confirm(user);
+
+    expect(await screen.findByText("La caisse n’est pas ouverte.")).toBeDefined();
+    expect(apiMock.drawer).toHaveBeenCalledWith(pairing);
+    expect(await screen.findByText(t("payment.drawerClosed", { name: "Bar" }))).toBeDefined();
+  });
+
+  it("stays quiet about a drawer the device does not have", async () => {
+    show();
+    await ready();
+
+    expect(screen.queryByRole("button", { name: t("drawer.title", { name: "Bar" }) })).toBeNull();
+    expect(apiMock.drawer).not.toHaveBeenCalled();
   });
 });
