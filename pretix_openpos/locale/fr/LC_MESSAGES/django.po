@@ -18,7 +18,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: pretix-openpos\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-09-23 09:42+0000\n"
+"POT-Creation-Date: 2026-09-23 09:53+0000\n"
 "PO-Revision-Date: 2026-09-22 09:51+0000\n"
 "Last-Translator: clabeuhtegrite\n"
 "Language-Team: French\n"
@@ -884,7 +884,7 @@ msgstr "Ventes en caisse"
 msgid "Not assigned"
 msgstr "Non attribué"
 
-#: models.py:514 models.py:942 templates/pretix_openpos/drawer_session.html:128
+#: models.py:514 models.py:944 templates/pretix_openpos/drawer_session.html:128
 #: templates/pretix_openpos/payment_control.html:14
 #: templates/pretix_openpos/sales.html:24
 #: templates/pretix_openpos/sales.html:100
@@ -990,23 +990,24 @@ msgstr "Entrée d’espèces"
 msgid "Cash out"
 msgstr "Sortie d’espèces"
 
-#: models.py:933
+#: models.py:935
+msgctxt "cash drawer entry"
 msgid "Count"
 msgstr "Comptage"
 
-#: models.py:934
+#: models.py:936
 msgid "Closing"
 msgstr "Fermeture"
 
-#: models.py:943
+#: models.py:945
 msgid "Back office"
 msgstr "Back office"
 
-#: models.py:998
+#: models.py:1000
 msgid "Cash drawer entry"
 msgstr "Écriture de caisse"
 
-#: models.py:999
+#: models.py:1001
 msgid "Cash drawer entries"
 msgstr "Écritures de caisse"
 
@@ -1452,11 +1453,12 @@ msgid "No till puts its cash in this drawer at the moment."
 msgstr "Aucun appareil ne met ses espèces dans cette caisse pour l’instant."
 
 #: templates/pretix_openpos/drawer.html:39
+msgctxt "cash drawer column"
 msgid "Opened"
 msgstr "Ouverture"
 
 #: templates/pretix_openpos/drawer.html:40
-#: templates/pretix_openpos/drawers.html:61
+msgctxt "cash drawer column"
 msgid "Closed"
 msgstr "Fermeture"
 
@@ -1482,6 +1484,7 @@ msgstr "Écart"
 
 #: templates/pretix_openpos/drawer.html:59
 #: templates/pretix_openpos/drawers.html:51
+msgctxt "cash drawer state"
 msgid "Open"
 msgstr "Ouverte"
 
@@ -1699,6 +1702,11 @@ msgstr "Aucun appareil pour l’instant"
 #, python-format
 msgid "since %(when)s"
 msgstr "depuis %(when)s"
+
+#: templates/pretix_openpos/drawers.html:61
+msgctxt "cash drawer state"
+msgid "Closed"
+msgstr "Fermée"
 
 #: templates/pretix_openpos/drawers.html:73
 msgid "No difference"

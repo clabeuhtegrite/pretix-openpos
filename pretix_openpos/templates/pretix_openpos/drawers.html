@@ -48,7 +48,7 @@
                         </td>
                         <td>
                             {% if row.session %}
-                                <span class="label label-success">{% trans "Open" %}</span>
+                                <span class="label label-success">{% trans "Open" context "cash drawer state" %}</span>
                                 <a href="{% url "plugins:pretix_openpos:drawer.session" organizer=request.organizer.slug drawer=row.drawer.pk session=row.session.session.pk %}">
                                     {% blocktrans trimmed with when=row.session.session.opened_at|date:"SHORT_DATETIME_FORMAT" %}
                                         since {{ when }}
@@ -58,7 +58,7 @@
                                     <br><small class="text-muted">{{ row.session.opening.cashier }}</small>
                                 {% endif %}
                             {% else %}
-                                <span class="label label-default">{% trans "Closed" %}</span>
+                                <span class="label label-default">{% trans "Closed" context "cash drawer state" %}</span>
                             {% endif %}
                         </td>
                         <td>

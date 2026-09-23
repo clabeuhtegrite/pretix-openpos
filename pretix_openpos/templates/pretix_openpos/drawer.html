@@ -36,8 +36,8 @@
         <table class="table table-condensed table-hover">
             <thead>
             <tr>
-                <th>{% trans "Opened" %}</th>
-                <th>{% trans "Closed" %}</th>
+                <th>{% trans "Opened" context "cash drawer column" %}</th>
+                <th>{% trans "Closed" context "cash drawer column" %}</th>
                 <th class="text-right">{% trans "Float" %}</th>
                 <th class="text-right">{% trans "Expected" %}</th>
                 <th class="text-right">{% trans "Counted" %}</th>
@@ -56,7 +56,7 @@
                             {{ row.session.closed_at|date:"SHORT_DATETIME_FORMAT" }}
                             {% if row.closing.cashier %}<br><small class="text-muted">{{ row.closing.cashier }}</small>{% endif %}
                         {% else %}
-                            <span class="label label-success">{% trans "Open" %}</span>
+                            <span class="label label-success">{% trans "Open" context "cash drawer state" %}</span>
                         {% endif %}
                     </td>
                     <td class="text-right">{{ row.float|money:currency }}</td>

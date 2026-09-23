@@ -527,6 +527,29 @@ def test_the_journal_names_the_drawer_each_sale_went_into(backoffice, event, eve
     assert rows[0].endswith(f";Bar;{evening.pk}")
 
 
+# -- in French ----------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_the_drawer_screens_read_in_french(backoffice, organizer, evening):
+    # pretix' own catalogue is read before this plugin's, and it has "Closed"
+    # and "Count" of its own: a masculine adjective and a verb. The drawer's
+    # labels carry a context so that theirs is what shows, and only a page
+    # rendered in French would ever notice otherwise.
+    from pretix.base.models import User
+
+    User.objects.filter(email="boss@example.org").update(locale="fr")
+
+    listing = backoffice.get(drawers_url(organizer)).content.decode()
+    history = backoffice.get(drawer_url(evening.drawer)).content.decode()
+    report = backoffice.get(session_url(evening)).content.decode()
+
+    assert ">Fermée</span>" in listing
+    assert "<th>Ouverture</th>" in history
+    assert "<th>Fermeture</th>" in history
+    assert "Comptage" in report
+
+
 # -- the audit -----------------------------------------------------------------
 
 

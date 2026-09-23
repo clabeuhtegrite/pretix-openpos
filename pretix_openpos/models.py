@@ -6,7 +6,7 @@ from decimal import Decimal
 from django.core.cache import cache
 from django.db import IntegrityError, models, transaction
 from django.utils.timezone import now
-from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_lazy as _, pgettext_lazy
 from pretix.base.models import Device, Event, ItemCategory, Order, Organizer, User
 
 #: previous_hash of the very first sale of an event.
@@ -930,7 +930,9 @@ class PosDrawerEntry(models.Model):
         (KIND_OPEN, _("Opening float")),
         (KIND_IN, _("Cash in")),
         (KIND_OUT, _("Cash out")),
-        (KIND_COUNT, _("Count")),
+        # In context: pretix' own catalogue has "Count" as the verb, and it
+        # is consulted before this one.
+        (KIND_COUNT, pgettext_lazy("cash drawer entry", "Count")),
         (KIND_CLOSE, _("Closing")),
     )
 
