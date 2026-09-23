@@ -176,6 +176,37 @@ def test_the_back_office_renders_in_french(backoffice, event, till, ticket):
 
 
 @pytest.mark.django_db
+def test_the_takings_detail_reads_in_french(backoffice, event, till, beer, deposit):
+    """
+    The detail by product carries the page's one plural sentence, which the
+    check on the compiled catalogue above does not read, and three words with a
+    context, which fall back to English silently when the context is off by a
+    letter. Only rendering the page catches either.
+    """
+    from pretix.base.models import User
+
+    User.objects.filter(email="boss@example.org").update(locale="fr")
+    sell(till, [{"item": beer.pk, "count": 2}, {"item": deposit.pk, "count": 2}],
+         idempotency_key="gobelets-1")
+    sell(till, [{"item": deposit.pk, "count": 1, "refund": True}],
+         idempotency_key="gobelets-2")
+    sale = sell(till, [{"item": beer.pk, "count": 1}], idempotency_key="annulee-01").json()
+    till.post("cancel", {"seq": sale["journal_seq"], "idempotency_key": "annule-01"})
+
+    page = backoffice.get(
+        f"/control/event/{event.organizer.slug}/{event.slug}/openpos/sales/"
+    ).content.decode()
+
+    assert "Par produit" in page
+    assert "Sans catégorie" in page
+    assert "Consignes" in page
+    assert ">Prises<" in page
+    assert ">Rendues<" in page
+    assert ">Solde<" in page
+    assert "1 vente annulée" in page
+
+
+@pytest.mark.django_db
 def test_the_new_screen_renders_in_french(backoffice, event, beer):
     """
     The screen that says which counter sells which category.

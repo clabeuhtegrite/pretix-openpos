@@ -105,9 +105,8 @@ function admitted(overrides: Partial<RedeemResult> = {}): RedeemResult {
   };
 }
 
-/** Tonight's scans as the server counts them, tonight having begun an hour ago. */
+/** The event's scans as the server counts them. */
 const counted: DoorScans = {
-  since: new Date(Date.now() - 3_600_000).toISOString(),
   device: { admitted: 41, refused: 2, other: 0, offline: 3 },
   event: { admitted: 180, refused: 5, other: 1, offline: 7 },
   devices: [],
@@ -1023,7 +1022,7 @@ describe("the scanner's counter", () => {
     attendance.mockResolvedValue({ ...inside, scans: counted });
   });
 
-  it("is what the server counted for this device tonight", async () => {
+  it("is what the server counted for this device over the event", async () => {
     show();
 
     expect(
@@ -1031,17 +1030,17 @@ describe("the scanner's counter", () => {
     ).toBeDefined();
   });
 
-  it("gives every door's figure for the evening underneath", async () => {
+  it("gives every door's figure for the event underneath", async () => {
     show();
 
-    expect(await screen.findByText(t("checkin.counterEvening", { n: 180 }))).toBeDefined();
+    expect(await screen.findByText(t("checkin.counterEvent", { n: 180 }))).toBeDefined();
   });
 
-  it("does not make up the evening's figure before the server has given one", () => {
+  it("does not make up the event's figure before the server has given one", () => {
     attendance.mockReturnValue(new Promise(() => {}));
     show();
 
-    expect(screen.getByText(t("checkin.counterEveningUnknown"))).toBeDefined();
+    expect(screen.getByText(t("checkin.counterEventUnknown"))).toBeDefined();
   });
 
   it("opens on the last figure when iOS reloads the page with no network", async () => {
@@ -1053,7 +1052,7 @@ describe("the scanner's counter", () => {
 
     await waitFor(() => expect(attendance).toHaveBeenCalled());
     expect(screen.getByText(new RegExp(t("checkin.counter", { ok: 41, ko: 2 })))).toBeDefined();
-    expect(screen.getByText(t("checkin.counterEvening", { n: 180 }))).toBeDefined();
+    expect(screen.getByText(t("checkin.counterEvent", { n: 180 }))).toBeDefined();
   });
 
   it("adds a scan at once, and not twice once the server has counted it", async () => {
@@ -1063,7 +1062,7 @@ describe("the scanner's counter", () => {
     await scan("ticket-1");
 
     expect(screen.getByText(new RegExp(t("checkin.counter", { ok: 42, ko: 2 })))).toBeDefined();
-    expect(screen.getByText(t("checkin.counterEvening", { n: 181 }))).toBeDefined();
+    expect(screen.getByText(t("checkin.counterEvent", { n: 181 }))).toBeDefined();
 
     attendance.mockResolvedValue({
       ...inside,
@@ -1079,7 +1078,7 @@ describe("the scanner's counter", () => {
 
     expect(attendance).toHaveBeenCalledTimes(2);
     expect(screen.getByText(new RegExp(t("checkin.counter", { ok: 42, ko: 2 })))).toBeDefined();
-    expect(screen.getByText(t("checkin.counterEvening", { n: 181 }))).toBeDefined();
+    expect(screen.getByText(t("checkin.counterEvent", { n: 181 }))).toBeDefined();
   });
 
   it("does not take a scan off twice when two answers land for it", async () => {
@@ -1108,6 +1107,17 @@ describe("the scanner's counter", () => {
       await screen.findByText(new RegExp(t("checkin.counter", { ok: 42, ko: 2 }))),
     ).toBeDefined();
     expect(screen.getByText(new RegExp(t("checkin.counterWaiting", { n: 1 })))).toBeDefined();
+  });
+
+  it("counts a scan that has waited in the queue since an earlier night", async () => {
+    // Still one of this event's people, and the figure is the event's.
+    saveQueue([waitingScan({ at: new Date(Date.now() - 4 * 86_400_000).toISOString() })]);
+    show();
+
+    expect(
+      await screen.findByText(new RegExp(t("checkin.counter", { ok: 42, ko: 2 }))),
+    ).toBeDefined();
+    expect(screen.getByText(t("checkin.counterEvent", { n: 181 }))).toBeDefined();
   });
 
   it("counts a scan answered offline straight away", async () => {

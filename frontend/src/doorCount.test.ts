@@ -13,8 +13,7 @@ import type { DoorScans, QueuedCheckin, QueuedSale } from "./types";
  * could be counted twice, or not at all.
  */
 
-const tonight: DoorScans = {
-  since: "2026-09-19T04:00:00.000Z",
+const counted: DoorScans = {
   device: { admitted: 40, refused: 2, other: 1, offline: 3 },
   event: { admitted: 180, refused: 5, other: 1, offline: 7 },
   devices: [],
@@ -35,7 +34,7 @@ const sale: QueuedSale = {
 
 describe("the figures", () => {
   it("add up line by line", () => {
-    expect(addScans(tonight.device!, { admitted: 1, refused: 1, other: 1, offline: 1 })).toEqual({
+    expect(addScans(counted.device!, { admitted: 1, refused: 1, other: 1, offline: 1 })).toEqual({
       admitted: 41, refused: 3, other: 2, offline: 4,
     });
   });
@@ -56,24 +55,17 @@ describe("what waits in the queue", () => {
       scan({ refused: "invalid" }),
     ];
 
-    expect(queuedScans(queue, "festival", null)).toEqual({
+    expect(queuedScans(queue, "festival")).toEqual({
       admitted: 2, refused: 1, other: 1, offline: 2,
     });
   });
 
-  it("leaves out sales, other events and earlier nights", () => {
-    const queue = [
-      sale,
-      scan({ event: "gala" }),
-      scan({ at: "2026-09-19T03:59:00.000Z" }),
-    ];
-
-    expect(queuedScans(queue, "festival", tonight.since)).toEqual(NO_SCANS);
+  it("leaves out sales and other events", () => {
+    expect(queuedScans([sale, scan({ event: "gala" })], "festival")).toEqual(NO_SCANS);
   });
 
-  it("counts every night before the server has said when tonight began", () => {
-    expect(queuedScans([scan({ at: "2026-09-01T21:00:00.000Z" })], "festival", null).admitted)
-      .toBe(1);
+  it("counts a scan from an earlier night of the event", () => {
+    expect(queuedScans([scan({ at: "2026-09-01T21:00:00.000Z" })], "festival").admitted).toBe(1);
   });
 
   it("says how many are still to be sent, whenever they were made", () => {
@@ -84,24 +76,24 @@ describe("what waits in the queue", () => {
 
 describe("the counter", () => {
   it("is the server's figure with what it has not heard of on top", () => {
-    const count = doorCount(tonight, { ...NO_SCANS, admitted: 2 }, [scan()], "festival");
+    const count = doorCount(counted, { ...NO_SCANS, admitted: 2 }, [scan()], "festival");
 
     expect(count.device).toEqual({ admitted: 43, refused: 2, other: 1, offline: 4 });
-    expect(count.evening).toBe(183);
+    expect(count.event).toBe(183);
   });
 
   it("is this device's own scans alone before the server has answered", () => {
     const count = doorCount(null, { ...NO_SCANS, refused: 1 }, [scan()], "festival");
 
     expect(count.device).toEqual({ admitted: 1, refused: 1, other: 0, offline: 1 });
-    expect(count.evening).toBeNull();
+    expect(count.event).toBeNull();
   });
 
   it("reads zero on a device the server has no line for", () => {
-    const count = doorCount({ ...tonight, device: null }, NO_SCANS, [], "festival");
+    const count = doorCount({ ...counted, device: null }, NO_SCANS, [], "festival");
 
     expect(count.device).toEqual(NO_SCANS);
-    expect(count.evening).toBe(180);
+    expect(count.event).toBe(180);
   });
 });
 
@@ -109,21 +101,19 @@ describe("a scan the drain has sent", () => {
   const now = new Date().toISOString();
 
   it("moves into the figure kept for a reload", () => {
-    const kept = { ...tonight, since: new Date(Date.now() - 3_600_000).toISOString() };
-    saveDoorScans("festival", kept);
+    saveDoorScans("festival", counted);
 
     countSent(scan({ at: now }));
 
     expect(loadDoorScans("festival")).toEqual({
-      ...kept,
+      ...counted,
       device: { admitted: 41, refused: 2, other: 1, offline: 4 },
       event: { admitted: 181, refused: 5, other: 1, offline: 8 },
     });
   });
 
   it("keeps a figure with no line for this device without one", () => {
-    const kept = { ...tonight, device: null, since: new Date(Date.now() - 3_600_000).toISOString() };
-    saveDoorScans("festival", kept);
+    saveDoorScans("festival", { ...counted, device: null });
 
     countSent(scan({ at: now }));
 

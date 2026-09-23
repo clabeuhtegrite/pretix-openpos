@@ -35,11 +35,12 @@ it was written for. Read the scope section before deciding it fits.
 - **A live head count** on the scanning screen: how many people are inside right
   now, counted over admission products only and across every door and till.
   Tapping it opens a flow chart of tickets expected → admitted → on site →
-  scanned back out, with the breakdown per product and a table of tonight's
+  scanned back out, with the breakdown per product and a table of the event's
   scans per device.
 - **A scan counter that survives the phone**: what this device and every door
-  have scanned tonight, counted by the server from pretix' own check-ins rather
-  than by the page, so leaving the app or a reload does not reset it.
+  have scanned for the event, counted by the server from pretix' own check-ins
+  rather than by the page, so leaving the app, a reload or the next morning does
+  not reset it.
 - **A role per device**: a tablet is the bar *till* or the *door*, assigned in
   the back office. A till opens on the product grid; a door opens on the scanner
   and steps out to the grid to sell a ticket on the spot. A device nobody has
@@ -113,7 +114,11 @@ it was written for. Read the scope section before deciding it fits.
 - **Transaction history and cancellation**, scoped to the till in your hands:
   cancelling issues a credit note, records the refund and appends a reversing
   journal entry — the original sale is never touched — and the items go back in
-  the basket so the corrected order is rung up as a new sale.
+  the basket so the corrected order is rung up as a new sale. A till's sale
+  cancelled in pretix itself — the order page, the REST API, a whole event
+  called off — is reversed in the journal too, in the name of whoever did it,
+  and pretix' own refund dialog sends a reader's card payment back through
+  SumUp.
 - **Cash drawers**, as many as the venue has. Create one per physical drawer
   in the back office and give it its tills — two tablets at one bar can share
   one. A drawer is opened on the till with a float counted note by note or
@@ -127,7 +132,10 @@ it was written for. Read the scope section before deciding it fits.
   paid. Card money never goes near a drawer.
 - An **append-only journal**, hash-chained so that editing history after the
   fact is detectable. Each drawer's ledger is chained the same way.
-- Per-till and per-cashier takings for the day.
+- **Takings for the event**, on the till and in the back office: cash and
+  card, per till and per cashier, product by product under each category,
+  deposits apart and cancellations netted off. In a series, the takings of
+  the date the till is selling.
 
 ## What it deliberately does not do
 
@@ -235,7 +243,7 @@ If you run pretix in Docker or Kubernetes, [`deploy/Dockerfile`](deploy/Dockerfi
 bakes the plugin into the official image:
 
 ```bash
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.18.0 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.20.0 .
 ```
 
 The PWA bundle is built inside the image, from the tree you are building, so the

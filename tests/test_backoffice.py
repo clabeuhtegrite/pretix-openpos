@@ -221,6 +221,65 @@ def test_a_sale_from_a_till_that_has_since_been_deleted_is_still_counted(
     assert len(context["by_device"]) == 1
 
 
+# -- what the takings are made of -------------------------------------------
+#
+# The till's closing screen and this page read the same computation, which has
+# tests of its own. What is checked here is that the page shows it, in numbers
+# pretix can format, and keeps deposits and cancellations where the till does.
+
+
+@pytest.mark.django_db
+def test_the_takings_are_broken_down_by_product(backoffice, till, event, ticket, beer):
+    sell(till, [{"item": ticket.pk, "count": 2}], idempotency_key="produit-01")
+    sell(till, [{"item": beer.pk, "count": 3}], payment_type="card",
+         idempotency_key="produit-02")
+
+    response = backoffice.get(sales_url(event))
+
+    (group,) = response.context["detail"]["categories"]
+    assert [(line["name"], line["count"], line["total"]) for line in group["items"]] == [
+        ("Entrée", 2, Decimal("20.00")),
+        ("Bière", 3, Decimal("9.00")),
+    ]
+    # Every euro of the table above is in one line of the detail.
+    assert group["total"] == response.context["totals"]["total"]
+    assert "By product" in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_deposits_stay_apart_and_a_cancellation_is_said(
+    backoffice, till, event, beer, deposit
+):
+    sell(till, [{"item": beer.pk, "count": 2}, {"item": deposit.pk, "count": 2}],
+         idempotency_key="gobelets-1")
+    sell(till, [{"item": deposit.pk, "count": 1, "refund": True}],
+         idempotency_key="gobelets-2")
+    sale = sell(till, [{"item": beer.pk, "count": 1}], idempotency_key="annulee-01").json()
+    till.post("cancel", {"seq": sale["journal_seq"], "idempotency_key": "annule-01"})
+
+    response = backoffice.get(sales_url(event))
+    detail = response.context["detail"]
+
+    # The cup is not something the evening sold, and the cancelled beer comes
+    # off its own line rather than being listed apart.
+    (group,) = detail["categories"]
+    assert [(line["name"], line["count"]) for line in group["items"]] == [("Bière", 2)]
+    assert detail["deposits"]["taken"] == {"count": 2, "total": Decimal("2.00")}
+    assert detail["deposits"]["returned"] == {"count": 1, "total": Decimal("-1.00")}
+    assert detail["deposits"]["total"] == Decimal("1.00")
+    assert detail["cancellations"] == 1
+    assert detail["cancelled_total"] == Decimal("-3.00")
+    assert "1 sale cancelled" in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_an_event_with_nothing_sold_draws_no_empty_detail(backoffice, event):
+    response = backoffice.get(sales_url(event))
+
+    assert response.context["detail"]["categories"] == []
+    assert "By product" not in response.content.decode()
+
+
 # -- card payments that never became a sale ---------------------------------
 #
 # The one thing the journal cannot show by construction: the takings are
@@ -381,6 +440,41 @@ def test_one_evening_can_be_asked_for(backoffice, till, event, ticket, beer):
     # figures belonging to other rows than the ones listed is how a page lies
     # without a single wrong number on it.
     assert context["totals"]["total"] == Decimal("10.00")
+
+
+@pytest.mark.django_db
+def test_the_product_detail_follows_the_evening_filter(backoffice, till, event, ticket, beer):
+    from datetime import date
+
+    sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="samedi-01")
+    sell(till, [{"item": beer.pk, "count": 1}], idempotency_key="vendredi-1")
+    on_night(event, "samedi-01", date(2026, 9, 19))
+    on_night(event, "vendredi-1", date(2026, 9, 12))
+
+    context = backoffice.get(sales_url(event) + "?from=2026-09-19&to=2026-09-19").context
+
+    (group,) = context["detail"]["categories"]
+    assert [line["name"] for line in group["items"]] == ["Entrée"]
+
+
+@pytest.mark.django_db
+def test_a_sale_cancelled_on_a_later_evening_is_one_cancellation_on_that_evening(
+    backoffice, till, event, ticket
+):
+    # The money left the drawer on the evening it was handed back, so that is
+    # the evening it comes off. The sale itself is off screen, and the reversal
+    # is still counted as the one sale it undid.
+    from datetime import date
+
+    sale = sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="vendredi-1").json()
+    till.post("cancel", {"seq": sale["journal_seq"], "idempotency_key": "annule-01"})
+    on_night(event, "vendredi-1", date(2026, 9, 12))
+    on_night(event, "annule-01", date(2026, 9, 19))
+
+    context = backoffice.get(sales_url(event) + "?from=2026-09-19&to=2026-09-19").context
+
+    assert context["detail"]["cancellations"] == 1
+    assert context["detail"]["cancelled_total"] == Decimal("-10.00")
 
 
 @pytest.mark.django_db

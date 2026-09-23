@@ -3,7 +3,7 @@ from datetime import datetime, time, timedelta
 from decimal import Decimal
 
 from django.db import IntegrityError, transaction
-from django.db.models import Count, Exists, F, OuterRef, Q, Sum
+from django.db.models import Count, Exists, F, OuterRef, Q
 from django.utils.timezone import make_aware, now
 from django.utils.translation import gettext_lazy as _
 from django_scopes import scopes_disabled
@@ -21,13 +21,17 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 
 from .. import __version__
+from ..backoffice import till_cancelling
 from ..channels import POS_CHANNEL, PosSalesChannelType
 from ..drawers import (
     DrawerError, check_denominations, close_drawer, count_drawer, count_is_current, denominations_for, drawer_closed,
     drawer_stale, is_stale, move_cash, open_drawer, open_session_of, session_at,
 )
 from ..invoicing import pos_invoices_enabled
-from ..models import PosCategory, PosDevice, PosDrawerEntry, PosDrawerSession, PosSale, PosTerminalPayment
+from ..models import (
+    PosCategory, PosDevice, PosDrawerEntry, PosDrawerSession, PosSale, PosTerminalPayment, refund_key,
+    reversed_positions,
+)
 from ..payment import CARD, CASH
 from ..sumup import CHECKOUT_CLOSED, SumUpAccount, SumUpError, still_running, succeeded
 from ..webhook import webhook_url
@@ -166,8 +170,9 @@ BUSINESS_DAY_STARTS_AT = time(6, 0)
 
 def start_of_business_day(event, at=None):
     """
-    The moment the takings count from: 6 am on the day that night began.
+    The start of the night ``at`` belongs to: 6 am on the day that night began.
 
+    What sorts the takings into evenings, and a series' sales into its dates.
     ``at`` is the moment being asked about, defaulting to this one. A sale
     replayed the next morning has to be placed in the night it was rung up in,
     not the one it arrives in.
@@ -193,9 +198,9 @@ LATE_UPLOAD = timedelta(minutes=2)
 SENT_AFTER_THE_FACT = Q(force_sent=True) | Q(created__gt=F("datetime") + LATE_UPLOAD)
 
 
-def door_scans(event, device):
+def door_scans(event, device, subevent=None):
     """
-    What the doors have scanned tonight, per device and in all.
+    What the doors have scanned for this event, per device and in all.
 
     Read from pretix' own check-in rows rather than counted by the app: a count
     kept in a browser is gone whenever iOS reloads the page, and that is what a
@@ -208,19 +213,23 @@ def door_scans(event, device):
     with a sale is not one — nobody scanned anything — and neither is an
     automatic or a back-office one, which is exactly the set of rows that
     carries no ``raw_source_type``. Entries only: a door counts people coming
-    in. Tonight means since six this morning, as for the takings, so a night
-    that crosses midnight stays one figure.
+    in.
+
+    The whole event, whenever the scan was made. It used to be tonight only,
+    from six in the morning like the takings, so a phone that had let seventy
+    people in read zero on every day after, on that very event. In a series,
+    ``subevent`` narrows it to one date: its doors, and its tickets at doors
+    kept for every date.
     """
-    since = start_of_business_day(event)
+    scope = Q(list__event=event, type=Checkin.TYPE_ENTRY, raw_source_type__isnull=False)
+    if subevent is not None:
+        scope &= Q(list__subevent=subevent) | Q(
+            list__subevent__isnull=True, position__subevent=subevent
+        )
     admitted = Q(successful=True, position__item__admission=True)
     with scopes_disabled():
         rows = list(
-            Checkin.all.filter(
-                list__event=event,
-                type=Checkin.TYPE_ENTRY,
-                raw_source_type__isnull=False,
-                datetime__gte=since,
-            )
+            Checkin.all.filter(scope)
             .order_by()
             .values("device_id")
             .annotate(
@@ -255,7 +264,6 @@ def door_scans(event, device):
     ]
     devices.sort(key=lambda d: (-d["admitted"], d["name"] is None, d["name"] or ""))
     return {
-        "since": since.isoformat(),
         "device": figures(by_device.get(device.pk)) if device else None,
         "event": {field: sum(row[field] for row in rows) for field in fields},
         "devices": devices,
@@ -415,6 +423,24 @@ def selling_subevent(event, at=None, *, settled=False):
     )
 
 
+def evening_subevent(event):
+    """
+    The date of a series that the evening's figures are about, or ``None``.
+
+    ``None`` for a plain event: its figures are the whole event's. In a series,
+    the date the till sells for tonight, or failing that the nearest one, as for
+    a sale already paid: a figure has to be about some date, and nothing is
+    refused for it. ``None`` too for a series with no date switched on, whose
+    figures are then the whole series'.
+    """
+    if not event.has_subevents:
+        return None
+    try:
+        return selling_subevent(event, settled=True)
+    except ValidationError:
+        return None
+
+
 def setting_row_id(event, setting):
     """
     The id of the row one of the till's settings names, or ``None``.
@@ -461,18 +487,6 @@ def custom_sale_item(event):
 def deposit_item(event):
     """The product a cup deposit is sold as, if enabled."""
     return configured_item(event, "openpos_deposit_item")
-
-
-def refund_key(idempotency_key: str) -> str:
-    """
-    The key of the payout row that goes with a sale.
-
-    One customer can produce two journal rows — the sale, and the deposit
-    handed back with it — and the journal's idempotency is per row. Derived
-    rather than sent, so a retry of the whole transaction still recognises both
-    halves of what it already committed.
-    """
-    return f"{idempotency_key}:refund"
 
 
 class ResolvedLine:
@@ -2071,13 +2085,19 @@ class OpenPosViewSet(viewsets.ViewSet):
                 # would have produced. send_mail is off: at a till the customer
                 # is standing right there, and the address is usually the
                 # organiser's own placeholder for an on-site sale.
-                cancel_order(
-                    order,
-                    device=device,
-                    send_mail=False,
-                    cancel_invoice=True,
-                    email_comment=data["reason"] or None,
-                )
+                #
+                # Said to be the till's own doing, because pretix tells the
+                # plugin about every cancellation and one made anywhere else
+                # is written to the journal from there. This one is written
+                # below, with the till and the cashier it belongs to.
+                with till_cancelling():
+                    cancel_order(
+                        order,
+                        device=device,
+                        send_mail=False,
+                        cancel_invoice=True,
+                        email_comment=data["reason"] or None,
+                    )
             except OrderError as e:
                 raise ValidationError({"seq": [str(e)]})
 
@@ -2087,7 +2107,7 @@ class OpenPosViewSet(viewsets.ViewSet):
                 # A reader is about to be asked, after this transaction, and it
                 # can refuse. Nothing may claim the money is back until it has
                 # answered.
-                settle_now=self._reader_payment(event, sale) is None,
+                settle_now=PosTerminalPayment.settling(sale) is None,
             )
 
             cancellation = PosSale.record(
@@ -2099,7 +2119,7 @@ class OpenPosViewSet(viewsets.ViewSet):
                 # Negative, so the takings stay the plain sum of the column and
                 # the drawer reconciles against the journal without arithmetic.
                 total=-sale.total,
-                positions=self._reversed_positions(sale.positions),
+                positions=reversed_positions(sale.positions),
                 idempotency_key=data["idempotency_key"],
                 testmode=sale.testmode,
                 kind=PosSale.KIND_CANCELLATION,
@@ -2133,7 +2153,7 @@ class OpenPosViewSet(viewsets.ViewSet):
                     # Its total is negative — money that left the drawer — so
                     # negating it puts the same amount back.
                     total=-deposit_refund.total,
-                    positions=self._reversed_positions(deposit_refund.positions),
+                    positions=reversed_positions(deposit_refund.positions),
                     # Derived from the cancellation's key exactly as the payout
                     # row derived from the sale's, so a retried cancellation
                     # recognises this half too instead of writing it twice.
@@ -2158,27 +2178,6 @@ class OpenPosViewSet(viewsets.ViewSet):
         self._settle_refund(request, refund, body["card_refund"])
         return Response(body, status=status.HTTP_201_CREATED)
 
-    @staticmethod
-    def _reader_payment(event, sale):
-        """
-        The reader payment this sale was settled by, if a reader settled it.
-
-        One lookup for two questions that must never disagree: whether the
-        server is going to ask SumUp for the money back, and which transaction
-        to ask about. A cash sale, or a card taken on somebody's phone, has
-        none — there is nothing here for this server to refund.
-        """
-        if sale.payment_type != PosSale.PAYMENT_CARD:
-            return None
-        payment = PosTerminalPayment.objects.filter(
-            event=event,
-            idempotency_key=sale.idempotency_key,
-            status=PosTerminalPayment.STATUS_SUCCESSFUL,
-        ).first()
-        if payment is None or not payment.transaction_id:
-            return None
-        return payment
-
     def _refund_card(self, event, sale):
         """
         Give a card sale's money back through SumUp, when there is a card to
@@ -2199,7 +2198,7 @@ class OpenPosViewSet(viewsets.ViewSet):
             refund it from the SumUp app, and has to be told so plainly rather
             than shown a cancellation that looks complete.
         """
-        payment = self._reader_payment(event, sale)
+        payment = PosTerminalPayment.settling(sale)
         if payment is None:
             return "none"
         if payment.refunded:
@@ -2227,120 +2226,57 @@ class OpenPosViewSet(viewsets.ViewSet):
     @action(detail=False, methods=["get"], url_path="summary", url_name="summary")
     def summary(self, request, **kwargs):
         """
-        Running total for the current till day, for the calling till and overall.
+        What the event has taken, for the calling till and overall, in detail.
 
-        This is the lightweight alternative to a full cash session: no opening
-        float, no blind count, just what has gone through since the day began —
-        at six in the morning, so a night that crosses midnight stays one figure
-        — for a volunteer to reconcile the drawer at the end of it.
+        The event, not the day. A till day that began at six in the morning
+        was the first answer to an evening crossing midnight, and it was still
+        the wrong unit: the question at closing time is what the evening took,
+        and the evening is the event — or, in a series, the date the till is
+        selling, which :func:`evening_subevent` picks exactly as every sale
+        does. A reversal lands on the evening of the sale it reverses, since it
+        copies that sale's lines, so correcting last week's order corrects last
+        week's figures and leaves tonight's alone.
+
+        Figures only, and not a cash session: no float, no count, no drawer.
+        What a drawer should hold is worked out by :mod:`..drawers`, and shown
+        on the till only next to a count, never here. This is the
+        event as a whole, broken down every way it is read — by payment type,
+        by category and product, with the deposits apart, by device, and by
+        evening when the event spans several — from one pass over the journal.
         """
+        from ..takings import journal_rows, summarise
+
         event = request.event
         device = request.auth if isinstance(request.auth, Device) else None
+        subevent = evening_subevent(event)
 
-        since = start_of_business_day(event)
-        sales = PosSale.objects.filter(event=event, datetime__gte=since)
-
-        # Reversals written tonight of sales rung up on an earlier day.
-        #
-        # Their money nets off below and that is RIGHT: the cash physically left
-        # this drawer tonight, so the figure to count against still has to
-        # include it. What was wrong was that it did so invisibly — a volunteer
-        # saw a takings line quietly short by thirty euros with nothing on
-        # screen to say why, and no way to tell it from a miscount. So the
-        # arithmetic is left alone and the amount is reported beside it.
-        earlier_seqs = set(
-            PosSale.objects.filter(event=event, datetime__lt=since).values_list(
-                "seq", flat=True
-            )
+        report = summarise(
+            event,
+            journal_rows(PosSale.objects.filter(event=event), subevent),
+            device=device,
+            night_of=lambda moment: start_of_business_day(event, moment).date(),
         )
-
-        def from_earlier_days(qs):
-            rows = qs.filter(
-                kind=PosSale.KIND_CANCELLATION, cancels_seq__in=earlier_seqs
-            )
-            amount = rows.aggregate(total=Sum("total"))["total"] or Decimal("0.00")
-            return {
-                "count": rows.count(),
-                # Negative, like the rows themselves: this is money that left.
-                "total": str(amount.quantize(Decimal("0.01"))),
-            }
-
-        def totals(qs):
-            # Two aggregate queries per bucket, instead of fetching every row
-            # of the night to add it up in Python.
-            kinds = {
-                row["kind"]: row["n"]
-                for row in qs.order_by().values("kind").annotate(n=Count("pk"))
-            }
-            amounts = {
-                # Quantized because SQLite hands Sum() back with the trailing
-                # zeros gone — "50" where PostgreSQL says "50.00" — and this
-                # string is API surface.
-                row["payment_type"]: (row["amount"] or Decimal("0.00")).quantize(Decimal("0.01"))
-                for row in qs.order_by().values("payment_type").annotate(amount=Sum("total"))
-            }
-            result = {
-                # Sales, not journal lines: a cancellation is not a sale, and
-                # counting it as one would say six when four customers were
-                # served. Its money is another matter — see below.
-                "count": kinds.get(PosSale.KIND_SALE, 0),
-                "cancellations": kinds.get(PosSale.KIND_CANCELLATION, 0),
-                # Same reasoning: a returned cup is not a sale, and the money
-                # it took out of the drawer is already netted off below.
-                "deposit_refunds": kinds.get(PosSale.KIND_DEPOSIT_REFUND, 0),
-            }
-            grand = Decimal("0.00")
-            for payment_type in (PosSale.PAYMENT_CASH, PosSale.PAYMENT_CARD):
-                # Cancellations and deposit refunds carry a negative total, so
-                # the amounts net out here on their own: this is what the
-                # drawer should hold.
-                amount = amounts.get(payment_type, Decimal("0.00"))
-                result[payment_type] = str(amount)
-                grand += amount
-            result["total"] = str(grand)
-            # Included in the figures above rather than excluded from them, and
-            # named so the volunteer counting the drawer knows what they are
-            # counting. Absent when there are none, which is most nights.
-            earlier = from_earlier_days(qs)
-            result["earlier_days"] = earlier if earlier["count"] else None
-            return result
-
-        # Test-mode money never existed, so it must not be in the figure a
-        # volunteer reconciles the drawer against. It stays in the journal —
-        # which is append-only and survives the orders being purged — and is
-        # reported separately rather than silently dropped.
-        real = sales.filter(testmode=False)
-        # Computed rather than probed with a prior exists(): totals() already
-        # counts the rows per kind, so the emptiness is in the answer it hands
-        # back and a second round trip to ask about it buys nothing.
-        test = totals(sales.filter(testmode=True))
-        had_test = bool(
-            test["count"] or test["cancellations"] or test["deposit_refunds"]
-        )
-
-        device_totals = totals(real.filter(device=device)) if device else None
-        event_totals = totals(real)
-
-        # A till with a cash drawer is counted blind at closing: whoever
-        # counts it must not have the figure it should come to in front of
-        # them, or the count stops being a count. So the cash is left out
-        # here, for the device and for the event alike — on a night with one
-        # till the two are the same figure. The card side stays: it is
-        # reconciled against SumUp, not against anybody's count.
-        drawer = PosDevice.for_device(device).drawer if device else None
-        if drawer is not None:
-            for bucket in (device_totals, event_totals):
-                if bucket is not None:
-                    bucket[PosSale.PAYMENT_CASH] = None
-                    bucket["total"] = None
 
         return Response(
             {
-                "since": since.isoformat(),
-                "device": device_totals,
-                "event": event_totals,
-                "testmode": test if had_test else None,
-                "drawer": None if drawer is None else {"name": drawer.name},
+                "scope": {
+                    "event": str(event.name),
+                    "series": event.has_subevents,
+                    "subevent": (
+                        {
+                            "id": subevent.pk,
+                            "name": str(subevent.name),
+                            "date_from": subevent.date_from.isoformat(),
+                        }
+                        if subevent is not None
+                        else None
+                    ),
+                },
+                # Kept for a till still running the build before this one,
+                # until it is next opened: it prints this as "since".
+                "since": report["first"] or now().isoformat(),
+                "computed_at": now().isoformat(),
+                **report,
             }
         )
 
@@ -2597,7 +2533,7 @@ class OpenPosViewSet(viewsets.ViewSet):
         people back out reports the room rather than the turnstile.
 
         ``scans`` rides along for the scanner's own counter: what this device
-        and every door have scanned tonight, on every list of the event. It is
+        and every door have scanned for the event, on every list of it. It is
         here rather than behind an endpoint of its own because the door screen
         already asks for this after every scan and every minute, and the two
         figures are read side by side.
@@ -2662,8 +2598,13 @@ class OpenPosViewSet(viewsets.ViewSet):
                 "not_arrived": expected - entered_count,
                 "non_admission_entered": non_admission,
                 "items": items,
+                # In a series, the date this door's list is kept for, as its
+                # own figures are; on a list for every date, tonight's rather
+                # than the whole season's.
                 "scans": door_scans(
-                    event, request.auth if isinstance(request.auth, Device) else None
+                    event,
+                    request.auth if isinstance(request.auth, Device) else None,
+                    clist.subevent or evening_subevent(event),
                 ),
             }
         )
@@ -2760,19 +2701,6 @@ class OpenPosViewSet(viewsets.ViewSet):
             "credit_note": None,
             "refunded": False,
         }
-
-    def _reversed_positions(self, positions):
-        """The sold lines, negated, so the journal reads as a credit note."""
-        reversed_lines = []
-        for line in positions:
-            entry = dict(line)
-            for field in ("count", "line_total"):
-                value = entry.get(field)
-                if value is None:
-                    continue
-                entry[field] = -value if isinstance(value, int) else str(-Decimal(str(value)))
-            reversed_lines.append(entry)
-        return reversed_lines
 
     def _record_refund(self, request, order, sale, reason, *, settle_now):
         """

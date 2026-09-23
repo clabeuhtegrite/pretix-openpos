@@ -89,10 +89,126 @@ export const catalog = {
   ],
 };
 
-export const summary = {
-  since: new Date(new Date().setHours(6, 0, 0, 0)).toISOString(),
-  device: { count: 41, cash: "218.50", card: "96.00", total: "314.50", cancellations: 1, deposit_refunds: 7 },
-  event: { count: 128, cash: "742.00", card: "410.50", total: "1152.50", cancellations: 3, deposit_refunds: 19 },
+/** A device's or an evening's figures, in the shape the server answers with. */
+const figures = (
+  count: number, cash: string, card: string, total: string,
+  { cancellations = 0, cancelled_total = "0.00", deposit_refunds = 0 } = {},
+) => ({ count, cash, card, total, cancellations, cancelled_total, deposit_refunds });
+
+const product = (
+  item: number, name: string, count: number, total: string,
+  variation: number | null = null, variation_name: string | null = null,
+) => ({ item, variation, name, variation_name, count, total });
+
+/**
+ * What a full evening took, shaped exactly like `/openpos/summary/` answers.
+ *
+ * The figures add up the way the server guarantees they do — the categories
+ * and the deposits to the total, the devices to the total, cash and card to
+ * the total — so a screen that shows a sum that does not close is the screen's
+ * fault and not the fixture's.
+ *
+ * ?takings=empty : nothing sold yet ; ?takings=nights : a festival over two
+ * evenings ; ?takings=series : one date of a series ; ?testmode=1 adds the
+ * test-mode line.
+ */
+export const summary = (variant: string | null, testmode = false) => {
+  const evening = {
+    scope: { event: "Soirée d'automne", series: false, subevent: null as null | { id: number; name: string; date_from: string } },
+    since: "2026-09-26T17:02:00Z",
+    computed_at: new Date().toISOString(),
+    device: figures(198, "612.50", "348.00", "960.50", { cancellations: 1, cancelled_total: "-7.00", deposit_refunds: 31 }),
+    event: figures(486, "1391.50", "911.50", "2303.00", { cancellations: 2, cancelled_total: "-15.00", deposit_refunds: 64 }),
+    testmode: testmode ? figures(3, "23.00", "0.00", "23.00") : null,
+    categories: [
+      { id: 1, name: "Boissons", count: 236, total: "771.00", items: [
+        product(10, "Bière pression 25cl", 96, "288.00"),
+        product(11, "Bière pression 50cl", 41, "225.50"),
+        product(12, "Bière bouteille", 14, "56.00"),
+        product(13, "Vin", 18, "63.00", 131, "Rouge"),
+        product(13, "Vin", 6, "21.00", 132, "Blanc"),
+        product(14, "Soft", 37, "74.00"),
+        product(15, "Eau", 12, "12.00"),
+        product(16, "Café", 9, "13.50"),
+        product(17, "Cocktail maison", 3, "18.00"),
+      ] },
+      { id: 2, name: "Bouffe", count: 81, total: "319.00", items: [
+        product(30, "Assiette végé", 21, "147.00"),
+        product(31, "Frites", 44, "132.00"),
+        product(32, "Gâteau", 16, "40.00"),
+      ] },
+      { id: 3, name: "Entrée", count: 139, total: "1031.00", items: [
+        product(20, "Entrée soirée", 112, "896.00"),
+        product(21, "Entrée tarif réduit", 27, "135.00"),
+      ] },
+      { id: 4, name: "Soutien", count: 11, total: "140.00", items: [
+        product(40, "Adhésion annuelle", 5, "50.00"),
+        product(41, "T-shirt", 2, "30.00", 411, "S"),
+        product(41, "T-shirt", 3, "45.00", 412, "M"),
+        product(41, "T-shirt", 1, "15.00", 413, "L"),
+      ] },
+      { id: null, name: null, count: 3, total: "17.00", items: [
+        product(99, "Divers", 3, "17.00"),
+      ] },
+    ],
+    deposits: {
+      taken: { count: 212, total: "212.00" },
+      returned: { count: 187, total: "-187.00" },
+      total: "25.00",
+    },
+    unallocated: null as string | null,
+    devices: [
+      { name: "Caisse bar 1", serial: "TILL-BAR-1", current: true, ...figures(198, "612.50", "348.00", "960.50", { cancellations: 1, cancelled_total: "-7.00", deposit_refunds: 31 }) },
+      { name: "Caisse bar 2", serial: "TILL-BAR-2", current: false, ...figures(121, "318.00", "254.50", "572.50", { deposit_refunds: 33 }) },
+      { name: "Porte 1", serial: "DOOR-1", current: false, ...figures(96, "276.00", "212.00", "488.00", { cancellations: 1, cancelled_total: "-8.00" }) },
+      { name: "Porte 2", serial: "DOOR-2", current: false, ...figures(71, "185.00", "97.00", "282.00") },
+    ],
+    nights: [
+      { date: "2026-09-26", ...figures(486, "1391.50", "911.50", "2303.00", { cancellations: 2, cancelled_total: "-15.00", deposit_refunds: 64 }) },
+    ],
+    first: "2026-09-26T17:02:00Z",
+    last: "2026-09-27T01:48:00Z",
+  };
+
+  if (variant === "empty") {
+    return {
+      ...evening,
+      device: figures(0, "0.00", "0.00", "0.00"),
+      event: figures(0, "0.00", "0.00", "0.00"),
+      categories: [],
+      deposits: null,
+      devices: [],
+      nights: [],
+      first: null,
+      last: null,
+    };
+  }
+  if (variant === "nights") {
+    // The same total over two evenings, and a sale from the back office.
+    return {
+      ...evening,
+      devices: [
+        ...evening.devices.slice(0, 3),
+        { ...evening.devices[3], ...figures(70, "185.00", "85.00", "270.00") },
+        { name: null, serial: null, current: false, ...figures(1, "0.00", "12.00", "12.00") },
+      ],
+      nights: [
+        { date: "2026-09-25", ...figures(211, "602.00", "388.50", "990.50", { cancellations: 1, cancelled_total: "-8.00", deposit_refunds: 27 }) },
+        { date: "2026-09-26", ...figures(275, "789.50", "523.00", "1312.50", { cancellations: 1, cancelled_total: "-7.00", deposit_refunds: 37 }) },
+      ],
+    };
+  }
+  if (variant === "series") {
+    return {
+      ...evening,
+      scope: {
+        event: "Jeudis du collectif",
+        series: true,
+        subevent: { id: 12, name: "Scène ouverte", date_from: "2026-09-24T18:00:00Z" },
+      },
+    };
+  }
+  return evening;
 };
 
 export const history = {
@@ -160,10 +276,6 @@ export const attendance = {
     { id: 21, name: "Entrée tarif réduit", inside: 46, entered: 48, expected: 70 },
   ],
   scans: {
-    // The last six o'clock in the morning: "tonight", as the server counts it.
-    since: new Date(
-      new Date().setHours(6, 0, 0, 0) - (new Date().getHours() < 6 ? 86_400_000 : 0),
-    ).toISOString(),
     device: { admitted: 64, refused: 3, other: 1, offline: 12 },
     event: { admitted: 196, refused: 7, other: 4, offline: 12 },
     devices: [

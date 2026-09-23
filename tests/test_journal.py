@@ -386,9 +386,9 @@ def test_a_row_cannot_be_edited_or_deleted_after_the_fact(till, event, ticket):
 def test_a_reversal_negates_a_line_whose_count_never_arrived(till, event, ticket):
     # Journal rows are JSON and outlive the code that wrote them; a line from
     # an older shape must not take the cancellation down with it.
-    from pretix_openpos.api.views import OpenPosViewSet
+    from pretix_openpos.models import reversed_positions
 
-    reversed_lines = OpenPosViewSet()._reversed_positions(
+    reversed_lines = reversed_positions(
         [{"item_name": "Bière", "count": None, "line_total": None}]
     )
 

@@ -142,9 +142,10 @@
                 <div class="alert alert-danger">
                     {% blocktrans trimmed %}
                         These sales were cancelled, and the refund did not go through. The money
-                        is still on the customer's card. Refund it from the SumUp dashboard using
-                        the reference below — pretix will not try again on its own, and the
-                        cancellation itself stands.
+                        is still on the customer's card. Refund it with “Create a refund” on the
+                        order, which sends it back through SumUp, or from the SumUp dashboard using
+                        the reference below. Nothing tries again on its own, and the cancellation
+                        itself stands.
                     {% endblocktrans %}
                 </div>
                 <table class="table table-condensed">
@@ -171,6 +172,66 @@
                     {% endfor %}
                     </tbody>
                 </table>
+            </div>
+        </div>
+    {% endif %}
+
+    {% comment %}
+        Till sales pretix cancelled that the journal still counts: cancelled in
+        pretix before Open POS listened for it, or while writing it failed. Not
+        filtered by evening, since the takings of whichever night they were sold
+        on are wrong until they are written.
+    {% endcomment %}
+    {% if missed_cancellations %}
+        <div class="row">
+            <div class="col-md-12">
+                <h3>{% trans "Cancelled in pretix, still counted here" %}</h3>
+                <div class="alert alert-warning">
+                    {% blocktrans trimmed %}
+                        pretix cancelled these till sales without the journal hearing of it, so the
+                        takings still count them. Writing them to the journal reverses each one on
+                        the date pretix cancelled it, in the name of whoever did. It only adds rows:
+                        nothing already written changes.
+                    {% endblocktrans %}
+                </div>
+                <table class="table table-condensed">
+                    <thead>
+                    <tr>
+                        <th>#</th>
+                        <th>{% trans "Date" %}</th>
+                        <th>{% trans "Order" %}</th>
+                        <th>{% trans "Till" %}</th>
+                        <th class="text-right">{% trans "Total" %}</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    {% for sale in missed_cancellations %}
+                        <tr>
+                            <td>{{ sale.seq }}</td>
+                            <td>{{ sale.datetime|date:"SHORT_DATETIME_FORMAT" }}</td>
+                            <td>
+                                <a href="{% url "control:event.order" organizer=request.event.organizer.slug event=request.event.slug code=sale.order_code %}">
+                                    {{ sale.order_code }}
+                                </a>
+                                {% if sale.testmode %}
+                                    <span class="label label-warning">{% trans "test" %}</span>
+                                {% endif %}
+                            </td>
+                            <td>{{ sale.device_name|default:sale.device_serial|default:"—" }}</td>
+                            <td class="text-right">{{ sale.total|money:currency }}</td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% if can_write_orders %}
+                    <form action="{% url "plugins:pretix_openpos:sales.catch_up" organizer=request.event.organizer.slug event=request.event.slug %}"
+                          method="post" style="margin-bottom: 15px;">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn-primary">
+                            {% trans "Write them to the journal" %}
+                        </button>
+                    </form>
+                {% endif %}
             </div>
         </div>
     {% endif %}
@@ -255,6 +316,100 @@
     {% endif %}
 
     {% comment %}
+        What the takings above are made of, product by product: the same
+        computation as the till's closing screen, and the same rows as the
+        table above, filter included. Under the alerts rather than above them,
+        because it runs as long as the menu and they are what needs doing.
+    {% endcomment %}
+    {% if detail.categories or detail.deposits %}
+        <div class="row">
+            <div class="col-md-7">
+                <h3>{% trans "By product" %}</h3>
+                <table class="table table-condensed">
+                    <thead>
+                    <tr>
+                        <th>{% trans "Product" %}</th>
+                        <th class="text-right">{% trans "Quantity" %}</th>
+                        <th class="text-right">{% trans "Amount" %}</th>
+                    </tr>
+                    </thead>
+                    {% for group in detail.categories %}
+                        {# One body per category, headed by the category's own row. #}
+                        <tbody>
+                        <tr class="active">
+                            <th>{% if group.name %}{{ group.name }}{% else %}{% trans "No category" context "takings" %}{% endif %}</th>
+                            <th class="text-right">{{ group.count }}</th>
+                            <th class="text-right">{{ group.total|money:currency }}</th>
+                        </tr>
+                        {% for line in group.items %}
+                            <tr>
+                                <td>
+                                    {{ line.name }}
+                                    {% if line.variation_name %}<small class="text-muted">{{ line.variation_name }}</small>{% endif %}
+                                </td>
+                                <td class="text-right">{{ line.count }}</td>
+                                <td class="text-right">{{ line.total|money:currency }}</td>
+                            </tr>
+                        {% endfor %}
+                        </tbody>
+                    {% endfor %}
+                </table>
+                {% if detail.unallocated %}
+                    <p class="text-muted">
+                        {% blocktrans trimmed with amount=detail.unallocated|money:currency %}
+                            {{ amount }} of the takings comes from journal entries that name no product.
+                        {% endblocktrans %}
+                    </p>
+                {% endif %}
+            </div>
+            <div class="col-md-5">
+                {% if detail.deposits %}
+                    <h3>{% trans "Deposits" %}</h3>
+                    <table class="table table-condensed">
+                        <tbody>
+                        <tr>
+                            <td>{% trans "Taken" context "deposits" %}</td>
+                            <td class="text-right">{{ detail.deposits.taken.count }}</td>
+                            <td class="text-right">{{ detail.deposits.taken.total|money:currency }}</td>
+                        </tr>
+                        <tr>
+                            <td>{% trans "Handed back" context "deposits" %}</td>
+                            <td class="text-right">{{ detail.deposits.returned.count }}</td>
+                            <td class="text-right">{{ detail.deposits.returned.total|money:currency }}</td>
+                        </tr>
+                        </tbody>
+                        <tfoot>
+                        <tr>
+                            <th colspan="2">{% trans "Balance" context "deposits" %}</th>
+                            <th class="text-right">{{ detail.deposits.total|money:currency }}</th>
+                        </tr>
+                        </tfoot>
+                    </table>
+                    <p class="text-muted">
+                        {% trans "Kept apart from the products: a deposit is owed to whoever brings the cup back." %}
+                    </p>
+                {% endif %}
+                {% if detail.cancellations > 0 %}
+                    {% comment %}
+                        Said out loud: every amount on this page is net, so a
+                        product short by exactly a cancelled sale is not short.
+                        Above zero only, as on the till: an evening that saw
+                        pretix bring a sale back and not cancel it counts one
+                        cancellation less, which is nothing to announce.
+                    {% endcomment %}
+                    <p class="text-muted">
+                        {% blocktrans trimmed count counter=detail.cancellations with amount=detail.cancelled_total|money:currency %}
+                            {{ counter }} sale cancelled, {{ amount }}: already taken off every figure on this page.
+                        {% plural %}
+                            {{ counter }} sales cancelled, {{ amount }}: already taken off every figure on this page.
+                        {% endblocktrans %}
+                    </p>
+                {% endif %}
+            </div>
+        </div>
+    {% endif %}
+
+    {% comment %}
         Nights, not calendar days: a till day starts at six in the morning
         because an evening crosses midnight. Asking for one date gives that
         whole evening, small hours included.
@@ -323,7 +478,11 @@
                         {% endif %}
                     </td>
                     <td>
-                        {{ sale.device_name|default:sale.device_serial|default:"—" }}
+                        {% if sale.from_back_office %}
+                            {% trans "pretix back office" %}
+                        {% else %}
+                            {{ sale.device_name|default:sale.device_serial|default:"—" }}
+                        {% endif %}
                         {% if sale.testmode %}
                             <span class="label label-warning">{% trans "test" %}</span>
                         {% endif %}

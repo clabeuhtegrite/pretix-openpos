@@ -64,6 +64,7 @@ import {
   savePairing, saveBasket, saveDeviceReport, saveFailures, saveQueue,
 } from "./storage";
 import { fillStorage } from "./test/setup";
+import { noTakings } from "./test/takings";
 import type { Catalog, DrawerState, JournalLine, PosConfig, SaleResult } from "./types";
 
 /**
@@ -192,11 +193,7 @@ beforeEach(() => {
   apiMock.catalog.mockResolvedValue(catalog);
   apiMock.checkout.mockResolvedValue(sold());
   apiMock.history.mockResolvedValue({ device: "TILL1", results: [], truncated: false });
-  apiMock.summary.mockResolvedValue({
-    since: "2026-08-16T04:00:00Z",
-    device: null,
-    event: { count: 0, cancellations: 0, cash: "0.00", card: "0.00", total: "0.00" },
-  });
+  apiMock.summary.mockResolvedValue(noTakings());
   apiMock.posEvents.mockResolvedValue({ results: [] });
   apiMock.updateDevice.mockResolvedValue({ unique_serial: "TILL1" });
   apiMock.attendance.mockResolvedValue({
@@ -470,10 +467,7 @@ describe("hearing the till", () => {
   it("says something the moment sound is switched back on", async () => {
     // Otherwise the operator has to ring a sale up to find out whether the
     // switch did anything.
-    apiMock.summary.mockResolvedValue({
-      since: "2026-08-16T04:00:00Z", device: null,
-      event: { count: 0, cancellations: 0, cash: "0.00", card: "0.00", total: "0.00" },
-    });
+    apiMock.summary.mockResolvedValue(noTakings());
     const { user } = show();
     await ready();
     await user.click(screen.getByRole("button", { name: "settings" }));

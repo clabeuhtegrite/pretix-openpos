@@ -12,10 +12,11 @@ vi.mock("../api", async (importOriginal) => {
   return { ...actual, api: { ...actual.api, posEvents, summary } };
 });
 
-import { locale, t } from "../i18n";
+import { t, tn } from "../i18n";
 import { formatMoney } from "../money";
 import { saveQueue } from "../storage";
 import { eventDay } from "../events";
+import { figures, noTakings } from "../test/takings";
 import type { Pairing, PosEvent, QueuedSale, SummaryResponse, UnavailableEvent } from "../types";
 import SettingsPanel from "./SettingsPanel";
 
@@ -34,11 +35,14 @@ const pairing: Pairing = {
   deviceName: "Caisse bar",
 };
 
-const takings: SummaryResponse = {
-  since: "2026-08-16T04:00:00Z",
-  device: { count: 12, cancellations: 0, cash: "120.00", card: "80.00", total: "200.00" },
-  event: { count: 30, cancellations: 0, cash: "300.00", card: "200.00", total: "500.00" },
-};
+const takings: SummaryResponse = noTakings({
+  device: figures(12, "120.00", "80.00", "200.00"),
+  event: figures(30, "300.00", "200.00", "500.00"),
+  devices: [
+    { name: "Caisse porte", serial: "TILL2", current: false, ...figures(18, "180.00", "120.00", "300.00") },
+    { name: "Caisse bar", serial: "TILL1", current: true, ...figures(12, "120.00", "80.00", "200.00") },
+  ],
+});
 
 const events: PosEvent[] = [
   { slug: "festival", organizer: "demo", name: "Festival", currency: "EUR", testmode: false, date_from: null },
@@ -154,13 +158,20 @@ describe("the sound", () => {
 });
 
 describe("the takings", () => {
-  it("shows this till apart from the event", async () => {
+  it("are the event's, under the event's name for them", async () => {
+    show();
+
+    expect(await screen.findByText(t("summary.title"))).toBeDefined();
+    expect(t("summary.title")).not.toMatch(/jour|today/i);
+  });
+
+  it("shows this device apart from the event", async () => {
     const { container } = show();
 
     await waitFor(() => expect(screen.getByText(t("summary.thisTill"))).toBeDefined());
-    const rows = container.querySelectorAll("tbody tr");
-    expect(within(rows[0] as HTMLElement).getByText(formatMoney(20_000, "EUR"))).toBeDefined();
-    expect(within(rows[1] as HTMLElement).getByText(formatMoney(50_000, "EUR"))).toBeDefined();
+    const lines = container.querySelectorAll(".panel > .takings-lines > li");
+    expect(within(lines[0] as HTMLElement).getByText(formatMoney(20_000, "EUR"))).toBeDefined();
+    expect(within(lines[1] as HTMLElement).getByText(formatMoney(50_000, "EUR"))).toBeDefined();
   });
 
   it("shows only the event's when the server reports no till of its own", async () => {
@@ -171,36 +182,72 @@ describe("the takings", () => {
     expect(screen.queryByText(t("summary.thisTill"))).toBeNull();
   });
 
-  it("says out loud that cancellations are already netted off", async () => {
-    // A drawer short by exactly a cancelled sale is not short at all, and
-    // whoever counts it at 2am should not have to work that out.
-    summary.mockResolvedValue({ ...takings, event: { ...takings.event, cancellations: 2 } });
-    show();
-
-    await waitFor(() =>
-      expect(screen.getByText(t("summary.cancellations", { n: 2 }))).toBeDefined(),
-    );
-  });
-
-  it("says out loud that deposits handed back are netted off too", async () => {
-    // A night of returned cups is money out of the drawer with not one sale
-    // to show for it, so the figure above can look wrong when it is right.
+  it("names the date of a series, since the event field names only the series", async () => {
     summary.mockResolvedValue({
       ...takings,
-      event: { ...takings.event, deposit_refunds: 7 },
+      scope: {
+        event: "Jeudis",
+        series: true,
+        subevent: { id: 3, name: "Scène ouverte", date_from: "2026-08-20T18:00:00Z" },
+      },
     });
     show();
 
-    await waitFor(() =>
-      expect(screen.getByText(t("summary.depositRefunds", { n: 7 }))).toBeDefined(),
-    );
+    expect(await screen.findByText(/Jeudis · Scène ouverte · /)).toBeDefined();
   });
 
-  it("keeps quiet when there were none", async () => {
+  it("keeps the detail off this screen", async () => {
+    // By product it runs as long as the menu, and the buttons underneath —
+    // unpairing among them — would end up a long scroll away.
     show();
 
     await waitFor(() => expect(screen.getByText(t("summary.allTills"))).toBeDefined());
+    expect(screen.queryByText(t("takings.byProduct"))).toBeNull();
     expect(screen.queryByText(/annul|cancell/i)).toBeNull();
+  });
+
+  it("opens the detail, and closing it comes back here", async () => {
+    const { user, onClose } = show();
+
+    await user.click(await screen.findByRole("button", { name: t("summary.detail") }));
+    expect(screen.getByRole("heading", { name: t("takings.title"), level: 2 })).toBeDefined();
+    expect(screen.getByText("Caisse porte")).toBeDefined();
+
+    const closes = screen.getAllByRole("button", { name: t("settings.close") });
+    await user.click(closes[closes.length - 1]);
+
+    expect(screen.queryByRole("heading", { name: t("takings.title"), level: 2 })).toBeNull();
+    expect(screen.getByText(t("settings.title"))).toBeDefined();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("closes only the detail on a tap beside it", async () => {
+    // The detail sits inside the settings in React's tree, so the tap on its
+    // backdrop would otherwise go on to reach theirs and close both.
+    const { user, container, onClose } = show();
+    await user.click(await screen.findByRole("button", { name: t("summary.detail") }));
+
+    await user.click(container.querySelector(".overlay-top") as HTMLElement);
+
+    expect(screen.queryByRole("heading", { name: t("takings.title"), level: 2 })).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("asks the server again from the detail", async () => {
+    const { user } = show();
+    await user.click(await screen.findByRole("button", { name: t("summary.detail") }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: t("attendance.refresh") })).toHaveProperty(
+        "disabled",
+        false,
+      ),
+    );
+    summary.mockResolvedValue({ ...takings, event: figures(31, "303.00", "200.00", "503.00") });
+
+    await user.click(screen.getByRole("button", { name: t("attendance.refresh") }));
+
+    expect(await screen.findAllByText(formatMoney(50_300, "EUR"))).not.toHaveLength(0);
+    expect(summary).toHaveBeenCalledTimes(2);
   });
 
   it("does not lock the panel when the server will not say", async () => {
@@ -210,6 +257,7 @@ describe("the takings", () => {
     await waitFor(() => expect(summary).toHaveBeenCalled());
     // Still fully usable: this is a report, not a gate.
     expect(screen.getByRole("button", { name: t("settings.close") })).toBeDefined();
+    expect(screen.queryByRole("button", { name: t("summary.detail") })).toBeNull();
   });
 
   it("says so, and offers another go, rather than three dots for ever", async () => {
@@ -223,19 +271,6 @@ describe("the takings", () => {
     await user.click(screen.getByRole("button", { name: t("summary.retry") }));
 
     expect(await screen.findByText(t("summary.allTills"))).toBeDefined();
-  });
-
-  it("names the till day it is reporting on", async () => {
-    // A till day starts at six in the morning, so a bar that closes at 5:40
-    // and counts the drawer at 6:15 reads zeros everywhere — true, and
-    // useless without this line.
-    const clock = new Date(takings.since).toLocaleTimeString(locale, {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-    show();
-
-    expect(await screen.findByText(t("summary.since", { time: clock }))).toBeDefined();
   });
 
   it("owns up to what this till has not managed to send", async () => {
@@ -252,7 +287,7 @@ describe("the takings", () => {
 
     expect(
       await screen.findByText(
-        t("summary.queued", { n: 1, amount: formatMoney(1200, "EUR") }),
+        tn("summary.queued", 1, { amount: formatMoney(1200, "EUR") }),
       ),
     ).toBeDefined();
   });
@@ -437,68 +472,5 @@ describe("getting back to the till", () => {
     await user.click(screen.getByText(t("settings.title")));
 
     expect(onClose).not.toHaveBeenCalled();
-  });
-});
-
-describe("money paid back on another day's sale", () => {
-  it("says how much, because nothing else on this screen would", async () => {
-    // Somebody came back a week later and was refunded out of tonight's
-    // drawer. The takings are short by exactly that much — correctly — and a
-    // volunteer counting cash cannot tell that from a miscount.
-    summary.mockResolvedValue({
-      ...takings,
-      event: {
-        ...takings.event,
-        cash: "270.00",
-        total: "470.00",
-        earlier_days: { count: 1, total: "-30.00" },
-      },
-    });
-    show();
-
-    expect(
-      await screen.findByText(
-        t("summary.earlierDays", { n: 1, amount: formatMoney(3000, "EUR") }),
-      ),
-    ).toBeTruthy();
-  });
-
-  it("says nothing on an ordinary evening", async () => {
-    // A line reading "0,00 paid back on 0 earlier sales" on every closing
-    // screen is noise that trains people to skip the section that matters.
-    summary.mockResolvedValue(takings);
-    show();
-
-    await screen.findByText(t("summary.allTills"));
-    expect(screen.queryByText(/earlier day|autre jour/)).toBeNull();
-  });
-});
-
-describe("a till with a cash drawer", () => {
-  // Its cash is counted blind when the drawer closes, so the figure the count
-  // would be checked against is not handed out one tap away from the count.
-  const blind: SummaryResponse = {
-    since: "2026-08-16T04:00:00Z",
-    device: { count: 12, cancellations: 0, cash: null, card: "80.00", total: null },
-    event: { count: 30, cancellations: 0, cash: null, card: "200.00", total: null },
-    drawer: { name: "Bar" },
-  };
-
-  it("shows a dash where the cash and the total would be, and says why", async () => {
-    summary.mockResolvedValue(blind);
-    const { container } = show();
-
-    expect(await screen.findByText(t("summary.drawerHidden", { name: "Bar" }))).toBeDefined();
-    const table = container.querySelector("table.takings") as HTMLElement;
-    expect(within(table).getAllByText("—")).toHaveLength(4);
-    expect(within(table).getByText(formatMoney(8000, "EUR"))).toBeDefined();
-    expect(within(table).queryByText(formatMoney(0, "EUR"))).toBeNull();
-  });
-
-  it("says nothing of a drawer on a till that has none", async () => {
-    show();
-
-    await screen.findByText(t("summary.thisTill"));
-    expect(screen.queryByText(t("summary.drawerHidden", { name: "Bar" }))).toBeNull();
   });
 });

@@ -600,34 +600,27 @@ def test_the_back_office_can_close_on_an_amount(device):
     assert entry.source == PosDrawerEntry.SOURCE_BACKOFFICE
 
 
-# -- what the takings screen shows a drawer till -------------------------------
+# -- the takings screen is not the drawer ------------------------------------
 
 
 @pytest.mark.django_db
-def test_a_drawer_till_is_not_shown_the_cash_it_is_about_to_count(till, device, beer):
+def test_the_takings_screen_counts_sales_and_never_what_the_drawer_holds(till, device, beer):
+    # The event's takings stay whole on a till with a drawer: they are what
+    # the evening sold, and were asked for as such. What the drawer should
+    # hold is another figure — the float, money put in and taken out — and
+    # the till is only ever given it next to a count.
     give_drawer(device)
     open_it(till)
     sell(till, a_beer(beer), idempotency_key="sale-00001")
     sell(till, a_beer(beer), idempotency_key="sale-00002", payment_type="card")
+    move(till, "in", "50.00")
 
     summary = till.get("summary").json()
 
-    assert summary["drawer"] == {"name": "Bar"}
-    for bucket in (summary["device"], summary["event"]):
-        assert bucket["cash"] is None
-        assert bucket["total"] is None
-        assert bucket["card"] == "3.00"
-        assert bucket["count"] == 2
-
-
-@pytest.mark.django_db
-def test_a_till_without_a_drawer_still_sees_its_cash(till, beer):
-    sell(till, a_beer(beer))
-
-    summary = till.get("summary").json()
-
-    assert summary["drawer"] is None
     assert summary["device"]["cash"] == "3.00"
+    assert summary["event"]["cash"] == "3.00"
+    assert summary["event"]["card"] == "3.00"
+    assert "drawer" not in summary
 
 
 # -- the ledger itself -----------------------------------------------------

@@ -6,7 +6,7 @@
  *               ?offline=1  ?queue=3  ?scans=3  ?testmode=1  ?update=1  ?photos=1
  *               ?terminal=waiting|paid|failed|stalled|reprice  ?checkout=fail
  *               ?events=one|blocked|mixed  ?load=refused|series  ?redeem=fail
- *               ?drawer=closed|open|stale|counted|moved
+ *               ?takings=empty|nights|series  ?drawer=closed|open|stale|counted|moved
  */
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
@@ -235,18 +235,9 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   // ?photos=1 met des photos sur un produit sur deux.
   if (url.includes("/openpos/catalog/"))
     return stuck(url) ?? json(q.get("photos") ? fx.withPhotos(fx.catalog) : fx.catalog);
-  // Une caisse avec une caisse espèces ne voit ni ses espèces ni son total.
+  // ?takings= : empty (rien de vendu), nights (deux soirées), series (une date).
   if (url.includes("/openpos/summary/"))
-    return json(
-      drawer
-        ? {
-            ...fx.summary,
-            device: { ...fx.summary.device, cash: null, total: null },
-            event: { ...fx.summary.event, cash: null, total: null },
-            drawer: { name: drawer.drawer.name },
-          }
-        : fx.summary,
-    );
+    return json(fx.summary(q.get("takings"), !!q.get("testmode")));
   if (url.includes("/openpos/history/")) return json({ device: fx.pairing.serial, ...fx.history });
   if (url.includes("/openpos/attendance/")) return json(fx.attendance);
   if (url.includes("/openpos/offline/")) return json(fx.offlineSnapshot);

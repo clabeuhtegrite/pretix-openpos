@@ -1,6 +1,6 @@
 # Fonctionnement de pretix-openpos
 
-Documentation de fonctionnement du plugin, version 0.18.0. Elle couvre trois
+Documentation de fonctionnement du plugin, version 0.20.0. Elle couvre trois
 choses, dans cet ordre : ce que le plugin ajoute à pretix, comment le mettre en
 service, et ce qui se passe exactement quand un bénévole encaisse.
 
@@ -16,7 +16,7 @@ Le produit est en deux morceaux qui ne partagent aucun code :
 | Morceau | Où il vit | Ce qu'il fait |
 |---|---|---|
 | **Plugin pretix** (`pretix_openpos/`) | Dans le process pretix | Canal de vente, API caisse, journal, écrans back-office |
-| **PWA** (`frontend/`) | Dans le navigateur de la tablette | Catalogue, panier, pavé numérique, scan, relevé |
+| **PWA** (`frontend/`) | Dans le navigateur de la tablette | Catalogue, panier, pavé numérique, scan, recette |
 
 La PWA est compilée par Vite dans le répertoire statique du plugin
 (`pretix_openpos/static/pretix_openpos/pwa/`) et servie par Django. Il n'y a pas
@@ -33,7 +33,7 @@ Tablette / téléphone                        Serveur pretix
 │  pavé de paiement        │◀──────────────│  POST /openpos/checkout          │
 │  scan QR (jsQR)          │  commande +   │  GET  /openpos/summary           │
 │  historique + annulation │  verdict      │  GET  /openpos/attendance        │
-│  relevé du jour          │               │  GET  /openpos/history           │
+│  recette de l'événement  │               │  GET  /openpos/history           │
 │  caisse espèces          │               │  POST /openpos/cancel            │
 │                          │               │  GET  /openpos/drawer (+4 POST)  │
 └──────────────────────────┘               │  ├─ OrderCreateSerializer        │
@@ -106,6 +106,14 @@ une commande déjà payée).
 `payment_control_render()` affiche « reçu / rendu » sur la page de commande du
 back-office.
 
+`openpos_card` sait aussi **rendre l'argent depuis pretix** : pour une carte
+qu'un lecteur de l'organisateur a encaissée, `payment_refund_supported()` fait
+proposer « Montant total » dans la fenêtre de remboursement de pretix, et
+`execute_refund()` envoie le remboursement à SumUp, comme la caisse le fait
+quand elle annule (§5bis, *Une vente annulée depuis pretix*). Pas pour une carte
+prise sur le téléphone de quelqu'un, ni pour une carte déjà remboursée, ni en
+partie.
+
 ### 2.3 Un profil de sécurité pour les devices
 
 [security.py](../pretix_openpos/security.py) déclare `OpenPosSecurityProfile`, une
@@ -141,13 +149,13 @@ jamais supprimée : `save()` sur une ligne existante et `delete()` lèvent une
 |---|---|
 | `seq` | Compteur sans trou, par événement, à partir de 1 |
 | `device`, `device_serial`, `device_name` | La caisse. Dénormalisé pour survivre à la suppression du device |
-| `cashier` | Étiquette libre saisie dans l'app, pour distinguer deux bénévoles sur une même tablette |
+| `cashier` | Étiquette libre saisie dans l'app, pour distinguer deux bénévoles sur une même tablette ; sur une ligne écrite par le back-office, le compte pretix ou le jeton d'API qui a agi |
 | `order`, `order_code` | La commande pretix. Dénormalisé : les commandes de test sont purgeables |
 | `testmode` | Écrit à la création, pas déduit après coup (voir §6.4) |
 | `positions` | Instantané JSON de ce qui a été vendu, lisible même si le produit est renommé ou supprimé |
 | `idempotency_key` | Unique par événement |
-| `kind` | `sale` ou `cancellation` : une annulation est une ligne neuve, jamais une modification |
-| `cancels_seq` | Pour une annulation, le `seq` de la vente qu'elle contrepasse |
+| `kind` | `sale`, `cancellation`, `deposit_refund` (consigne rendue, §5quater) ou `reactivation` (§5bis) : une annulation est une ligne neuve, jamais une modification |
+| `cancels_seq` | Pour une annulation, le `seq` de la ligne qu'elle contrepasse ; pour une réactivation, celui de l'annulation qu'elle défait |
 | `reason` | Le motif saisi par l'opérateur, pour qui lira le journal plus tard |
 | `previous_hash`, `hash`, `hash_version` | La chaîne d'intégrité |
 
@@ -171,11 +179,15 @@ laquelle son argent est entré, dans le champ `drawer_session`.
 |---|---|---|
 | `/control/event/<org>/<ev>/openpos/` | Réglages (liste de contrôle d'accès) | `event.settings.general:write` |
 | `…/openpos/categories/` | Qui vend quoi : la catégorie réservée au bar ou à la porte | `event.items:write` |
-| `…/openpos/sales/` | Journal des ventes + relevé | `event.orders:read` |
+| `…/openpos/sales/` | Journal des ventes + recette par caisse et par produit | `event.orders:read` |
 | `/control/organizer/<org>/openpos/arrivals/` | Affluence à l'entrée, tous événements passés | `event.orders:read` sur ≥ 1 événement |
 | `/control/organizer/<org>/openpos/devices/` | Appareils de caisse : rôle, lecteur et caisse espèces de chacun | `organizer.devices:write` |
 | `/control/organizer/<org>/openpos/sumup/` | Lecteurs de carte : le compte SumUp et ses lecteurs | `organizer.devices:write` |
 | `/control/organizer/<org>/openpos/drawers/` | Caisses espèces : les tiroirs, l'historique de chacun et le rapport de chaque soirée (§5septies) | `organizer.devices:write` ; en lecture, `event.orders:read` sur **tous** les événements |
+
+La page Ventes porte aussi une action, `…/openpos/sales/catch-up/` (POST,
+`event.orders:write`), qui écrit au journal les annulations que pretix a faites
+sans lui (§5bis).
 
 Les quatre derniers sont au niveau *organisateur*, et pas par événement : une
 caisse est appairée une fois, un lecteur et un tiroir appartiennent à
@@ -346,7 +358,7 @@ En Docker/Kubernetes, [`deploy/Dockerfile`](../deploy/Dockerfile) intègre le pl
 
 ```bash
 cd frontend && npm run build && cd ..
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.18.0 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.20.0 .
 ```
 
 Deux pièges :
@@ -733,18 +745,25 @@ Sous les boutons, deux lignes :
 - **« Cet appareil : 64 admis · 3 refusés »**, suivi de « 1 sans entrée » pour
   un t-shirt scanné et de « 2 à envoyer » pour les scans que pretix n'a pas
   encore reçus ;
-- **« Ce soir, toutes portes : 196 admis »**.
+- **« Cet événement, toutes portes : 196 admis »**.
 
 Ce compteur était tenu par l'écran, et repartait à zéro dès que l'app se
 rechargeait — ce qu'iOS fait à une app laissée un moment en arrière-plan : c'est
 le retour des scanneurs de la première soirée. Il vient maintenant de pretix, par
-le bloc `scans` de `attendance/`, compté sur les lignes de check-in de la soirée
-(depuis 6 h, comme le relevé de caisse) :
+le bloc `scans` de `attendance/`, compté sur les lignes de check-in de tout
+l'événement, quel que soit le jour du scan. La 0.18.0 ne comptait que la soirée,
+depuis 6 h comme le relevé de caisse, et un téléphone qui avait fait entrer
+soixante-dix personnes y lisait zéro les jours suivants. Ce qui est compté :
 
 - un **scan** est un check-in arrivé par l'API de scan avec un code
   (`raw_source_type` renseigné), de cette app ou de pretixSCAN. Le pointage fait
   à la vente n'en est pas un, ni un pointage automatique ;
-- entrées seulement, sur toutes les listes de l'événement ;
+- entrées seulement, sur toutes les listes de l'événement. Dans une série, le
+  compteur suit une date : celle de la liste si elle est réservée à une date,
+  comme les autres chiffres de la liste, sinon celle que la caisse vend ce soir
+  (la plus proche s'il n'y en a pas ce soir). Il compte les scans des portes de
+  cette date, et ceux de ses billets passés à une porte ouverte à toutes les
+  dates ;
 - **admis** : accepté pour un produit d'admission ; **refusés** : tous les
   refus, y compris ceux envoyés après coup ; **sans entrée** : accepté pour un
   produit qui ne fait entrer personne ; **hors ligne** : parmi les admis, ceux
@@ -753,12 +772,12 @@ le bloc `scans` de `attendance/`, compté sur les lignes de check-in de la soir�
   version plus ancienne envoyait sans marque.
 
 L'app y ajoute ce que le serveur ne peut pas encore savoir : les scans répondus
-depuis la dernière lecture, et ceux qui attendent dans la file. Le dernier
-chiffre reçu est gardé sur l'appareil pour la soirée, et une reprise qui envoie
-des scans l'y reporte : une app rechargée sans réseau rouvre sur le chiffre de la
-soirée, pas sur zéro. Pendant qu'une reprise vide la file, le compteur ne
-redescend pas : les scans envoyés restent comptés jusqu'à ce que le chiffre du
-serveur les compte.
+depuis la dernière lecture, et ceux qui attendent dans la file, de quelque soir
+qu'ils datent. Le dernier chiffre reçu est gardé sur l'appareil, par événement,
+et une reprise qui envoie des scans l'y reporte : une app rechargée sans réseau
+rouvre sur le chiffre de l'événement, pas sur zéro. Pendant qu'une reprise vide
+la file, le compteur ne redescend pas : les scans envoyés restent comptés
+jusqu'à ce que le chiffre du serveur les compte.
 
 Le détail de l'effectif (bouton 👥) ajoute un tableau **par appareil** : entrés,
 refusés, hors ligne, le plus actif en tête, les scans du back-office sur une
@@ -804,10 +823,10 @@ documents**, là où un tableur aurait changé une ligne :
    facture, sa propre ligne de journal.
 
 Conséquence directe : les recettes restent **la somme de la colonne**. Une
-annulation étant négative, le tiroir se réconcilie sans arithmétique — et le
-relevé le dit explicitement (« 2 annulations sont déjà déduites de ces
-montants »), parce qu'une caisse qui semble manquer exactement le montant d'une
-vente annulée ne manque rien du tout.
+annulation étant négative, le tiroir se réconcilie sans arithmétique — et la
+recette le dit explicitement (« 2 ventes annulées, −15,00 € : déjà déduites de
+tous les montants ici »), parce qu'une caisse qui semble manquer exactement le
+montant d'une vente annulée ne manque rien du tout.
 
 ### L'argent ne bouge qu'une fois
 
@@ -838,6 +857,61 @@ comme ce qui s'est passé : un avoir imputé sur une vente neuve.
 - **Le remboursement partiel.** Une vente s'annule en entier. Reprendre les
   articles au panier, en retirer un et réencaisser fait le même travail, avec
   une piste écrite en trois documents plutôt qu'une modification silencieuse.
+
+### Une vente annulée depuis pretix
+
+Une vente de caisse peut aussi s'annuler hors de la caisse : bouton *Annuler* de
+la commande dans le back-office, API de pretix, annulation d'un événement
+entier. pretix prévient le plugin (`order_canceled`), qui écrit alors lui-même
+l'annulation au journal ([backoffice.py](../pretix_openpos/backoffice.py)) :
+
+- **une ligne neuve**, comme depuis la caisse, qui contrepasse la vente et, s'il
+  y en avait, la consigne rendue dans le même panier — le client avait payé le
+  net, c'est le net qui sort de la recette ;
+- **au nom de qui a annulé** : le compte pretix (son nom, à défaut son e-mail),
+  ou le nom du jeton d'API ; vide quand pretix ne nomme personne, un client qui
+  annule lui-même par exemple. Le commentaire saisi devient le motif ;
+- **sur aucune caisse** : la page Ventes la range sur sa propre ligne,
+  *back-office pretix*, et le relevé d'une caisse ne la compte pas, puisque rien
+  n'est sorti de son tiroir. Le total de la soirée, lui, baisse ;
+- **frais d'annulation gardés** : la ligne ne contrepasse que le reste, et porte
+  les frais comme une ligne à part, pour que la colonne tombe juste sur ce que
+  pretix garde.
+
+La caisse voit ensuite la vente « annulée » et ne propose plus de l'annuler.
+Quand c'est la caisse qui annule, rien de tout cela ne se déclenche : elle
+écrit sa propre ligne, avec sa clé, une seule fois.
+
+**L'argent.** pretix enchaîne sur sa fenêtre de remboursement. Espèces : rien ne
+change, on rembourse à la main. Carte encaissée sur un lecteur : la ligne
+*Terminal de paiement (Open POS)* propose « Montant total », déjà cochée ;
+valider demande à SumUp de rembourser la transaction **en entier**, sans le
+lecteur ni la carte, exactement comme `cancel/` le fait pour la caisse. SumUp
+refuse : pretix marque le remboursement échoué, et la page Ventes le liste. SumUp
+ne répond pas : le message demande de vérifier la transaction dans l'app SumUp
+avant de recommencer, puisque la demande a pu passer. Rembourser une partie
+seulement se fait depuis l'app SumUp. Si personne ne rembourse, l'annulation
+reste au journal : c'est pretix qui dit ce qui est vendu, et la commande y
+apparaît avec un montant à rembourser.
+
+**La réactivation.** Une commande annulée puis réactivée dans pretix revient
+*payée* si personne ne l'avait remboursée : une ligne `reactivation` défait
+alors l'annulation, la vente compte de nouveau, et la caisse peut de nouveau
+l'annuler. Si l'argent était reparti, pretix la remet *en attente* : le client a
+son argent, le journal garde l'annulation, et l'historique de la commande le
+dit.
+
+**Avant la 0.20.0**, le plugin n'écoutait pas pretix. Une vente annulée dans le
+back-office restait donc dans la recette. La page Ventes les liste sous
+*Annulées dans pretix, encore comptées ici*, et le bouton *Les écrire au
+journal* (droit de modifier les commandes) les annule au journal **à la date où
+pretix les avait annulées**, au nom de qui l'avait fait. La même liste rattrape
+une annulation que le plugin n'aurait pas pu écrire sur le moment ; l'historique
+de la commande le signale alors.
+
+Ce qui ne suit pas : une commande **modifiée** dans pretix (un article retiré
+par *Modifier les produits*) garde sa vente entière au journal. Pour corriger un
+panier, on annule et on réencaisse.
 
 ### Les factures des ventes au guichet
 
@@ -1308,6 +1382,12 @@ sans la carte du client**, et répond ce qu'il en est :
 Une correction de commande après une annulation carte ne porte donc **pas
 d'avoir** : l'argent est reparti. Le panier corrigé s'encaisse en entier.
 
+Un remboursement refusé se relance depuis pretix : *Créer un remboursement* sur
+la commande propose la carte, et SumUp est redemandé (§5bis, *Une vente annulée
+depuis pretix*). Une fois passé, la vente quitte la liste des remboursements
+refusés de la page Ventes ; le remboursement échoué reste dans l'historique de
+la commande, comme pretix le garde.
+
 SumUp répond `201` à un remboursement qu'il accepte. Jusqu'à la 0.17.0, le
 plugin n'attendait que `200` ou `204` et annonçait donc `failed` pour un
 remboursement passé : le bandeau rouge envoyait rembourser une seconde fois
@@ -1544,11 +1624,10 @@ et jamais par-dessus un client en cours.
 Le résumé de la fermeture reste affiché dans le panneau jusqu'à l'ouverture
 suivante : c'est le reçu de la soirée.
 
-Sur un appareil rattaché à un tiroir, *Réglages → Relevé du jour* affiche un
-tiret à la place des espèces et du total, pour l'appareil comme pour
-l'événement : un écran qui donne le chiffre à un geste du comptage en ferait
-une recopie. La carte reste affichée, elle se rapproche de SumUp et pas d'un
-comptage.
+Ce que le tiroir devrait contenir n'apparaît nulle part avant le comptage, ni
+dans ce panneau ni ailleurs dans l'app. *Réglages* montre la recette de
+l'événement, qui est autre chose : ce que l'événement a vendu, sans le fond ni
+les entrées et sorties d'argent. Elle reste donc affichée.
 
 ### Ce que le serveur refuse, et ce qu'il ne refuse jamais
 
@@ -1790,8 +1869,9 @@ journal orpheline. Déduire « orpheline = test » après coup ferait silencieus
 sortir des recettes une vraie commande supprimée à la main, soit exactement ce
 qu'un journal en ajout seul existe pour empêcher.
 
-Conséquence : les ventes de test restent dans le journal, sont **exclues** du
-relevé sur lequel on compte le tiroir, et sont affichées sur une ligne à part.
+Conséquence : les ventes de test restent dans le journal, sont **exclues** de
+la recette sur laquelle on compte le tiroir, et sont affichées sur une ligne à
+part.
 
 ### 6.6 La surface d'attaque du token
 
@@ -1894,22 +1974,53 @@ caisse ne dépend de SumUp que pour la carte.
   passera d'elle-même au sombre au coucher du soleil. Le choix est mémorisé par
   appareil, écrit sur `<html data-theme>` ; les deux palettes sont des jeux de
   variables CSS, donc changer d'avis ne coûte pas un rendu ;
-- le **relevé du jour** : nombre de ventes, espèces, carte, total — pour cette
-  caisse et pour l'événement entier. Sur un appareil rattaché à une caisse
-  espèces, les espèces et le total sont remplacés par un tiret, parce que le
-  tiroir se compte à l'aveugle (§5septies). La journée de caisse commence à **6 h du
-  matin dans le fuseau de l'événement**, pas à minuit : une soirée traverse
-  minuit, et le chiffre qu'on rapproche du tiroir à 1 h 30 doit couvrir toute la
-  soirée, pas les quatre-vingt-dix dernières minutes ;
+- la **recette de l'événement** : ventes, espèces, carte et total, pour cet
+  appareil et pour tous les appareils, et le bouton **Détail de la recette**.
+  Elle reste entière sur un appareil rattaché à une caisse espèces : c'est ce
+  que l'événement a vendu, pas ce que le tiroir devrait contenir, qui ne
+  s'affiche qu'à côté d'un comptage (§5septies) ;
 - *Recharger* et *Dépairer*. Dépairer révoque aussi l'appareil dans pretix,
   comme pretix le demande à toute app qui retire un appareil (`/device/revoke`) :
   il passe *révoqué* dans la liste des appareils de l'organisateur au lieu d'y
   rester actif avec un token valable que plus personne ne détient. Sans réseau
   à ce moment-là, la caisse le fait dès qu'elle le retrouve.
 
-Le relevé affiche aussi l'**heure de début** de la journée de caisse, et
-signale les ventes encore en file d'attente hors ligne avec leur montant en
-espèces : la recette affichée ne les compte pas encore, et le tiroir, si.
+**La recette est celle de l'événement**, plus celle de la journée. Jusqu'à la
+0.18, l'écran s'appelait « Recette du jour » et comptait depuis 6 h du matin ;
+mais la question qu'on pose en fermant est ce que la soirée a rapporté, et la
+soirée, c'est l'événement, même quand il traverse minuit ou dure trois soirs.
+Dans une **série**, c'est la date que la caisse vend ce soir, choisie comme pour
+chaque vente (le lendemain matin, quand plus rien n'est en vente, la plus
+proche), et nommée sous le titre. Une annulation recopie les lignes de la vente
+qu'elle annule, donc elle retombe sur la date de cette vente : corriger la
+commande de la semaine dernière corrige la recette de la semaine dernière, pas
+celle de ce soir.
+
+Le **détail** s'ouvre par-dessus les réglages, sur une colonne au téléphone et
+sur deux à la tablette en paysage :
+
+- en tête, le total, les espèces et la carte, avec le nombre de ventes ;
+- **par produit**, sous leur catégorie et dans l'ordre de la boutique, avec
+  quantité et montant. Les annulations sont déjà déduites de chaque ligne, et un
+  produit dont toutes les ventes ont été annulées n'apparaît pas ;
+- les **consignes à part** : prises, rendues et solde. Une consigne n'est pas une
+  vente, c'est de l'argent dû à qui rapporte le gobelet ;
+- **par appareil**, le plus gros en tête, celui qu'on tient marqué, le
+  back-office en dernier : les annulations faites dans pretix y tombent (voir
+  *Une vente annulée depuis pretix*), et la ligne de la caisse reste ce que son
+  tiroir contient ;
+- **par soirée**, seulement quand l'événement en a eu plusieurs, une soirée
+  allant de 6 h à 6 h le lendemain ;
+- ce que les chiffres ne disent pas seuls : combien de ventes ont été annulées
+  et pour combien, ce qui est passé en mode test (compté nulle part), et les
+  ventes encore en file hors ligne avec leur montant en espèces — la recette
+  affichée ne les compte pas encore, et le tiroir, si.
+
+Chaque euro du total est dans une seule ligne du détail : un produit, les
+consignes, ou, pour une écriture sans lignes, une phrase qui le dit. Les
+sections tombent donc toujours juste sur le total. Le calcul
+([takings.py](../pretix_openpos/takings.py)) est le même que celui de la page
+*Ventes* du back-office, si bien que les deux ne peuvent pas se contredire.
 
 **Le panier survit à un rechargement.** iOS tue une application web mise en
 arrière-plan, une tablette redémarre, quelqu'un tire pour rafraîchir. Le panier
@@ -1930,16 +2041,18 @@ un panier de consommations se resaisit en dix secondes, et une confirmation à
 chaque *Vider* est une confirmation que plus personne ne lit à la troisième.
 
 Sans caisse espèces, c'est tout ce que la caisse offre pour rapprocher le
-tiroir en fin de soirée : ce qui est passé depuis le début de la journée de
-caisse. Le fond de caisse, les entrées et sorties d'argent, le comptage à
-l'aveugle et le rapport de fermeture viennent avec la caisse espèces
-(§5septies), qu'on active en rattachant l'appareil à un tiroir.
+tiroir en fin de soirée : ce que l'événement a encaissé. Le fond de caisse, les
+entrées et sorties d'argent, le comptage à l'aveugle et le rapport de fermeture
+viennent avec la caisse espèces (§5septies), qu'on active en rattachant
+l'appareil à un tiroir.
 
 ### 7.2 Dans le back-office
 
 *Open POS → Ventes* affiche le journal (100 lignes par page, plus récent
 d'abord), les recettes **ventilées par caisse et par caissier**, le total, la
-ligne mode test séparée, et l'état de la chaîne d'intégrité. Le bouton
+ligne mode test séparée, le **détail par produit** — le même que sur la caisse :
+par catégorie, consignes à part, annulations déduites — et l'état de la chaîne
+d'intégrité. Le bouton
 **Export CSV** télécharge le journal entier — une ligne par écriture, avoirs
 compris — pour la personne qui tient les comptes ; les recettes se recalculent
 depuis ce fichier, c'est le but.
@@ -2066,8 +2179,8 @@ Base : `/api/v1`. Authentification : `Authorization: Device <token>`.
 | `GET` | `/organizers/<org>/events/<ev>/openpos/config/` | Événement, device, listes de contrôle, produits d'admission, coupures, boutons montant libre et consigne |
 | `GET` | `…/openpos/catalog/` | Catalogue par catégorie, prix, stock restant |
 | `POST` | `…/openpos/checkout/` | Encaissement |
-| `GET` | `…/openpos/summary/` | Relevé du jour |
-| `GET` | `…/openpos/attendance/?list=<id>` | Présents sur place, sur une liste de contrôle ; scans de la soirée, par appareil (`scans`) |
+| `GET` | `…/openpos/summary/` | Recette de l'événement (d'une date, dans une série) : total, par produit, consignes, par appareil, par soirée |
+| `GET` | `…/openpos/attendance/?list=<id>` | Présents sur place, sur une liste de contrôle ; scans de l'événement, par appareil (`scans`) |
 | `GET` | `…/openpos/history/` | Journal de l'événement, **de cette caisse seule** (100 dernières, `truncated` si tronqué) |
 | `GET` | `…/openpos/offline/?list=<id>` | Liste embarquée pour scanner sans réseau |
 | `POST` | `…/openpos/cancel/` | Annule une vente de cette caisse (avoir + remboursement + contrepassation) |
@@ -2182,6 +2295,60 @@ d'idempotence désigne une vente déjà enregistrée. La réponse est alors cell
 la vente d'origine, et ce qui manquait de la traîne (facture, pointages) est
 terminé au passage.
 
+### Réponse de `summary/`
+
+```json
+{
+  "scope": { "event": "Festival", "series": false, "subevent": null },
+  "computed_at": "2026-08-17T01:34:05+02:00",
+  "event": {
+    "count": 486, "cancellations": 3, "cancelled_total": "-14.50",
+    "deposit_refunds": 41, "cash": "1391.50", "card": "911.50", "total": "2303.00"
+  },
+  "device": { "count": 212, "cancellations": 1, "cancelled_total": "-4.00", … },
+  "testmode": null,
+  "categories": [
+    {
+      "id": 2, "name": "Bar", "count": 391, "total": "1318.00",
+      "items": [
+        { "item": 12, "variation": null, "name": "Bière", "variation_name": null,
+          "count": 240, "total": "840.00" }
+      ]
+    }
+  ],
+  "deposits": {
+    "taken": { "count": 212, "total": "212.00" },
+    "returned": { "count": 187, "total": "-187.00" },
+    "total": "25.00"
+  },
+  "unallocated": null,
+  "devices": [
+    { "name": "Bar 1", "serial": "TILL1", "current": true, "count": 212, … }
+  ],
+  "nights": [
+    { "date": "2026-08-15", "count": 231, … },
+    { "date": "2026-08-16", "count": 255, … }
+  ],
+  "first": "2026-08-15T19:02:11+02:00",
+  "last": "2026-08-17T01:31:40+02:00"
+}
+```
+
+Tout l'événement, ou dans une série la date de `scope.subevent`, annulations et
+consignes rendues déduites : c'est ce que le tiroir contient. `count` compte des
+ventes, pas des lignes de journal ; `cancellations` compte les ventes annulées
+(un panier avec des gobelets rendus en est une), et `cancelled_total` est ce
+qu'elles ont rendu, déjà compté dans `cash` et `card`. `device` est la part de
+l'appareil qui appelle, `null` pour un autre appelant, et `testmode` ce qui est
+passé en mode test, compté nulle part ailleurs.
+
+`categories` suit l'ordre de la boutique, `name` à `null` pour les produits sans
+catégorie. Les totaux des catégories, le solde des `deposits` et `unallocated`
+(l'argent d'écritures sans lignes, `null` d'habitude) font exactement
+`event.total`. `devices` met le back-office (`serial` à `null`) en dernier ;
+`nights` découpe par soirée, de 6 h à 6 h. `since` reste envoyé, égal à `first`,
+pour une app d'avant la 0.19 pas encore rouverte.
+
 ### Réponse de `attendance/`
 
 ```json
@@ -2198,7 +2365,6 @@ terminé au passage.
     { "id": 12, "name": "Plein tarif", "inside": 90, "entered": 100, "expected": 150 }
   ],
   "scans": {
-    "since": "2026-08-16T06:00:00+02:00",
     "device": { "admitted": 64, "refused": 3, "other": 1, "offline": 12 },
     "event": { "admitted": 196, "refused": 7, "other": 4, "offline": 12 },
     "devices": [
@@ -2208,7 +2374,7 @@ terminé au passage.
 }
 ```
 
-`scans` compte les scans de la soirée sur **toutes** les listes de l'événement,
+`scans` compte les scans de l'événement sur **toutes** ses listes,
 pas seulement celle demandée (voir §5.2). `device` vaut `null` pour un appelant
 qui n'est pas un appareil, et `name` vaut `null` sur la ligne des scans faits
 depuis le back-office.
@@ -2317,10 +2483,10 @@ Ce qu'elle couvre, fichier par fichier :
 | `test_offline_snapshot.py` | Le contenu de la liste embarquée, et que la lire coûte le même nombre de requêtes quelle que soit sa taille |
 | `test_cancel.py` | Avoir, remboursement, contre-passation, et le rejeu d'une annulation qui avait expiré |
 | `test_journal.py` | La chaîne de hachage : falsification détectée, ligne supprimée détectée, ajout seul, versions de charge, ce que le point de reprise voit et ne voit pas |
-| `test_summary.py` | La journée de caisse qui commence à 6 h, le mode test à part, une annulation qui se nette |
+| `test_summary.py` | La recette de tout l'événement (une date dans une série, une annulation retombant sur la date de sa vente), par produit et par catégorie, les consignes à part, par appareil et par soirée, le mode test à part, une annulation qui se nette |
 | `test_catalog.py` | Ce que la caisse a le droit de vendre et ce qu'on lui dit de l'événement |
 | `test_attendance.py` | Le compteur de présents, produits d'admission seulement |
-| `test_door_scans.py` | Le compteur du scanneur : par appareil et pour la soirée, ce qui est un scan et ce qui n'en est pas, la marque hors ligne de pretix, un refus envoyé après coup, une vente en caisse qui n'est plus marquée hors ligne |
+| `test_door_scans.py` | Le compteur du scanneur : par appareil et pour tout l'événement (une date dans une série), ce qui est un scan et ce qui n'en est pas, la marque hors ligne de pretix, un refus envoyé après coup, une vente en caisse qui n'est plus marquée hors ligne |
 | `test_device_roles.py` | Le rôle d'un appareil, et ce que le serveur refuse à une caisse qui a un lecteur |
 | `test_terminal.py` | Le paiement sur le lecteur de bout en bout : panier épinglé, double appui, webhook forgé, remboursement à l'annulation |
 | `test_sumup_client.py` | La forme d'un échec SumUp — « refusé », « pas encore », « on n'a pas pu demander » |
@@ -2346,7 +2512,7 @@ entier.
 
 | Script | Ce qu'il couvre |
 |---|---|
-| [`dev/smoke_test.py`](../dev/smoke_test.py) | Bout en bout de l'API : appairage, catalogue, vente espèces, rejeu à l'identique, relevé. Bibliothèque standard uniquement |
+| [`dev/smoke_test.py`](../dev/smoke_test.py) | Bout en bout de l'API : appairage, catalogue, vente espèces, rejeu à l'identique, recette. Bibliothèque standard uniquement |
 | [`dev/backoffice_test.py`](../dev/backoffice_test.py) | Rend les pages du back-office avec un vrai navigateur de session |
 | [`dev/concurrency_test.py`](../dev/concurrency_test.py) | Martèle la caisse depuis plusieurs fils et vérifie que le journal tient. **À lancer sur PostgreSQL** : le savepoint du journal est indulgent sur SQLite et impitoyable sur PostgreSQL, ce que la suite backend ne peut pas voir |
 | [`dev/arrivals_test.py`](../dev/arrivals_test.py) | Sème son propre organisateur et vérifie l'histogramme sur des données connues |
@@ -2389,8 +2555,7 @@ l'installation — donc `npm i --no-save playwright` avant de s'en servir.
 | « Faites entrer » ne s'affiche jamais | Aucune liste de contrôle choisie dans *Open POS → Réglages*, ou aucun produit d'admission dans la vente |
 | Un billet refuse de se scanner | Code-barres non-QR : passer par la recherche par nom ou une douchette clavier |
 | La caméra ne démarre pas | Contexte non sécurisé (HTTP), ou autorisation refusée dans les réglages du navigateur |
-| Le relevé ne correspond pas au tiroir | Vérifier la ligne « mode test » sur l'écran *Ventes* : elle est comptée à part |
-| Le relevé affiche un tiret à la place des espèces | L'appareil est rattaché à une caisse espèces, qui se compte à l'aveugle : le chiffre est dans le rapport de fermeture, *Open POS → Caisses espèces* |
+| La recette ne correspond pas au tiroir | Vérifier la ligne « mode test » sur l'écran *Ventes* : elle est comptée à part. Sur un appareil rattaché à une caisse espèces, c'est le rapport de fermeture qui se rapproche du tiroir, pas la recette : elle ne compte ni le fond ni les entrées et sorties d'argent |
 | La caisse refuse les espèces : « La caisse … n'est pas ouverte » | Ouvrir la caisse espèces (bouton billet de la barre du haut) sur un fond compté. Le client peut attendre : rien n'a été enregistré |
 | « Ouverte … et jamais fermée » | La caisse espèces n'a pas été fermée une soirée précédente. *Fermer sans compter* sur la caisse, ou fermer depuis son rapport avec le montant si quelqu'un l'a compté, puis ouvrir celle du soir |
 | « La caisse a bougé depuis le comptage » à la fermeture | Une vente ou un mouvement est passé depuis, souvent sur l'autre tablette du même tiroir : recompter, puis fermer |

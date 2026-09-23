@@ -38,18 +38,14 @@ export function subtractScans(a: ScanFigures, b: ScanFigures): ScanFigures {
 }
 
 /**
- * The scans in a queue made for this event since a given moment.
+ * The scans in a queue made for this event, whatever day they were made.
  *
- * Every one of them was made offline, which is what `offline` counts. With no
- * moment to go by — the server has not given a first figure — the whole queue
- * for the event counts.
+ * Every one of them was made offline, which is what `offline` counts.
  */
-export function queuedScans(queue: QueueEntry[], event: string, since: string | null): ScanFigures {
-  const from = since === null ? -Infinity : Date.parse(since);
+export function queuedScans(queue: QueueEntry[], event: string): ScanFigures {
   const figures = { ...NO_SCANS };
   for (const entry of queue) {
     if (entry.kind !== "checkin" || entry.event !== event) continue;
-    if (Date.parse(entry.at) < from) continue;
     if (entry.refused) {
       figures.refused += 1;
     } else if (entry.admits === false) {
@@ -63,10 +59,10 @@ export function queuedScans(queue: QueueEntry[], event: string, since: string | 
 }
 
 export interface DoorCount {
-  /** This device, tonight. */
+  /** This device, for the event. */
   device: ScanFigures;
-  /** People let in by every door tonight; null until the server has answered once. */
-  evening: number | null;
+  /** People let in by every door for the event; null until the server has answered once. */
+  event: number | null;
 }
 
 /**
@@ -85,10 +81,10 @@ export function doorCount(
   seen: QueueEntry[],
   event: string,
 ): DoorCount {
-  const unsent = addScans(live, queuedScans(seen, event, server?.since ?? null));
+  const unsent = addScans(live, queuedScans(seen, event));
   return {
     device: addScans(server?.device ?? NO_SCANS, unsent),
-    evening: server ? server.event.admitted + unsent.admitted : null,
+    event: server ? server.event.admitted + unsent.admitted : null,
   };
 }
 
@@ -110,7 +106,7 @@ export function waitingScans(queue: QueueEntry[], event: string): number {
 export function countSent(entry: QueuedCheckin): void {
   const saved = loadDoorScans(entry.event);
   if (!saved) return;
-  const sent = queuedScans([entry], entry.event, saved.since);
+  const sent = queuedScans([entry], entry.event);
   saveDoorScans(entry.event, {
     ...saved,
     device: saved.device && addScans(saved.device, sent),
