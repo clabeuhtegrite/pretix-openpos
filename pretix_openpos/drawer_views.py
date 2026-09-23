@@ -4,10 +4,12 @@ Cash drawers in the back office: which exist, what each evening came to.
 Organizer-level, like the devices that feed them. Three screens:
 
 - the list, where a drawer is created for every physical drawer, named, and
-  given the float it usually starts with. Which device feeds which drawer is
-  said on the till devices screen, next to the device's role and its reader;
+  given the float it usually starts with, and where tonight's cash stands. A
+  drawer that has been opened is archived rather than deleted. Which device
+  feeds which drawer is said on the till devices screen, next to the device's
+  role and its reader;
 - one drawer's openings, evening after evening, each with the difference it
-  closed on;
+  closed on — or, for the one still running, what it should hold now;
 - one opening's closing report — the "Z" — with every figure the expected
   cash is made of, and every line of its ledger. An opening a till forgot to
   close can be closed from there.
@@ -34,7 +36,7 @@ from django.utils.translation import gettext_lazy as _
 from django.views.generic import TemplateView
 from pretix.control.views.organizer import OrganizerDetailViewMixin
 
-from .drawers import DrawerError, close_drawer, figures, open_session_of
+from .drawers import DrawerError, archive_drawer, close_drawer, figures, open_session_of, restore_drawer
 from .models import PosDrawer, PosDrawerEntry, PosDrawerSession, PosSale
 from .views import Echo
 
@@ -116,7 +118,14 @@ class DrawerForm(forms.Form):
         clash = PosDrawer.objects.filter(organizer=self.organizer, name__iexact=name)
         if self.instance is not None:
             clash = clash.exclude(pk=self.instance.pk)
-        if clash.exists():
+        clash = clash.first()
+        if clash is not None and clash.archived_at is not None:
+            # Out of sight, but its evenings are filed under that name.
+            raise forms.ValidationError(
+                _("“{name}” is the name of an archived drawer. Bring that one back, or "
+                  "rename it first.").format(name=clash.name)
+            )
+        if clash is not None:
             raise forms.ValidationError(
                 _("There is already a drawer called “{name}”.").format(name=name)
             )
@@ -206,6 +215,7 @@ class DrawersView(DrawerAccessMixin, OrganizerDetailViewMixin, TemplateView):
         ctx = super().get_context_data(**kwargs)
         organizer = self.request.organizer
         rows = []
+        archived = []
         for drawer in PosDrawer.objects.filter(organizer=organizer).prefetch_related(
             "devices__device"
         ):
@@ -216,9 +226,16 @@ class DrawersView(DrawerAccessMixin, OrganizerDetailViewMixin, TemplateView):
                 .order_by("-closed_at", "-pk")
                 .first()
             )
-            rows.append(
+            row = {
+                "drawer": drawer,
+                "last": summarise(last, list(last.entries.all())) if last else None,
+                "url": self._drawer_url(drawer),
+            }
+            if drawer.archived_at is not None:
+                archived.append(row)
+                continue
+            row.update(
                 {
-                    "drawer": drawer,
                     "devices": sorted(
                         (
                             pos_device.device
@@ -229,9 +246,10 @@ class DrawersView(DrawerAccessMixin, OrganizerDetailViewMixin, TemplateView):
                     ),
                     "session": summarise(session, list(session.entries.order_by("seq")))
                     if session else None,
-                    "last": summarise(last, list(last.entries.all())) if last else None,
+                    # What it should hold right now: the float, and every euro
+                    # that went in or out of it since, by sale or by hand.
+                    "expected_now": figures(session)["expected"] if session else None,
                     "has_history": session is not None or last is not None,
-                    "url": self._drawer_url(drawer),
                     "form": (
                         edit_form
                         if edit_form is not None and edit_form.instance.pk == drawer.pk
@@ -239,7 +257,9 @@ class DrawersView(DrawerAccessMixin, OrganizerDetailViewMixin, TemplateView):
                     ),
                 }
             )
+            rows.append(row)
         ctx["rows"] = rows
+        ctx["archived"] = archived
         ctx["create_form"] = create_form or DrawerForm(organizer=organizer, prefix="new")
         ctx["can_manage"] = self.can_manage
         ctx["currency"] = organizer_currency(organizer)
@@ -294,7 +314,7 @@ class DrawersView(DrawerAccessMixin, OrganizerDetailViewMixin, TemplateView):
                 messages.error(
                     request,
                     _("The drawer “{name}” has been opened before, so its history stays. "
-                      "Rename it instead.").format(name=drawer.name),
+                      "Archive it instead.").format(name=drawer.name),
                 )
                 return redirect(request.path)
             devices = [pos_device.device.name for pos_device in drawer.devices.all()]
@@ -305,6 +325,10 @@ class DrawersView(DrawerAccessMixin, OrganizerDetailViewMixin, TemplateView):
             )
             drawer.delete()
             messages.success(request, _("The drawer has been deleted."))
+            return redirect(request.path)
+
+        if action in ARCHIVING:
+            ARCHIVING[action](request, drawer)
             return redirect(request.path)
 
         if action != "save":
@@ -337,6 +361,51 @@ def _text(value):
     return None if value is None else str(value)
 
 
+def _archive(request, drawer):
+    """Put a closed drawer away, from the list or its own page, and say so."""
+    if drawer.archived_at is not None:
+        return
+    try:
+        tills = archive_drawer(drawer)
+    except DrawerError as error:
+        messages.error(request, error.message)
+        return
+    request.organizer.log_action(
+        "pretix_openpos.drawer.archived",
+        user=request.user,
+        data={"drawer": drawer.pk, "name": drawer.name, "devices": [d.name for d in tills]},
+    )
+    if tills:
+        messages.success(
+            request,
+            _("The drawer “{name}” has been archived, and taken away from {devices}.").format(
+                name=drawer.name, devices=", ".join(d.name for d in tills)
+            ),
+        )
+    else:
+        messages.success(request, _("The drawer “{name}” has been archived.").format(name=drawer.name))
+
+
+def _restore(request, drawer):
+    """Offer an archived drawer again. Which tills feed it is said anew."""
+    if drawer.archived_at is None:
+        return
+    restore_drawer(drawer)
+    request.organizer.log_action(
+        "pretix_openpos.drawer.restored",
+        user=request.user,
+        data={"drawer": drawer.pk, "name": drawer.name},
+    )
+    messages.success(
+        request,
+        _("The drawer “{name}” is back. Give it its tills on the till devices "
+          "screen.").format(name=drawer.name),
+    )
+
+
+ARCHIVING = {"archive": _archive, "restore": _restore}
+
+
 class DrawerView(DrawerAccessMixin, OrganizerDetailViewMixin, TemplateView):
     """One drawer, evening after evening."""
 
@@ -350,6 +419,16 @@ class DrawerView(DrawerAccessMixin, OrganizerDetailViewMixin, TemplateView):
         if request.GET.get("export") == "csv":
             return self._export_csv()
         return super().get(request, *args, **kwargs)
+
+    def post(self, request, *args, **kwargs):
+        """Archive the drawer, from the page that says what that means, or bring it back."""
+        if not self.can_manage:
+            raise PermissionDenied()
+        action = ARCHIVING.get(request.POST.get("action"))
+        if action is None:
+            raise Http404()
+        action(request, self.drawer)
+        return redirect(request.path)
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
@@ -366,6 +445,9 @@ class DrawerView(DrawerAccessMixin, OrganizerDetailViewMixin, TemplateView):
         ctx["drawer"] = drawer
         ctx["rows"] = [
             {**summarise(session, sorted(session.entries.all(), key=lambda e: e.seq)),
+             # The one opening still running says what it should hold now; the
+             # others what their closing said then.
+             "expected_now": figures(session)["expected"] if session.is_open else None,
              "url": self._session_url(session)}
             for session in sessions[:SESSIONS_PER_PAGE]
         ]
@@ -381,6 +463,7 @@ class DrawerView(DrawerAccessMixin, OrganizerDetailViewMixin, TemplateView):
         # The whole ledger, every time: a drawer's ledger is a handful of rows
         # an evening, so the full walk costs nothing and misses nothing.
         ctx["tampered_with"] = PosDrawerEntry.verify_chain(drawer)
+        ctx["is_open"] = open_session_of(drawer) is not None
         ctx["can_manage"] = self.can_manage
         ctx["drawers_url"] = reverse(
             "plugins:pretix_openpos:drawers", kwargs={"organizer": self.request.organizer.slug}

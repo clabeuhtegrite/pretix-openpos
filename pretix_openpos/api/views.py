@@ -25,7 +25,7 @@ from ..backoffice import till_cancelling
 from ..channels import POS_CHANNEL, PosSalesChannelType
 from ..drawers import (
     DrawerError, check_denominations, close_drawer, count_drawer, count_is_current, denominations_for, drawer_closed,
-    drawer_stale, is_stale, move_cash, open_drawer, open_session_of, session_at,
+    drawer_stale, figures, is_stale, move_cash, open_drawer, open_session_of, session_at,
 )
 from ..invoicing import pos_invoices_enabled
 from ..models import (
@@ -2239,7 +2239,7 @@ class OpenPosViewSet(viewsets.ViewSet):
 
         Figures only, and not a cash session: no float, no count, no drawer.
         What a drawer should hold is worked out by :mod:`..drawers`, and shown
-        on the till only next to a count, never here. This is the
+        in the till's drawer panel, not here. This is the
         event as a whole, broken down every way it is read — by payment type,
         by category and product, with the deposits apart, by device, and by
         evening when the event spans several — from one pass over the journal.
@@ -2296,11 +2296,12 @@ class OpenPosViewSet(viewsets.ViewSet):
 
     def _drawer_state(self, event, drawer):
         """
-        The drawer as the till shows it — and deliberately not what it holds.
+        The drawer as the till shows it, with what it should hold right now.
 
-        What the drawer should hold is only ever given next to a count, once
-        the count has been written down. Handing it out before would turn the
-        count into copying a figure off the screen.
+        The float, the cash taken and handed back, the money put in and taken
+        out, and their sum: what whoever stands at the till expects to find in
+        the drawer, all evening long. The count at the closing still says what
+        was actually found, and the difference.
         """
         if drawer is None:
             return {"drawer": None, "session": None, "last_closed": None}
@@ -2324,11 +2325,19 @@ class OpenPosViewSet(viewsets.ViewSet):
             count = next(
                 (e for e in reversed(entries) if e.kind == PosDrawerEntry.KIND_COUNT), None
             )
+            fig = figures(session)
             body["session"] = {
                 "id": session.pk,
                 "opened_at": session.opened_at.isoformat(),
                 "opened_by": opening.cashier if opening else "",
                 "opening_float": str(opening.amount) if opening else "0.00",
+                # What the drawer should hold now, and what it is made of. The
+                # cash handed back (cancellations, returned deposits) is negative.
+                "expected": str(fig["expected"]),
+                "cash_sales": str(fig["cash_sales"]),
+                "cash_returned": str(fig["cash_cancellations"] + fig["deposit_refunds"]),
+                "cash_in": str(fig["cash_in"]),
+                "cash_out": str(fig["cash_out"]),
                 "stale": is_stale(session, event),
                 "movements": [
                     self._drawer_entry_payload(e)
@@ -2445,9 +2454,7 @@ class OpenPosViewSet(viewsets.ViewSet):
     @action(detail=False, methods=["post"], url_path="drawer/count", url_name="drawer-count")
     def drawer_count(self, request, **kwargs):
         """
-        A blind count, answered with what the drawer should have held.
-
-        The answer comes after the figure is written down, never before.
+        A count, answered with what the drawer should have held and the difference.
         """
         from .serializers import DrawerCountSerializer
 

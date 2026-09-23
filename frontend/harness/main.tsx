@@ -99,8 +99,8 @@ type DrawerStub = {
 const drawerMode = q.get("drawer");
 const counted = (current: boolean) => ({
   seq: 4, kind: "count", datetime: new Date(Date.now() - 4 * 60000).toISOString(),
-  amount: "311.50", reason: "", cashier: "Alex", device: "Caisse bar 1",
-  expected: "312.50", difference: "-1.00", current,
+  amount: "306.50", reason: "", cashier: "Alex", device: "Caisse bar 1",
+  expected: "307.50", difference: "-1.00", current,
 });
 let drawer: DrawerStub | null = drawerMode
   ? {
@@ -133,7 +133,26 @@ const drawerCash = () => {
     (sum, m) => sum + (m.kind === "in" ? 1 : -1) * Number(m.amount),
     0,
   );
-  return Number(session.opening_float) + Number(fx.drawerSales) + moves;
+  return Number(session.opening_float) + Number(fx.drawerSales) + Number(fx.drawerReturned) + moves;
+};
+// L'état de la caisse tel que le serveur le rend : la séance ouverte porte ce
+// qu'elle doit contenir, et de quoi c'est fait.
+const drawerState = () => {
+  if (!drawer?.session) return drawer;
+  const session = drawer.session;
+  const moved = (kind: string) =>
+    session.movements.filter((m) => m.kind === kind).reduce((sum, m) => sum + Number(m.amount), 0);
+  return {
+    ...drawer,
+    session: {
+      ...session,
+      expected: drawerCash().toFixed(2),
+      cash_sales: Number(fx.drawerSales).toFixed(2),
+      cash_returned: Number(fx.drawerReturned).toFixed(2),
+      cash_in: moved("in").toFixed(2),
+      cash_out: moved("out").toFixed(2),
+    },
+  };
 };
 const entry = (kind: string, amount: string | null, extra: Record<string, unknown> = {}) => ({
   seq: ++drawerSeq, kind, datetime: new Date().toISOString(), amount, reason: "",
@@ -196,12 +215,12 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
         session: { ...fx.drawerSession(), opened_at: opened.datetime, opening_float: body.amount, movements: [], count: null },
         last_closed: null,
       };
-      return json({ ...drawer, entry: opened });
+      return json({ ...drawerState(), entry: opened });
     }
     if (url.includes("/drawer/movement/") && drawer.session) {
       const moved = entry(body.kind, body.amount, { reason: body.reason });
       drawer.session = { ...drawer.session, movements: [...drawer.session.movements, moved], count: null };
-      return json({ ...drawer, entry: moved });
+      return json({ ...drawerState(), entry: moved });
     }
     if (url.includes("/drawer/count/") && drawer.session) {
       const expected = drawerCash();
@@ -210,7 +229,7 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
         difference: (Number(body.amount) - expected).toFixed(2),
       });
       drawer.session = { ...drawer.session, count: { ...made, current: true } };
-      return json({ ...drawer, entry: made });
+      return json({ ...drawerState(), entry: made });
     }
     if (url.includes("/drawer/close/") && drawer.session) {
       const count = drawer.session.count as null | { amount: string; difference: string };
@@ -228,9 +247,9 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
         } as ReturnType<typeof fx.lastClosed>,
         session: null,
       };
-      return json({ ...drawer, entry: closing });
+      return json({ ...drawerState(), entry: closing });
     }
-    return json(drawer);
+    return json(drawerState());
   }
   // ?photos=1 met des photos sur un produit sur deux.
   if (url.includes("/openpos/catalog/"))

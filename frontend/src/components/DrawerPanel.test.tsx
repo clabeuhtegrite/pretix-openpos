@@ -27,12 +27,12 @@ import DrawerPanel from "./DrawerPanel";
 
 /**
  * The drawer panel: opened on a counted float, cash put in and taken out with
- * a reason, counted blind, closed on that count.
+ * a reason, what it should hold on screen all evening, counted, closed on
+ * that count.
  *
- * What matters most here is what the screen does not do: show what the
- * drawer should hold before a count is written down, close on a count that
- * no longer describes the drawer, or send a corrected figure under the key
- * of the first one.
+ * What matters most here is what the screen does not do: close on a count
+ * that no longer describes the drawer, or send a corrected figure under the
+ * key of the first one.
  */
 
 const pairing = {
@@ -58,6 +58,11 @@ function session(over: Partial<DrawerSession> = {}): DrawerSession {
     opened_at: recently(),
     opened_by: "Ana",
     opening_float: "100.00",
+    expected: "185.00",
+    cash_sales: "85.00",
+    cash_returned: "0.00",
+    cash_in: "0.00",
+    cash_out: "0.00",
     stale: false,
     movements: [],
     count: null,
@@ -297,13 +302,16 @@ describe("a closed drawer", () => {
 });
 
 describe("an open drawer", () => {
-  it("shows who opened it, on what float, and never what it should hold", async () => {
+  it("shows who opened it, on what float, and what it should hold now", async () => {
     drawer.mockResolvedValue(open);
     show();
 
     expect(await screen.findByText(new RegExp(`Ana`))).toBeDefined();
     expect(screen.getByText(formatMoney(10000, "EUR"))).toBeDefined();
+    expect(screen.getByText(t("drawer.holds"))).toBeDefined();
+    expect(screen.getByText(formatMoney(18500, "EUR"))).toBeDefined();
     expect(screen.getByText(t("drawer.noMovements"))).toBeDefined();
+    // "Expected" belongs to a count; there is none yet.
     expect(screen.queryByText(t("drawer.expected"))).toBeNull();
     expect(button(t("drawer.countAction"))).toBeDefined();
   });
@@ -405,7 +413,48 @@ describe("an open drawer", () => {
     expect(await screen.findByText(t("drawer.isClosed"))).toBeDefined();
   });
 
-  it("counts blind, then shows what was expected beside the count", async () => {
+  it("says what the drawer should hold, and where that comes from", async () => {
+    // The organiser opened on 150, sold in cash, and found only the float on
+    // this screen: what should be in the drawer has to be there all evening.
+    drawer.mockResolvedValue({
+      ...open,
+      session: session({
+        opening_float: "150.00", cash_sales: "12.00", cash_returned: "-2.00",
+        cash_in: "20.00", cash_out: "5.00", expected: "175.00",
+      }),
+    });
+    show();
+
+    const sum = (await screen.findByText(t("drawer.holds"))).closest(".drawer-sum") as HTMLElement;
+    const line = (label: string) => within(sum).getByText(label).nextElementSibling?.textContent;
+    expect(line(t("drawer.float"))).toBe(formatMoney(15000, "EUR"));
+    expect(line(t("drawer.cashSales"))).toBe(`+${formatMoney(1200, "EUR")}`);
+    expect(line(t("drawer.cashReturned"))).toBe(`−${formatMoney(200, "EUR")}`);
+    expect(line(t("drawer.cashIn"))).toBe(`+${formatMoney(2000, "EUR")}`);
+    expect(line(t("drawer.cashOut"))).toBe(`−${formatMoney(500, "EUR")}`);
+    expect(line(t("drawer.holds"))).toBe(formatMoney(17500, "EUR"));
+  });
+
+  it("leaves off the lines that are still zero, but never the sales", async () => {
+    drawer.mockResolvedValue({ ...open, session: session({ cash_sales: "0.00", expected: "100.00" }) });
+    show();
+
+    const sum = (await screen.findByText(t("drawer.holds"))).closest(".drawer-sum") as HTMLElement;
+    expect(within(sum).getByText(t("drawer.cashSales"))).toBeDefined();
+    expect(within(sum).queryByText(t("drawer.cashReturned"))).toBeNull();
+    expect(within(sum).queryByText(t("drawer.cashIn"))).toBeNull();
+    expect(within(sum).queryByText(t("drawer.cashOut"))).toBeNull();
+  });
+
+  it("says what a drawer left open since another day should hold, for whoever closes it", async () => {
+    drawer.mockResolvedValue({ ...open, session: session({ stale: true, expected: "142.50" }) });
+    show();
+
+    expect(await screen.findByText(t("drawer.holds"))).toBeDefined();
+    expect(screen.getByText(formatMoney(14250, "EUR"))).toBeDefined();
+  });
+
+  it("counts, then shows what was expected beside the count", async () => {
     drawer.mockResolvedValue(open);
     const counted = { ...open, session: session({ count: aCount() }) };
     drawerCount.mockResolvedValue(answer(counted, { kind: "count", expected: "185.00", difference: "-1.00" }));
@@ -413,7 +462,6 @@ describe("an open drawer", () => {
     await user.click(await screen.findByRole("button", { name: t("drawer.countAction") }));
 
     expect(screen.getByText(t("drawer.countHelp"))).toBeDefined();
-    expect(screen.queryByText(formatMoney(18500, "EUR"))).toBeNull();
     await user.click(button(t("count.byAmount")));
     for (const digit of ["1", "8", "4", "0", "0"]) await user.click(button(digit));
     await user.click(button(t("drawer.countRecord")));
@@ -424,8 +472,9 @@ describe("an open drawer", () => {
       cashier: "Ana",
     });
     expect(await screen.findByText(t("drawer.short", { amount: formatMoney(100, "EUR") }))).toBeDefined();
-    expect(screen.getByText(formatMoney(18500, "EUR"))).toBeDefined();
-    expect(screen.getByText(formatMoney(-100, "EUR"))).toBeDefined();
+    const result = document.querySelector(".drawer-result") as HTMLElement;
+    expect(within(result).getByText(formatMoney(18500, "EUR"))).toBeDefined();
+    expect(within(result).getByText(formatMoney(-100, "EUR"))).toBeDefined();
     expect(onState).toHaveBeenLastCalledWith(expect.objectContaining({ session: counted.session }));
   });
 

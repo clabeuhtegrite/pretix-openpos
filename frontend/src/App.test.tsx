@@ -1991,6 +1991,7 @@ describe("the cash drawer", () => {
     drawer: drawerInfo,
     session: {
       id: 9, opened_at: new Date().toISOString(), opened_by: "Ana", opening_float: "100.00",
+      expected: "100.00", cash_sales: "0.00", cash_returned: "0.00", cash_in: "0.00", cash_out: "0.00",
       stale: false, movements: [], count: null,
     },
     last_closed: null,

@@ -30,6 +30,7 @@ function state(over: Partial<DrawerState> = {}): DrawerState {
 
 const session = {
   id: 9, opened_at: "2026-09-19T16:00:00Z", opened_by: "Ana", opening_float: "100.00",
+  expected: "100.00", cash_sales: "0.00", cash_returned: "0.00", cash_in: "0.00", cash_out: "0.00",
   stale: false, movements: [], count: null,
 };
 

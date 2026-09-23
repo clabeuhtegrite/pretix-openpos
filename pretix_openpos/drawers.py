@@ -1,5 +1,5 @@
 """
-The cash drawer: opened with a float, fed by the sales, counted blind, closed.
+The cash drawer: opened with a float, fed by the sales, counted, closed.
 
 One module for the rules, called from both sides — the till's API and the
 back office — so that there is exactly one place deciding what a drawer
@@ -94,6 +94,10 @@ def drawer_stale():
         _("This till's cash drawer was opened on an earlier day and never closed. "
           "Close it, then open tonight's, before taking or handing back cash."),
     )
+
+
+def no_drawer():
+    return DrawerError("no_drawer", _("No cash drawer is assigned to this till."))
 
 
 def open_session_of(drawer):
@@ -251,6 +255,10 @@ def open_drawer(drawer, *, idempotency_key, amount, denominations=None, cashier=
         replay = _replay(drawer, idempotency_key)
         if replay is not None:
             return replay
+        if drawer.archived_at is not None:
+            # Its tills were let go when it was archived; this is a till that
+            # had not heard yet, pressing "open" in the same instant.
+            raise no_drawer()
         if open_session_of(drawer) is not None:
             raise DrawerError("drawer_open", _("This cash drawer is already open."))
         session = PosDrawerSession.objects.create(drawer=drawer, opened_at=now())
@@ -305,7 +313,7 @@ def move_cash(drawer, *, idempotency_key, kind, amount, reason, cashier="", devi
 def count_drawer(drawer, *, idempotency_key, amount, denominations=None, cashier="",
                  device=None, user=None, source=PosDrawerEntry.SOURCE_TILL):
     """
-    Write down a blind count, with what the drawer should have held then.
+    Write down a count, with what the drawer should have held then.
 
     Every count is kept, recounts included: the first figure somebody arrived
     at is as much a part of the evening as the one it closed on.
@@ -404,6 +412,45 @@ def close_drawer(drawer, *, idempotency_key, reason="", count_seq=None, amount=N
         session.closed_at = entry.datetime
         session.save(update_fields=["closed_at"])
         return entry
+
+
+def archive_drawer(drawer):
+    """
+    Put a closed drawer away. Returns the tills that were feeding it.
+
+    Refused while it is open: tonight's money is in it. Its tills are let go —
+    they take cash with no drawer until they are given another — because a
+    till left on a drawer nobody can open any more would refuse every cash
+    sale, and the screen that could fix it would no longer offer the drawer.
+    """
+    from .models import PosDevice
+
+    with transaction.atomic():
+        drawer = _lock(drawer)
+        if open_session_of(drawer) is not None:
+            raise DrawerError(
+                "drawer_open", _("Close the drawer before archiving it: it still holds tonight's cash.")
+            )
+        if drawer.archived_at is not None:
+            return []
+        tills = list(
+            PosDevice.objects.filter(drawer=drawer)
+            .select_related("device")
+            .order_by("device__name", "device__pk")
+        )
+        PosDevice.objects.filter(pk__in=[till.pk for till in tills]).update(drawer=None)
+        drawer.archived_at = now()
+        drawer.save(update_fields=["archived_at"])
+        return [till.device for till in tills]
+
+
+def restore_drawer(drawer):
+    """Offer an archived drawer again. Its tills are given back by hand."""
+    with transaction.atomic():
+        drawer = _lock(drawer)
+        drawer.archived_at = None
+        drawer.save(update_fields=["archived_at"])
+        return drawer
 
 
 def check_denominations(denominations, amount, currency):

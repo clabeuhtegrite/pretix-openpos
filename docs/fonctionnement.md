@@ -1,6 +1,6 @@
 # Fonctionnement de pretix-openpos
 
-Documentation de fonctionnement du plugin, version 0.21.0. Elle couvre trois
+Documentation de fonctionnement du plugin, version 0.21.1. Elle couvre trois
 choses, dans cet ordre : ce que le plugin ajoute à pretix, comment le mettre en
 service, et ce qui se passe exactement quand un bénévole encaisse.
 
@@ -358,7 +358,7 @@ En Docker/Kubernetes, [`deploy/Dockerfile`](../deploy/Dockerfile) intègre le pl
 
 ```bash
 cd frontend && npm run build && cd ..
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.21.0 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.21.1 .
 ```
 
 Deux pièges :
@@ -1570,8 +1570,8 @@ porte a le sien, ou n'en a pas.
 
 Pour un tiroir, une soirée est une **ouverture** : le fond de caisse compté en
 début de soirée, les ventes en espèces qui s'y ajoutent, l'argent apporté ou
-retiré en cours de route, un comptage à l'aveugle à la fin, et la fermeture sur
-ce comptage. L'écart entre ce qui a été compté et ce que le tiroir aurait dû
+retiré en cours de route, un comptage à la fin, et la fermeture sur ce
+comptage. L'écart entre ce qui a été compté et ce que le tiroir aurait dû
 contenir est le chiffre sur lequel la soirée se juge. Un tiroir n'a qu'une
 ouverture à la fois, et la base de données le garantit même si deux tablettes
 appuient sur *Ouvrir* à la même seconde.
@@ -1587,9 +1587,16 @@ appuient sur *Ouvrir* à la même seconde.
    Un appareil sans tiroir encaisse les espèces exactement comme avant : rien
    ne change tant que personne n'a rien choisi.
 
-Un tiroir déjà ouvert une fois ne se supprime plus : son journal reste, on le
-renomme au besoin. Créer, renommer, supprimer, rattacher un appareil et fermer
-depuis le back-office s'écrivent dans l'historique de l'organisateur.
+Un tiroir déjà ouvert une fois ne se supprime plus : son journal et les ventes
+rattachées à ses ouvertures font partie des comptes. On l'**archive** à la
+place, depuis sa propre page (bouton 🗄 de la liste) : il sort de la liste et
+n'est plus proposé aux appareils, ses soirées restent consultables, et
+*Réactiver* le ramène. Un tiroir ouvert ne s'archive pas ; les appareils qui lui
+étaient rattachés le perdent, et encaissent les espèces sans tiroir jusqu'à ce
+qu'on leur en donne un autre — la page le dit avant de confirmer. Le nom d'un
+tiroir archivé reste pris : le réactiver, ou le renommer d'abord. Créer,
+renommer, supprimer, archiver, réactiver, rattacher un appareil et fermer depuis
+le back-office s'écrivent dans l'historique de l'organisateur.
 
 ### Sur la caisse
 
@@ -1610,9 +1617,14 @@ et jamais par-dessus un client en cours.
   obligatoire — « apport de monnaie », « enveloppe au trésorier ». Un retrait
   sans motif est la première ligne qu'on interroge dans un contrôle, et la
   dernière dont quelqu'un se souvient.
-- **Compter la caisse** : le comptage est **à l'aveugle**. L'app ne montre ce
-  que le tiroir devrait contenir qu'une fois le compte enregistré, avec l'écart
-  et son verdict (« La caisse est juste », « Il manque 5,00 € »). Recompter est
+- **Doit contenir** : tant que le tiroir est ouvert, le panneau montre ce qu'il
+  doit contenir, recalculé par le serveur à chaque ouverture du panneau — le
+  fond, les ventes en espèces, ce qui a été rendu (annulations, consignes), les
+  entrées et les sorties d'argent, puis leur somme. Les lignes encore à zéro
+  sont omises, sauf les ventes.
+- **Compter la caisse** : compter ce qu'il y a dans le tiroir. Une fois le
+  compte enregistré, l'app le met en face de l'attendu, avec l'écart et son
+  verdict (« La caisse est juste », « Il manque 5,00 € »). Recompter est
   toujours possible, et chaque comptage est gardé : le premier chiffre auquel
   quelqu'un est arrivé fait partie de la soirée autant que celui sur lequel elle
   a fermé.
@@ -1624,10 +1636,12 @@ et jamais par-dessus un client en cours.
 Le résumé de la fermeture reste affiché dans le panneau jusqu'à l'ouverture
 suivante : c'est le reçu de la soirée.
 
-Ce que le tiroir devrait contenir n'apparaît nulle part avant le comptage, ni
-dans ce panneau ni ailleurs dans l'app. *Réglages* montre la recette de
+Jusqu'en 0.21.0, le comptage était à l'aveugle : l'attendu n'apparaissait
+qu'une fois le compte enregistré. L'organisateur a demandé, en ouvrant sa
+caisse sur 150 € et en vendant en espèces, de voir le montant du moment ; il
+est affiché depuis 0.21.1. *Réglages* montre par ailleurs la recette de
 l'événement, qui est autre chose : ce que l'événement a vendu, sans le fond ni
-les entrées et sorties d'argent. Elle reste donc affichée.
+les entrées et sorties d'argent.
 
 ### Ce que le serveur refuse, et ce qu'il ne refuse jamais
 
@@ -1681,10 +1695,12 @@ et comptées à part, comme partout (§6.5).
 ### Dans le back-office
 
 *Open POS → Caisses espèces* liste les tiroirs, leurs appareils, l'ouverture en
-cours et la dernière soirée fermée avec son écart. Chaque tiroir a son
-historique, soirée par soirée, avec l'état de sa chaîne d'intégrité et un
-**Export CSV** : une ligne par ouverture, recalculée plutôt que recopiée, pour
-qu'un export fait le lendemain compte la vente rejouée le matin.
+cours avec ce que le tiroir **doit contenir** à cet instant, et la dernière
+soirée fermée avec son écart ; les tiroirs archivés suivent, à part. Chaque
+tiroir a son historique, soirée par soirée — l'ouverture en cours avec son
+attendu du moment —, avec l'état de sa chaîne d'intégrité et un **Export CSV** :
+une ligne par ouverture, recalculée plutôt que recopiée, pour qu'un export fait
+le lendemain compte la vente rejouée le matin.
 
 Chaque soirée a son **rapport de fermeture** : le fond, les ventes, les
 annulations, les consignes rendues, les entrées et sorties, l'attendu, le
@@ -1697,7 +1713,7 @@ Une ouverture qu'une caisse a oublié de fermer se ferme depuis ce rapport, avec
 le montant si quelqu'un a compté le tiroir, sans sinon. Le journal dit que la
 fermeture vient du back-office, et de qui.
 
-Créer, renommer, supprimer et fermer demandent la permission des appareils
+Créer, renommer, supprimer, archiver, réactiver et fermer demandent la permission des appareils
 (`organizer.devices:write`). Lire les rapports est ouvert en plus à qui peut
 lire les commandes de **tous** les événements de l'organisateur : une ouverture
 mélange les ventes de tous les événements pour lesquels ses caisses ont vendu.
@@ -2047,9 +2063,9 @@ chaque *Vider* est une confirmation que plus personne ne lit à la troisième.
 
 Sans caisse espèces, c'est tout ce que la caisse offre pour rapprocher le
 tiroir en fin de soirée : ce que l'événement a encaissé. Le fond de caisse, les
-entrées et sorties d'argent, le comptage à l'aveugle et le rapport de fermeture
-viennent avec la caisse espèces (§5septies), qu'on active en rattachant
-l'appareil à un tiroir.
+entrées et sorties d'argent, ce que le tiroir doit contenir, le comptage et le
+rapport de fermeture viennent avec la caisse espèces (§5septies), qu'on active
+en rattachant l'appareil à un tiroir.
 
 ### 7.2 Dans le back-office
 
@@ -2192,10 +2208,10 @@ Base : `/api/v1`. Authentification : `Authorization: Device <token>`.
 | `POST` | `…/openpos/terminal/start/` | Met le panier sur le lecteur de cette caisse |
 | `GET` | `…/openpos/terminal/status/?idempotency_key=<clé>` | Où en est ce paiement lecteur |
 | `POST` | `…/openpos/terminal/cancel/` | Retire le panier du lecteur |
-| `GET` | `…/openpos/drawer/` | La caisse espèces de cet appareil : ouverte ou non, fond, entrées et sorties, dernier comptage ; jamais ce qu'elle devrait contenir avant qu'un comptage soit enregistré |
+| `GET` | `…/openpos/drawer/` | La caisse espèces de cet appareil : ouverte ou non, fond, entrées et sorties, dernier comptage, et ce qu'elle doit contenir maintenant (`expected`, avec `cash_sales`, `cash_returned`, `cash_in`, `cash_out`) |
 | `POST` | `…/openpos/drawer/open/` | Ouvre la caisse sur le fond compté (`amount`, `denominations` facultatif) |
 | `POST` | `…/openpos/drawer/movement/` | Entrée (`in`) ou sortie (`out`) d'argent, avec son motif |
-| `POST` | `…/openpos/drawer/count/` | Comptage à l'aveugle, répondu avec l'attendu et l'écart |
+| `POST` | `…/openpos/drawer/count/` | Comptage, répondu avec l'attendu et l'écart |
 | `POST` | `…/openpos/drawer/close/` | Ferme sur un comptage encore à jour (`count_seq`), ou sans comptage (`uncounted`) une caisse ouverte un jour précédent |
 | `POST` | `/organizers/<org>/checkinrpc/redeem/` | Pointage (endpoint pretix natif) |
 | `GET` | `/organizers/<org>/checkinrpc/search/` | Recherche de participant (natif) |

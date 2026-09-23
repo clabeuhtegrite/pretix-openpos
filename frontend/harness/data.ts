@@ -340,6 +340,9 @@ export const drawerInfo = {
 /** Cash sold into the drawer tonight, as the server would add it up. */
 export const drawerSales = "312.50";
 
+/** Cash handed back out of it tonight: two cups returned, a cancelled beer. */
+export const drawerReturned = "-5.00";
+
 const tonight = (hours: number, minutes = 0) => {
   const at = new Date();
   at.setHours(hours, minutes, 0, 0);

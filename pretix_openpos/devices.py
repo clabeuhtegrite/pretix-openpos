@@ -93,7 +93,11 @@ class DevicesView(OrganizerDetailViewMixin, OrganizerPermissionRequiredMixin, Te
         ], None
 
     def _drawers(self):
-        return list(PosDrawer.objects.filter(organizer=self.request.organizer).order_by("name", "pk"))
+        # An archived drawer is offered to no till: nobody can open it.
+        return list(
+            PosDrawer.objects.filter(organizer=self.request.organizer, archived_at__isnull=True)
+            .order_by("name", "pk")
+        )
 
     def get_context_data(self, **kwargs):
         ctx = super().get_context_data(**kwargs)
