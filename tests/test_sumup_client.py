@@ -719,7 +719,7 @@ def test_a_transaction_that_is_not_there_by_id_is_an_error(account, sumup):
 
 
 @pytest.mark.django_db
-def test_the_history_is_asked_for_payments_given_back_since_a_time(account, sumup):
+def test_the_history_is_asked_for_refunds_and_payments_given_back_since_a_time(account, sumup):
     from datetime import datetime, timezone
 
     list(account.given_back_payments(datetime(2026, 9, 24, 12, 30, tzinfo=timezone.utc)))
@@ -728,7 +728,8 @@ def test_the_history_is_asked_for_payments_given_back_since_a_time(account, sumu
     assert query == {
         "oldest_time": "2026-09-24T12:30:00Z",
         "statuses[]": ["CANCELLED", "REFUNDED"],
-        "types[]": ["PAYMENT"],
+        # A refund's own line: the payment's stays "successful".
+        "types[]": ["PAYMENT", "REFUND"],
         "order": "descending",
         "limit": 100,
     }
@@ -739,23 +740,23 @@ def test_the_history_follows_its_next_link_page_by_page(account, sumup):
     from datetime import datetime, timezone
 
     for n in range(5):
-        sumup.transactions[f"ctx_{n}"] = {
-            "id": f"tx_{n}", "client_transaction_id": f"ctx_{n}",
-            "status": "REFUNDED", "amount": "1.00", "refunded_amount": 1.0,
-        }
-    sumup.transactions["ctx_paid"] = {
-        "id": "tx_paid", "client_transaction_id": "ctx_paid",
-        "status": "SUCCESSFUL", "amount": "1.00",
-    }
+        sumup.pay(f"ctx_{n}", transaction_id=f"tx_{n}", amount="1.00")
+    for n in range(5):
+        sumup.give_back(f"tx_{n}")
+    sumup.pay("ctx_paid", transaction_id="tx_paid", amount="1.00")
 
     items = list(account.given_back_payments(datetime(2026, 9, 1, tzinfo=timezone.utc), limit=2))
 
-    # Newest first, every one of them once, and none still paid.
-    assert [item["id"] for item in items] == ["tx_4", "tx_3", "tx_2", "tx_1", "tx_0"]
+    # Newest first, each refund once, and no payment: the refunded ones stay
+    # "successful", like the one still paid.
+    assert [(item["type"], item["transaction_id"]) for item in items] == [
+        ("REFUND", f"tx_{n}") for n in (4, 3, 2, 1, 0)
+    ]
     assert len(sumup.history_reads) == 3
     # The link's cursor is laid over the filters, which it does not repeat.
-    assert sumup.history_reads[1]["newest_ref"] == "tx_3"
+    assert sumup.history_reads[1]["newest_ref"] == items[1]["id"]
     assert sumup.history_reads[1]["statuses[]"] == ["CANCELLED", "REFUNDED"]
+    assert sumup.history_reads[1]["types[]"] == ["PAYMENT", "REFUND"]
 
 
 @pytest.mark.django_db
@@ -763,17 +764,19 @@ def test_a_next_link_that_repeats_the_filters_keeps_all_of_them(account, sumup):
     from datetime import datetime, timezone
 
     for n in range(3):
-        sumup.transactions[f"ctx_{n}"] = {
-            "id": f"tx_{n}", "client_transaction_id": f"ctx_{n}",
-            "status": "REFUNDED" if n % 2 else "CANCELLED", "amount": "1.00",
-        }
-    sumup.history_link_extra = "&statuses[]=CANCELLED&statuses[]=REFUNDED&types[]=PAYMENT"
+        sumup.pay(f"ctx_{n}", transaction_id=f"tx_{n}", amount="1.00")
+        sumup.give_back(f"tx_{n}", status="REFUNDED" if n % 2 else "CANCELLED")
+    sumup.history_link_extra = (
+        "&statuses[]=CANCELLED&statuses[]=REFUNDED&types[]=PAYMENT&types[]=REFUND"
+    )
 
     items = list(account.given_back_payments(datetime(2026, 9, 1, tzinfo=timezone.utc), limit=2))
 
-    assert [item["id"] for item in items] == ["tx_2", "tx_1", "tx_0"]
+    assert [(item["type"], item["transaction_id"]) for item in items] == [
+        ("REFUND", "tx_1"), ("PAYMENT", "tx_2"), ("PAYMENT", "tx_0"),
+    ]
     assert sumup.history_reads[1]["statuses[]"] == ["CANCELLED", "REFUNDED"]
-    assert sumup.history_reads[1]["types[]"] == ["PAYMENT"]
+    assert sumup.history_reads[1]["types[]"] == ["PAYMENT", "REFUND"]
 
 
 @pytest.mark.django_db
@@ -823,6 +826,36 @@ def test_the_history_stops_after_so_many_pages(account, sumup):
                                      "amount": -10.0}]},
             Decimal("10.00"),
         ),
+        # A refunded payment stays "successful", as SumUp answered on 24
+        # September 2026: its history line says how much went back...
+        ({"type": "PAYMENT", "status": "SUCCESSFUL", "amount": 1.0, "refunded_amount": 1.0},
+         Decimal("1.00")),
+        ({"type": "PAYMENT", "status": "SUCCESSFUL", "amount": 1.0, "refunded_amount": 0},
+         Decimal("0.00")),
+        ({"status": "SUCCESSFUL", "amount": 10.0, "refunded_amount": -3.0}, Decimal("0.00")),
+        # ...and the payment itself its refund events, twice over: once.
+        (
+            {"status": "SUCCESSFUL", "simple_status": "SUCCESSFUL", "amount": 1.0,
+             "events": [{"type": "PAYOUT", "status": "SCHEDULED", "amount": 0.98},
+                        {"type": "REFUND", "status": "REFUNDED", "amount": 1.0}],
+             "transaction_events": [{"event_type": "PAYOUT", "status": "PENDING",
+                                     "amount": 0.98},
+                                    {"event_type": "REFUND", "status": "REFUNDED",
+                                     "amount": 1.0}]},
+            Decimal("1.00"),
+        ),
+        # A refund not final yet does not, when nothing else says refunded.
+        ({"status": "SUCCESSFUL", "amount": 10.0,
+          "events": [{"type": "REFUND", "status": "PENDING", "amount": 10.0}]}, Decimal("0.00")),
+        ({"status": "SUCCESSFUL", "amount": 10.0,
+          "events": [{"type": "REFUND", "status": "SUCCESSFUL", "amount": None}]}, None),
+        # A refund's own line: that one refund, so the payment is to say how
+        # much it had back in all. Cancelled, a refund is no money back.
+        ({"type": "REFUND", "status": "REFUNDED", "amount": 1.0}, None),
+        ({"type": "REFUND", "status": "SUCCESSFUL", "amount": 1.0}, None),
+        ({"type": "REFUND", "status": "CANCELLED", "amount": 1.0}, Decimal("0.00")),
+        ({"type": "REFUND", "status": "FAILED", "amount": 1.0}, Decimal("0.00")),
+        ({"type": "REFUND", "status": "PENDING", "amount": 1.0}, Decimal("0.00")),
         # Refunded, and not a word of how much: not guessed.
         ({"status": "REFUNDED", "amount": 10.0}, None),
         ({"status": "REFUNDED", "amount": 10.0,

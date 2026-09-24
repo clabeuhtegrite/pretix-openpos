@@ -292,7 +292,8 @@ def test_a_part_given_back_in_sumup_while_waiting_is_for_a_person(
     assert done["asso"]["failed"] == 1
     waiting = order.refunds.get(provider="openpos_card", source=OrderRefund.REFUND_SOURCE_ADMIN)
     assert waiting.state == OrderRefund.REFUND_STATE_FAILED
-    assert waiting.info_data["sumup_error"] == "REFUNDED"
+    # The payment stays "successful" in SumUp: its refund says the rest.
+    assert waiting.info_data["sumup_error"] == "SUCCESSFUL · REFUND REFUNDED 4.0"
     external = order.refunds.get(source=OrderRefund.REFUND_SOURCE_EXTERNAL)
     assert external.amount == Decimal("4.00")
 
@@ -456,7 +457,7 @@ def test_an_amount_only_the_transaction_states_is_counted_once(
     """SumUp lists a transaction's events twice over; the card got its money once."""
     sale = card_sale(till, sumup, [{"item": ticket.pk, "count": 1}])
     order = order_of(event, sale["order"]["code"])
-    sumup.give_back("tx_1", stated=False)
+    sumup.give_back("tx_1")
 
     reconcile_all()
 
@@ -472,7 +473,7 @@ def test_a_payment_called_refunded_with_no_figure_anywhere_is_left_as_it_is(
     """Guessing "all of it" could cancel a round for one beer handed back."""
     sale = card_sale(till, sumup, [{"item": ticket.pk, "count": 1}])
     order = order_of(event, sale["order"]["code"])
-    transaction = sumup.give_back("tx_1", stated=False)
+    transaction = sumup.give_back("tx_1")
     transaction["events"] = transaction["transaction_events"] = []
 
     reconcile_all()
@@ -508,6 +509,81 @@ def test_a_refund_sumup_refused_and_made_in_sumup_leaves_the_refused_list(
     assert len(reversals_of(event, sale["journal_seq"])) == 1
     [entry] = entries(order, "pretix_openpos.order.sumup.given_back")
     assert str(entry.display()).endswith("Open POS recorded the refund.")
+
+
+@pytest.mark.django_db
+def test_a_refund_as_sumup_writes_it_down_is_found_and_brought_in(
+    backoffice, till, event, ticket, reader_till, sumup
+):
+    """
+    The same, with SumUp's answers as read back from the live account on 24
+    September: the payment still "successful" under both statuses, a payout
+    scheduled beside the refund, and the refund a line of the history of its
+    own. Asked for refunded payments only, as up to 0.24.1, the history gave
+    nothing, and the order went on saying the customer was owed their money.
+    """
+    sale = card_sale(till, sumup, [{"item": ticket.pk, "count": 1}])
+    order = order_of(event, sale["order"]["code"])
+    sumup.next_response = FakeResponse(422, REFUND_FAILED)
+    cancel_at_the_till(till, sale)
+    transaction = sumup.give_back("tx_1")
+    transaction["simple_status"] = "SUCCESSFUL"
+    transaction["events"].insert(
+        0, {"id": 90, "type": "PAYOUT", "status": "SCHEDULED", "amount": 9.8}
+    )
+    transaction["transaction_events"].insert(
+        0, {"id": 90, "event_type": "PAYOUT", "status": "PENDING", "amount": 9.8}
+    )
+    order.refresh_from_db()
+    assert order.pending_sum == Decimal("-10.00")
+
+    done = reconcile_all()["asso"]
+
+    # The refund's line, matched to the payment it names; the payment read
+    # once, for how much it had back.
+    assert (done["listed"], done["given_back"]) == (1, 1)
+    assert sumup.transaction_reads == ["tx_1"]
+    assert sumup.refunds == []
+    order.refresh_from_db()
+    assert order.pending_sum == Decimal("0.00")
+    recorded = order.refunds.get(source=OrderRefund.REFUND_SOURCE_EXTERNAL)
+    assert (recorded.state, recorded.amount) == (OrderRefund.REFUND_STATE_DONE, Decimal("10.00"))
+    assert PosTerminalPayment.objects.get().refunded is not None
+    assert "Card refunds SumUp refused" not in backoffice.get(sales_url(event)).content.decode()
+
+
+@pytest.mark.django_db
+def test_a_payment_refunded_twice_is_read_once_a_pass(till, event, ticket, reader_till, sumup):
+    """Two refunds, two lines: the payment says what it had back in all."""
+    sale = card_sale(till, sumup, [{"item": ticket.pk, "count": 1}])
+    order = order_of(event, sale["order"]["code"])
+    sumup.give_back("tx_1", amount="4.00")
+    sumup.give_back("tx_1", amount="2.00")
+
+    done = reconcile_all()["asso"]
+
+    assert (done["listed"], done["given_back"]) == (2, 1)
+    assert sumup.transaction_reads == ["tx_1"]
+    [refund] = order.refunds.all()
+    assert (refund.state, refund.amount) == (OrderRefund.REFUND_STATE_EXTERNAL, Decimal("6.00"))
+
+
+@pytest.mark.django_db
+def test_a_refund_sumup_cancelled_is_no_money_back(till, event, ticket, reader_till, sumup):
+    sale = card_sale(till, sumup, [{"item": ticket.pk, "count": 1}])
+    order = order_of(event, sale["order"]["code"])
+    sumup.refund_lines.append(
+        {"id": "77", "transaction_id": "tx_1", "type": "REFUND", "status": "CANCELLED",
+         "amount": 10.0}
+    )
+
+    done = reconcile_all()["asso"]
+
+    assert (done["listed"], done["given_back"]) == (1, 0)
+    assert sumup.transaction_reads == []
+    order.refresh_from_db()
+    assert order.status == Order.STATUS_PAID
+    assert order.refunds.count() == 0
 
 
 @pytest.mark.django_db
@@ -549,7 +625,8 @@ def test_a_part_somebody_cancelled_on_the_order_is_not_written_again(
     reconcile_all()
     assert order.refunds.count() == 1
 
-    sumup.give_back("tx_1", amount="6.00")
+    # Two more: six in all.
+    sumup.give_back("tx_1", amount="2.00")
     reconcile_all()
     later = order.refunds.exclude(pk=dismissed.pk).get()
     assert later.state == OrderRefund.REFUND_STATE_EXTERNAL
@@ -655,10 +732,8 @@ def test_a_payment_given_back_that_no_reader_here_took_is_left_alone(
     """Taken on the SumUp app, say: in SumUp's history, and nothing of pretix'."""
     sale = card_sale(till, sumup, [{"item": ticket.pk, "count": 1}])
     order = order_of(event, sale["order"]["code"])
-    sumup.transactions["ctx_app"] = {
-        "id": "tx_app", "client_transaction_id": "ctx_app",
-        "status": "REFUNDED", "amount": "5.00", "refunded_amount": 5.0,
-    }
+    sumup.pay("ctx_app", transaction_id="tx_app", amount="5.00")
+    sumup.give_back("tx_app")
 
     done = reconcile_all()[event.organizer.slug]
 
@@ -948,10 +1023,8 @@ def test_compare_now_leaves_other_events_alone(
         currency="EUR", status=PosTerminalPayment.STATUS_SUCCESSFUL, transaction_id="tx_other",
         client_transaction_id="ctx_other",
     )
-    sumup.transactions["ctx_other"] = {
-        "id": "tx_other", "client_transaction_id": "ctx_other",
-        "status": "REFUNDED", "amount": "5.00", "refunded_amount": 5.0,
-    }
+    sumup.pay("ctx_other", transaction_id="tx_other", amount="5.00")
+    sumup.give_back("tx_other")
 
     backoffice.post(compare_url(event))
 

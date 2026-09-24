@@ -23,6 +23,13 @@ server took into line: a whole payment cancels its order, as pretix' own
 journal; a refund pretix was waiting on is marked done; a part given back is
 recorded as an external refund, for somebody to process on the order.
 
+A refunded payment stays "successful" in SumUp, in its history and on the
+transaction alike: the refund is a line of the history of its own, naming the
+payment, and an event on the payment. Up to 0.24.1 the history was asked for
+refunded payments, of which there are none, and the refund made in SumUp's
+dashboard that day stayed out of pretix until the refunds' own lines were
+asked for.
+
 What is never done here is a decision nobody made. The one refund this module
 sends is one somebody already asked for, and only after reading the
 transaction again, so money SumUp has already given back is not asked for a
@@ -269,16 +276,22 @@ def _compare(organizer, account, done, *, event=None):
         return
     done["compared"] = True
     done["listed"] = len(items)
+    seen = set()
     for item in items:
+        # A refund's line has an id of its own, and names its payment by
+        # transaction_id.
         terminal = (
             by_id.get(str(item.get("id") or ""))
             or by_id.get(str(item.get("transaction_id") or ""))
             or by_client_id.get(str(item.get("client_transaction_id") or ""))
         )
-        if terminal is None:
+        if terminal is None or terminal.pk in seen:
             # Not a reader of this server's: a payment taken on the SumUp app,
-            # or one already brought into line.
+            # or one already brought into line. Or one read on this pass
+            # already: refunded twice, a payment has two lines, and what it
+            # had back in all is read from the payment itself.
             continue
+        seen.add(terminal.pk)
         try:
             if absorb(terminal, item, account=account):
                 done["given_back"] += 1
@@ -293,10 +306,11 @@ def absorb(terminal, transaction_data, *, account=None):
     """
     Bring pretix in line with a card payment SumUp says went back.
 
-    ``transaction_data`` is SumUp's word on the transaction: a line of its
-    history, or the transaction itself. Returns what was done, or ``None`` when
-    there was nothing left to do — it runs on every pass, and a refund already
-    brought into line has to cost nothing the second time.
+    ``transaction_data`` is SumUp's word on the transaction: its line in the
+    history, the line of one of its refunds, or the transaction itself.
+    Returns what was done, or ``None`` when there was nothing left to do — it
+    runs on every pass, and a refund already brought into line has to cost
+    nothing the second time.
 
     The whole payment given back, whoever did it:
 
@@ -316,8 +330,8 @@ def absorb(terminal, transaction_data, *, account=None):
     """
     amount = given_back(transaction_data)
     if amount is None and account is not None:
-        # Called refunded without saying how much. The transaction itself
-        # lists its refunds.
+        # Called refunded without saying how much: a refund's own line, or a
+        # payment's with no figure. The payment itself lists its refunds.
         amount = given_back(account.transaction_by_id(terminal.transaction_id))
     if not amount:
         return None
@@ -560,9 +574,22 @@ def _complete(refund, terminal):
 
 
 def _status_line(transaction_data):
-    """SumUp's own words for a transaction's state, for the "SumUp's answer" column."""
-    words = [transaction_data.get("status"), transaction_data.get("simple_status")]
-    return " · ".join(dict.fromkeys(str(word) for word in words if word))[:190]
+    """
+    SumUp's own words for a transaction's state, for the "SumUp's answer" column.
+
+    Its refunds too, with their amounts: a refunded payment stays "successful"
+    in SumUp, and they are the part that says what happened to it.
+    """
+    statuses = [transaction_data.get("status"), transaction_data.get("simple_status")]
+    words = list(dict.fromkeys(str(word) for word in statuses if word))
+    events = transaction_data.get("events") or transaction_data.get("transaction_events") or []
+    words += [
+        "REFUND {} {}".format(event.get("status") or "?", event.get("amount"))
+        for event in events
+        if isinstance(event, dict)
+        and (event.get("type") or event.get("event_type")) == "REFUND"
+    ]
+    return " · ".join(words)[:190]
 
 
 def _since(refund):
