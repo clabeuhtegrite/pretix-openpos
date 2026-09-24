@@ -13,6 +13,7 @@ takings, the Sales page's lists cleared.
 What must never happen is the same money going back twice: every test that
 could send a refund says how many SumUp received.
 """
+import json
 from datetime import timedelta
 from decimal import Decimal
 
@@ -268,7 +269,7 @@ def test_a_refund_made_in_sumup_seen_only_on_the_transaction_is_recorded_too(
     """The history can lag; the transaction read before sending is the last word."""
     _sale, order, _response = waiting_sale(till, sumup, event, ticket)
     sumup.give_back("tx_1")
-    monkeypatch.setattr(reconcile, "_compare", lambda *args: None)
+    monkeypatch.setattr(reconcile, "_compare", lambda *args, **kwargs: None)
 
     done = reconcile_all()
 
@@ -659,9 +660,9 @@ def test_a_payment_given_back_that_no_reader_here_took_is_left_alone(
         "status": "REFUNDED", "amount": "5.00", "refunded_amount": 5.0,
     }
 
-    done = reconcile_all()
+    done = reconcile_all()[event.organizer.slug]
 
-    assert done == {event.organizer.slug: {"given_back": 0, "sent": 0, "waiting": 0, "failed": 0}}
+    assert (done["compared"], done["listed"], done["given_back"]) == (True, 1, 0)
     order.refresh_from_db()
     assert order.status == Order.STATUS_PAID
     assert order.refunds.count() == 0
@@ -718,6 +719,8 @@ def test_one_payment_s_trouble_does_not_stop_the_rest(
 
     monkeypatch.setattr(reconcile, "reconcile_organizer", broken)
     assert reconcile_all() == {}
+    # Written down all the same, for the Sales page to say something is wrong.
+    assert reconcile.last_comparison(event.organizer)["crashed"] is True
 
 
 @pytest.mark.django_db
@@ -730,7 +733,8 @@ def test_one_refund_s_trouble_does_not_stop_the_rest(
         raise RuntimeError("boom")
 
     monkeypatch.setattr(reconcile, "_ask_again", broken)
-    assert reconcile_all()["asso"] == {"given_back": 0, "sent": 0, "waiting": 0, "failed": 0}
+    done = reconcile_all()["asso"]
+    assert [done[key] for key in ("given_back", "sent", "waiting", "failed")] == [0, 0, 0, 0]
 
 
 # -- pretix' periodic task ------------------------------------------------------
@@ -745,3 +749,250 @@ def test_pretix_periodic_task_runs_the_comparison(till, event, ticket, reader_ti
 
     assert sumup.refunds == [("tx_1", None)]
     assert order.refunds.get().state == OrderRefund.REFUND_STATE_DONE
+
+
+# -- a refund somebody already recorded by hand -----------------------------------
+
+
+@pytest.mark.django_db
+def test_a_refund_already_recorded_by_hand_is_not_recorded_twice(
+    backoffice, till, event, ticket, reader_till, sumup
+):
+    """
+    Refused at the till, given back in SumUp's dashboard, then written down in
+    pretix as a manual refund by somebody tidying the order: the money went
+    back once, and the order must not say the customer now owes it.
+    """
+    sale = card_sale(till, sumup, [{"item": ticket.pk, "count": 1}])
+    order = order_of(event, sale["order"]["code"])
+    sumup.next_response = FakeResponse(422, REFUND_FAILED)
+    cancel_at_the_till(till, sale)
+    order.refunds.create(
+        amount=Decimal("10.00"), provider="manual", state=OrderRefund.REFUND_STATE_DONE,
+        source=OrderRefund.REFUND_SOURCE_ADMIN,
+    )
+    sumup.give_back("tx_1")
+
+    reconcile_all()
+
+    order.refresh_from_db()
+    assert order.pending_sum == Decimal("0.00")
+    assert not order.refunds.filter(source=OrderRefund.REFUND_SOURCE_EXTERNAL).exists()
+    assert PosTerminalPayment.objects.get().refunded is not None
+    assert "Card refunds SumUp refused" not in backoffice.get(sales_url(event)).content.decode()
+    [entry] = entries(order, "pretix_openpos.order.sumup.given_back")
+    assert str(entry.display()).endswith(
+        "pretix already had this refund recorded, so nothing was added."
+    )
+
+
+# -- what the Sales page says, and its button -----------------------------------
+
+
+def compare_url(event):
+    return f"/control/event/{event.organizer.slug}/{event.slug}/openpos/sales/sumup/"
+
+
+@pytest.mark.django_db
+def test_the_sales_page_says_when_the_periodic_task_last_compared(
+    backoffice, till, event, ticket, reader_till, sumup
+):
+    card_sale(till, sumup, [{"item": ticket.pk, "count": 1}])
+    page = backoffice.get(sales_url(event)).content.decode()
+    assert "No automatic comparison with SumUp has run yet" in page
+
+    sumup.give_back("tx_1")
+    reconcile_all()
+
+    record = reconcile.last_comparison(event.organizer)
+    assert (record["compared"], record["listed"], record["given_back"]) == (True, 1, 1)
+    page = backoffice.get(sales_url(event)).content.decode()
+    assert "Last automatic comparison with SumUp" in page
+    assert "Given back in SumUp: 1 · brought into pretix: 1" in page
+
+
+@pytest.mark.django_db
+def test_the_sales_page_says_what_sumup_answered_when_it_would_not(
+    backoffice, till, event, ticket, reader_till, sumup
+):
+    card_sale(till, sumup, [{"item": ticket.pk, "count": 1}])
+    sumup.next_response = FakeResponse(403, {"message": "users is not allowed to do this"})
+
+    reconcile_all()
+
+    record = reconcile.last_comparison(event.organizer)
+    assert record["error"].startswith("403")
+    page = backoffice.get(sales_url(event)).content.decode()
+    assert "history could not be read: 403" in page
+    assert "alert-warning" in page
+
+
+@pytest.mark.django_db
+def test_the_sales_page_says_so_when_the_last_pass_is_old(
+    backoffice, till, event, ticket, reader_till, sumup
+):
+    """pretix advises running its cron at least hourly: two hours is a stopped task."""
+    card_sale(till, sumup, [{"item": ticket.pk, "count": 1}])
+    reconcile_all()
+    page = backoffice.get(sales_url(event)).content.decode()
+    assert "more than two hours ago" not in page
+    assert "alert-warning" not in page
+
+    record = json.loads(event.organizer.settings.get(reconcile.LAST_COMPARED))
+    record["at"] = (now() - timedelta(hours=3)).isoformat()
+    event.organizer.settings.set(reconcile.LAST_COMPARED, json.dumps(record))
+
+    page = backoffice.get(sales_url(event)).content.decode()
+    assert "That is more than two hours ago" in page
+    assert "alert-warning" in page
+
+
+@pytest.mark.django_db
+def test_an_old_pass_with_nothing_left_since_is_no_warning(
+    backoffice, till, event, ticket, reader_till, sumup
+):
+    """The task skips an organizer with nothing to compare: its last pass ages."""
+    card_sale(till, sumup, [{"item": ticket.pk, "count": 1}])
+    sumup.give_back("tx_1")
+    reconcile_all()
+    record = json.loads(event.organizer.settings.get(reconcile.LAST_COMPARED))
+    record["at"] = (now() - timedelta(days=12)).isoformat()
+    event.organizer.settings.set(reconcile.LAST_COMPARED, json.dumps(record))
+
+    page = backoffice.get(sales_url(event)).content.decode()
+
+    assert "Given back in SumUp: 1 · brought into pretix: 1" in page
+    assert "more than two hours ago" not in page
+
+
+@pytest.mark.django_db
+def test_nothing_to_compare_yet_is_no_warning(backoffice, event, sumup):
+    page = backoffice.get(sales_url(event)).content.decode()
+
+    assert "Nothing to compare with SumUp" in page
+    assert "No automatic comparison with SumUp has run yet" not in page
+    assert "Compare with SumUp now" in page
+
+
+@pytest.mark.django_db
+def test_a_pass_with_nothing_left_to_compare_says_so(organizer, sumup):
+    from pretix_openpos.views import comparison_summary
+
+    done = reconcile.reconcile_organizer(organizer)
+
+    assert sumup.calls == []
+    assert "Nothing to compare with SumUp" in str(comparison_summary(done))
+
+
+@pytest.mark.django_db
+def test_an_unreadable_record_counts_as_no_pass(organizer, sumup):
+    organizer.settings.set(reconcile.LAST_COMPARED, "{not json")
+    assert reconcile.last_comparison(organizer) is None
+
+
+@pytest.mark.django_db
+def test_the_sales_page_says_nothing_of_sumup_without_an_account(backoffice, event):
+    assert "Compare with SumUp now" not in backoffice.get(sales_url(event)).content.decode()
+
+
+@pytest.mark.django_db
+def test_compare_now_brings_a_refund_made_in_sumup_in_at_once(
+    backoffice, till, event, ticket, reader_till, sumup
+):
+    """24 September again, without waiting for the server's cron."""
+    sale = card_sale(till, sumup, [{"item": ticket.pk, "count": 1}])
+    order = order_of(event, sale["order"]["code"])
+    sumup.next_response = FakeResponse(422, REFUND_FAILED)
+    cancel_at_the_till(till, sale)
+    sumup.give_back("tx_1")
+
+    page = backoffice.post(compare_url(event), follow=True).content.decode()
+
+    assert "Given back in SumUp: 1 · brought into pretix: 1" in page
+    assert "Card refunds SumUp refused" not in page
+    assert sorted(refund.state for refund in order.refunds.all()) == [
+        OrderRefund.REFUND_STATE_DONE, OrderRefund.REFUND_STATE_FAILED,
+    ]
+    # One event's pass, not the periodic task's: that one has still not run.
+    assert reconcile.last_comparison(event.organizer) is None
+
+
+@pytest.mark.django_db
+def test_compare_now_asks_again_for_this_event_s_waiting_refund(
+    backoffice, till, event, ticket, reader_till, sumup
+):
+    _sale, order, _response = waiting_sale(till, sumup, event, ticket)
+    sumup.not_refundable_yet.clear()
+
+    page = backoffice.post(compare_url(event), follow=True).content.decode()
+
+    assert "waiting refunds sent: 1" in page
+    assert sumup.refunds == [("tx_1", None)]
+    assert order.refunds.get().state == OrderRefund.REFUND_STATE_DONE
+
+
+@pytest.mark.django_db
+def test_compare_now_leaves_other_events_alone(
+    backoffice, organizer, till, event, ticket, reader_till, sumup
+):
+    """The permission it asks for is this event's, so its reach is too."""
+    from pretix.base.models import Event
+
+    card_sale(till, sumup, [{"item": ticket.pk, "count": 1}])
+    other = Event.objects.create(
+        organizer=organizer, name="Autre soirée", slug="autre", date_from=now(),
+        plugins="pretix_openpos", currency="EUR",
+    )
+    PosTerminalPayment.objects.create(
+        event=other, idempotency_key="ailleurs", reader_id="rdr_x", amount=Decimal("5.00"),
+        currency="EUR", status=PosTerminalPayment.STATUS_SUCCESSFUL, transaction_id="tx_other",
+        client_transaction_id="ctx_other",
+    )
+    sumup.transactions["ctx_other"] = {
+        "id": "tx_other", "client_transaction_id": "ctx_other",
+        "status": "REFUNDED", "amount": "5.00", "refunded_amount": 5.0,
+    }
+
+    backoffice.post(compare_url(event))
+
+    assert sumup.history_reads
+    assert PosTerminalPayment.objects.get(transaction_id="tx_other").refunded is None
+
+
+@pytest.mark.django_db
+def test_compare_now_says_what_sumup_answered(
+    backoffice, till, event, ticket, reader_till, sumup
+):
+    card_sale(till, sumup, [{"item": ticket.pk, "count": 1}])
+    sumup.next_response = FakeResponse(503, {"message": "maintenance"})
+
+    page = backoffice.post(compare_url(event), follow=True).content.decode()
+
+    assert "history could not be read: 503" in page
+
+
+@pytest.mark.django_db
+def test_compare_now_owns_up_to_its_own_trouble(
+    backoffice, till, event, ticket, reader_till, sumup, monkeypatch
+):
+    card_sale(till, sumup, [{"item": ticket.pk, "count": 1}])
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(reconcile, "reconcile_organizer", broken)
+    page = backoffice.post(compare_url(event), follow=True).content.decode()
+
+    assert "ran into an error while comparing with SumUp" in page
+
+
+@pytest.mark.django_db
+def test_compare_now_needs_sumup(backoffice, event):
+    page = backoffice.post(compare_url(event), follow=True).content.decode()
+    assert "SumUp is not set up for this organizer yet." in page
+
+
+@pytest.mark.django_db
+def test_compare_now_is_for_those_who_may_change_orders(reader, event, sumup):
+    assert reader.post(compare_url(event)).status_code == 403
+    assert sumup.calls == []

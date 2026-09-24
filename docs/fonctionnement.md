@@ -1,6 +1,6 @@
 # Fonctionnement de pretix-openpos
 
-Documentation de fonctionnement du plugin, version 0.24.0. Elle couvre trois
+Documentation de fonctionnement du plugin, version 0.24.1. Elle couvre trois
 choses, dans cet ordre : ce que le plugin ajoute à pretix, comment le mettre en
 service, et ce qui se passe exactement quand un bénévole encaisse.
 
@@ -397,7 +397,7 @@ En Docker/Kubernetes, [`deploy/Dockerfile`](../deploy/Dockerfile) intègre le pl
 
 ```bash
 cd frontend && npm run build && cd ..
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.24.0 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.24.1 .
 ```
 
 Deux pièges :
@@ -1531,7 +1531,9 @@ qu'un lecteur de l'organisateur a encaissés :
   motif *Le paiement carte a été remboursé dans SumUp* (ou *annulé*) ;
 - **commande déjà annulée**, avec un remboursement échoué par exemple : le
   remboursement est enregistré et effectué, et la vente quitte la liste des
-  remboursements refusés ;
+  remboursements refusés. Depuis 0.24.1, si quelqu'un l'a déjà saisi à la
+  main sur la commande (un remboursement manuel), rien n'est ajouté : l'argent
+  n'est pas compté deux fois, et l'historique de la commande le dit ;
 - **un remboursement en attente de SumUp** : il est marqué effectué ;
 - **une partie seulement** : elle est enregistrée comme remboursement fait hors
   de pretix, que la page de commande propose de traiter. La commande reste
@@ -1552,11 +1554,26 @@ personne décide.
 
 **Quand.** À chaque passage de la tâche périodique de pretix (`runperiodic`,
 que toute installation de pretix planifie déjà pour ses propres relances et
-expirations), au plus toutes les cinq minutes. Rien n'est demandé à SumUp pour
-un organisateur qui n'a ni paiement carte non rendu depuis 30 jours ni
-remboursement en attente. Si la liste des remboursements en attente ne voit
-jamais son heure de *Dernière demande* avancer, c'est que cette tâche ne tourne
-pas.
+expirations), et au plus toutes les cinq minutes. Son rythme est celui que le
+serveur donne à ce cron : pretix conseille entre chaque minute et chaque heure,
+et son exemple le lance à :15 et :45. Rien n'est demandé à SumUp pour un
+organisateur qui n'a ni paiement carte non rendu depuis 30 jours ni
+remboursement en attente.
+
+**Ce que la page Ventes en dit** (depuis 0.24.1). En haut, l'heure de la
+**dernière comparaison automatique** et ce qu'elle a donné : combien de
+paiements SumUp dit remboursés ou annulés, combien ont été repris dans pretix,
+combien de remboursements en attente SumUp a acceptés, combien attendent encore
+et combien ont été abandonnés ; ou la réponse de SumUp quand son historique n'a
+pas pu être lu. La ligne passe en avertissement quand aucune comparaison n'a
+encore eu lieu, ou que la dernière a plus de deux heures, alors qu'il reste
+quelque chose à comparer : la tâche ne tourne pas, ou plus, sur ce serveur.
+Quand il n'y a rien à comparer, elle le dit. Le bouton **Comparer maintenant**
+fait la même chose tout de suite, pour l'événement affiché seulement, et
+demande le droit de modifier ses commandes : c'est pour qui vient de rembourser
+une carte depuis SumUp et veut voir la commande le dire sans attendre. Il
+n'avance pas l'heure de la dernière comparaison automatique, qui reste le
+témoin de la tâche.
 
 ### Deux caisses sur un seul lecteur
 

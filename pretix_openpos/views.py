@@ -1,4 +1,5 @@
 import csv
+import logging
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
@@ -22,6 +23,8 @@ from .backoffice import cancelled_outside_the_journal, catch_up
 from .forms import OpenPosSettingsForm
 from .models import PosCategory, PosDevice, PosSale
 from .takings import journal_rows, summarise
+
+logger = logging.getLogger(__name__)
 
 
 class SettingsView(EventSettingsViewMixin, EventSettingsFormView):
@@ -390,6 +393,63 @@ def waiting_card_refunds(event):
             }
         )
     return rows
+
+
+def comparison_summary(done):
+    """What one comparison with SumUp did, in one line, for a person."""
+    if done.get("crashed"):
+        return _("Open POS ran into an error while comparing with SumUp. The server's log "
+                 "has the details.")
+    if done.get("error"):
+        return _("SumUp's history could not be read: {answer}").format(answer=done["error"])
+    if not done.get("compared") and not any(
+        done.get(key) for key in ("given_back", "sent", "waiting", "failed")
+    ):
+        return _("Nothing to compare with SumUp: no card payment of the last 30 days is left "
+                 "that SumUp could have given back, and no refund is waiting.")
+    return _(
+        "Given back in SumUp: {listed} · brought into pretix: {given_back} · waiting refunds "
+        "sent: {sent} · still waiting: {waiting} · given up: {failed}"
+    ).format(**{key: done.get(key, 0) for key in (
+        "listed", "given_back", "sent", "waiting", "failed",
+    )})
+
+
+#: A last pass older than this, with something to compare, is a periodic task
+#: that stopped: pretix advises running it at least every hour.
+COMPARISON_LATE = timedelta(hours=2)
+
+
+def sumup_comparison(organizer):
+    """
+    When the periodic task last compared this organizer with SumUp, and how it went.
+
+    ``None`` when the organizer has no SumUp account: nothing to compare. The
+    task's pace is the server's cron, which pretix leaves anywhere between
+    every minute and every hour, and nothing else on screen says whether it
+    runs at all — a card refund made in SumUp's dashboard that has not shown up
+    yet is either waiting for the next pass or a sign there is none.
+    """
+    from .reconcile import anything_to_compare, last_comparison
+    from .sumup import SumUpAccount
+
+    if not SumUpAccount(organizer).configured:
+        return None
+    record = last_comparison(organizer)
+    # The task skips an organizer with nothing left to compare, so no pass, or
+    # an old one, is then no sign of a task that stopped.
+    expected = anything_to_compare(organizer)
+    if record is None:
+        if not expected:
+            return {"at": None, "text": comparison_summary({}), "late": False, "problem": False}
+        return {"at": None, "text": "", "late": False, "problem": True}
+    late = expected and now() - record["at"] > COMPARISON_LATE
+    return {
+        "at": record["at"],
+        "text": comparison_summary(record),
+        "late": late,
+        "problem": bool(record.get("error") or record.get("crashed") or late),
+    }
 
 
 def unresolved_terminal_payments(event):
@@ -784,6 +844,7 @@ class SalesView(EventPermissionRequiredMixin, ListView):
         ctx["off_tariff"], ctx["off_tariff_difference"] = sold_off_tariff(all_sales)
         ctx["refused_refunds"] = refused_card_refunds(self.request.event)
         ctx["waiting_refunds"] = waiting_card_refunds(self.request.event)
+        ctx["sumup_comparison"] = sumup_comparison(self.request.organizer)
         # Not filtered by evening either: a sale pretix struck off is wrong in
         # the takings of whichever night it was sold on, and one button puts
         # every one of them right.
@@ -838,6 +899,46 @@ class CatchUpView(EventPermissionRequiredMixin, View):
             )
         elif not reversed_sales:
             messages.info(request, _("Every sale pretix cancelled is already in the journal."))
+        return redirect(
+            reverse(
+                "plugins:pretix_openpos:sales",
+                kwargs={"organizer": request.organizer.slug, "event": request.event.slug},
+            )
+        )
+
+
+class CompareWithSumUpView(EventPermissionRequiredMixin, View):
+    """
+    Compare this event's card payments with SumUp now, rather than at the next pass.
+
+    What the periodic task does, narrowed to one event: a refund made in
+    SumUp's dashboard is brought into pretix, and a refund waiting for SumUp
+    is asked for again. Behind the permission to change orders, since it can
+    cancel one; and to this event only, since that permission is this
+    event's. The task's pace is the server's cron, up to an hour apart, and
+    this is for the person who just gave a card its money back and wants the
+    order to say so before they close the tab.
+    """
+
+    permission = "event.orders:write"
+
+    def post(self, request, *args, **kwargs):
+        from .reconcile import reconcile_organizer
+        from .sumup import SumUpAccount
+
+        account = SumUpAccount(request.organizer)
+        if not account.configured:
+            messages.error(request, _("SumUp is not set up for this organizer yet."))
+        else:
+            try:
+                done = reconcile_organizer(request.organizer, account, event=request.event)
+            except Exception:
+                logger.exception("Open POS could not compare %s with SumUp", request.event.slug)
+                done = {"crashed": True}
+            if done.get("crashed") or done.get("error"):
+                messages.error(request, comparison_summary(done))
+            else:
+                messages.success(request, comparison_summary(done))
         return redirect(
             reverse(
                 "plugins:pretix_openpos:sales",

@@ -990,6 +990,11 @@ msgid "The refund that was waiting for SumUp is done."
 msgstr "Le remboursement qui attendait SumUp est fait."
 
 #: logdisplay.py:758
+msgid "pretix already had this refund recorded, so nothing was added."
+msgstr ""
+"Ce remboursement était déjà enregistré dans pretix : rien n’a été ajouté."
+
+#: logdisplay.py:760
 msgid "Open POS recorded the refund."
 msgstr "Open POS a enregistré le remboursement."
 
@@ -1227,7 +1232,7 @@ msgstr "Le paiement carte a été remboursé dans SumUp."
 msgid "Card readers"
 msgstr "Lecteurs de carte"
 
-#: sumup.py:139
+#: sumup.py:139 views.py:931
 msgid "SumUp is not set up for this organizer yet."
 msgstr "SumUp n’est pas encore configuré pour cet organisateur."
 
@@ -2360,6 +2365,34 @@ msgstr "Débité"
 msgid "Still waiting"
 msgstr "Toujours en attente"
 
+#: templates/pretix_openpos/sales.html:148
+msgid "Compare with SumUp now"
+msgstr "Comparer maintenant"
+
+#: templates/pretix_openpos/sales.html:154
+#, python-format
+msgid "Last automatic comparison with SumUp: %(time)s."
+msgstr "Dernière comparaison automatique avec SumUp : %(time)s."
+
+#: templates/pretix_openpos/sales.html:161
+msgid ""
+"That is more than two hours ago, though pretix' periodic task should run at "
+"least every hour: check that it still runs on this server."
+msgstr ""
+"C’était il y a plus de deux heures, alors que la tâche périodique de pretix "
+"devrait tourner au moins toutes les heures : vérifiez qu’elle tourne "
+"toujours sur ce serveur."
+
+#: templates/pretix_openpos/sales.html:169
+msgid ""
+"No automatic comparison with SumUp has run yet. It runs with pretix' "
+"periodic task: if this line never shows a time, that task is not running on "
+"this server."
+msgstr ""
+"Aucune comparaison automatique avec SumUp n’a encore eu lieu. Elle se fait "
+"avec la tâche périodique de pretix : si cette ligne n’affiche jamais "
+"d’heure, cette tâche ne tourne pas sur ce serveur."
+
 #: templates/pretix_openpos/sales.html:142
 msgid "Card refunds waiting for SumUp"
 msgstr "Remboursements carte en attente de SumUp"
@@ -2802,6 +2835,37 @@ msgstr "« {value} » n'est pas une date. La dernière soirée s'écrit AAAA-MM-
 #: views.py:457
 msgid "The end of the range is before its beginning."
 msgstr "La fin de l'intervalle est avant son début."
+
+#: views.py:401
+msgid ""
+"Open POS ran into an error while comparing with SumUp. The server's log has "
+"the details."
+msgstr ""
+"Open POS a rencontré une erreur en comparant avec SumUp. Le journal du "
+"serveur donne le détail."
+
+#: views.py:404
+#, python-brace-format
+msgid "SumUp's history could not be read: {answer}"
+msgstr "L’historique de SumUp n’a pas pu être lu : {answer}"
+
+#: views.py:408
+msgid ""
+"Nothing to compare with SumUp: no card payment of the last 30 days is left "
+"that SumUp could have given back, and no refund is waiting."
+msgstr ""
+"Rien à comparer avec SumUp : il ne reste aucun paiement carte des 30 "
+"derniers jours que SumUp aurait pu rendre, et aucun remboursement n’attend."
+
+#: views.py:410
+#, python-brace-format
+msgid ""
+"Given back in SumUp: {listed} · brought into pretix: {given_back} · waiting "
+"refunds sent: {sent} · still waiting: {waiting} · given up: {failed}"
+msgstr ""
+"Remboursés ou annulés dans SumUp : {listed} · repris dans pretix : "
+"{given_back} · remboursements en attente acceptés : {sent} · toujours en "
+"attente : {waiting} · abandonnés : {failed}"
 
 #: views.py:783
 #, python-format
