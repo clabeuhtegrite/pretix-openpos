@@ -62,6 +62,11 @@ LOOK_BACK = timedelta(days=30)
 #: Who the journal says cancelled a sale SumUp gave back. Not translated: it
 #: names a company, and it is the same word in every language.
 SUMUP = "SumUp"
+#: On the organizer's settings: when the periodic task last compared it with
+#: SumUp and what came of it, as JSON, for the Sales page. The one sign on
+#: screen that the task runs at all: pretix leaves its pace to the server's
+#: cron, anywhere from every minute to every hour.
+LAST_COMPARED = "openpos_sumup_compared"
 
 
 def mark_pending(refund, answer, *, transaction_id="", user=None, auth=None):
@@ -103,9 +108,8 @@ def pending_refunds(**filters):
     are a handful of these at most.
     """
     refunds = (
-        OrderRefund.objects.filter(
-            provider=CARD, state=OrderRefund.REFUND_STATE_TRANSIT, **filters
-        )
+        _in_transit()
+        .filter(**filters)
         .select_related("order", "order__event")
         .order_by("created", "pk")
     )
@@ -132,17 +136,9 @@ def reconcile_all():
     stopping the others. Returns what was done, by organizer.
     """
     with scopes_disabled():
-        recent = PosTerminalPayment.objects.filter(
-            status=PosTerminalPayment.STATUS_SUCCESSFUL,
-            refunded__isnull=True,
-            created__gte=now() - LOOK_BACK,
-        ).exclude(transaction_id="")
-        waiting = OrderRefund.objects.filter(
-            provider=CARD, state=OrderRefund.REFUND_STATE_TRANSIT
-        )
         organizers = Organizer.objects.filter(
-            pk__in=set(recent.values_list("event__organizer_id", flat=True))
-            | set(waiting.values_list("order__event__organizer_id", flat=True))
+            pk__in=set(_standing().values_list("event__organizer_id", flat=True))
+            | set(_in_transit().values_list("order__event__organizer_id", flat=True))
         ).order_by("pk")
         done = {}
         for organizer in organizers:
@@ -153,39 +149,106 @@ def reconcile_all():
                 done[organizer.slug] = reconcile_organizer(organizer, account)
             except Exception:
                 logger.exception("Open POS could not compare %s with SumUp", organizer.slug)
+                remember(organizer, {**_nothing_yet(), "crashed": True})
         return done
 
 
-def reconcile_organizer(organizer, account=None):
+def _standing():
+    """Reader payments SumUp could have given back without pretix hearing of it."""
+    return PosTerminalPayment.objects.filter(
+        status=PosTerminalPayment.STATUS_SUCCESSFUL,
+        refunded__isnull=True,
+        created__gte=now() - LOOK_BACK,
+    ).exclude(transaction_id="")
+
+
+def _in_transit():
+    """Card refunds on their way, among them those waiting for SumUp."""
+    return OrderRefund.objects.filter(provider=CARD, state=OrderRefund.REFUND_STATE_TRANSIT)
+
+
+def anything_to_compare(organizer):
+    """
+    Whether a pass would ask SumUp anything about this organizer.
+
+    The periodic task skips one that has nothing, so its last pass says
+    nothing about whether the task still runs.
+    """
+    return (
+        _standing().filter(event__organizer=organizer).exists()
+        or _in_transit().filter(order__event__organizer=organizer).exists()
+    )
+
+
+def _nothing_yet():
+    """What a pass has done before it starts, in the shape the Sales page reads."""
+    return {
+        "compared": False,
+        "listed": 0,
+        "given_back": 0,
+        "sent": 0,
+        "waiting": 0,
+        "failed": 0,
+        "error": "",
+        "crashed": False,
+    }
+
+
+def reconcile_organizer(organizer, account=None, *, event=None):
     """
     One pass for one organizer: what SumUp gave back, then what SumUp still owes.
 
     In that order, so that a refund somebody made in SumUp's dashboard while
     this one was waiting is recognised before it is asked for again.
+
+    ``event`` narrows the pass to one event's payments and refunds: the Sales
+    page's button, for somebody allowed to change that event's orders and no
+    other's. A pass over the whole organizer — the periodic task's — is
+    written down on it with :func:`remember`.
     """
     account = account or SumUpAccount(organizer)
-    done = {"given_back": 0, "sent": 0, "waiting": 0, "failed": 0}
-    _compare(organizer, account, done)
-    for refund in pending_refunds(order__event__organizer=organizer):
+    done = _nothing_yet()
+    _compare(organizer, account, done, event=event)
+    for refund in pending_refunds(
+        **({"order__event": event} if event is not None else {"order__event__organizer": organizer})
+    ):
         try:
             _ask_again(refund, account, done)
         except Exception:
             logger.exception(
                 "Open POS could not ask SumUp again for refund %s", refund.full_id
             )
+    if event is None:
+        remember(organizer, done)
     return done
 
 
-def _compare(organizer, account, done):
+def remember(organizer, done):
+    """Write down a periodic pass on the organizer, for the Sales page."""
+    organizer.settings.set(LAST_COMPARED, json.dumps({"at": now().isoformat(), **done}))
+
+
+def last_comparison(organizer):
+    """
+    The last periodic pass over this organizer, or ``None`` if none ran yet.
+
+    ``at`` is read back as a datetime. Anything unreadable counts as no pass:
+    the page then says none ran, which is what it would have to say anyway.
+    """
+    try:
+        record = json.loads(organizer.settings.get(LAST_COMPARED) or "")
+        record["at"] = datetime.fromisoformat(record["at"])
+    except (TypeError, ValueError, KeyError):
+        return None
+    return {**_nothing_yet(), **record}
+
+
+def _compare(organizer, account, done, *, event=None):
     """The payments SumUp says went back, brought into pretix."""
-    candidates = list(
-        PosTerminalPayment.objects.filter(
-            event__organizer=organizer,
-            status=PosTerminalPayment.STATUS_SUCCESSFUL,
-            refunded__isnull=True,
-            created__gte=now() - LOOK_BACK,
-        ).exclude(transaction_id="")
-    )
+    candidates = _standing().filter(event__organizer=organizer)
+    if event is not None:
+        candidates = candidates.filter(event=event)
+    candidates = list(candidates)
     if not candidates:
         return
     by_id = {payment.transaction_id: payment for payment in candidates}
@@ -202,7 +265,10 @@ def _compare(organizer, account, done):
     except SumUpError as exc:
         # Asked again on the next pass; nothing here has changed meanwhile.
         logger.warning("SumUp's history could not be read for %s: %s", organizer.slug, exc.detail)
+        done["error"] = exc.reason or str(exc.message)
         return
+    done["compared"] = True
+    done["listed"] = len(items)
     for item in items:
         terminal = (
             by_id.get(str(item.get("id") or ""))
@@ -287,7 +353,7 @@ def absorb(terminal, transaction_data, *, account=None):
             if order is not None
             else None
         )
-        cancelled = cancel_failed = False
+        cancelled = cancel_failed = already = False
         if payment is not None:
             refunds = list(payment.refunds.order_by("local_id"))
             # Never more than pretix took, whatever SumUp's figure: a refund
@@ -324,6 +390,28 @@ def absorb(terminal, transaction_data, *, account=None):
                 # Read again: the cancellation changed the order's total, and
                 # pretix settles the new refund against it.
                 payment = OrderPayment.objects.select_related("order").get(pk=payment.pk)
+                if payment.order.status == Order.STATUS_CANCELED:
+                    # No more than pretix still owes on an order that no
+                    # longer stands. A refund somebody recorded by hand — a
+                    # manual one, tied to no payment — has paid its part, and
+                    # recording that money a second time would have the order
+                    # say the customer owes it back. This payment's refunds
+                    # still waiting for SumUp are no money back yet, though
+                    # pretix counts them as if they were.
+                    waiting = sum(
+                        (
+                            refund.amount for refund in refunds
+                            if refund.state in (
+                                OrderRefund.REFUND_STATE_CREATED,
+                                OrderRefund.REFUND_STATE_TRANSIT,
+                            )
+                        ),
+                        Decimal("0.00"),
+                    )
+                    owed = waiting - payment.order.pending_sum
+                    missing = min(missing, max(Decimal("0.00"), owed))
+                    already = missing == 0
+            if missing > 0:
                 external = payment.create_external_refund(
                     amount=missing,
                     info=json.dumps(
@@ -342,6 +430,7 @@ def absorb(terminal, transaction_data, *, account=None):
             "whole": whole,
             "cancelled": cancelled,
             "cancel_failed": cancel_failed,
+            "already": already,
             "confirmed": [refund.local_id for refund in confirmed],
             "external": external.local_id if external is not None else None,
         }

@@ -130,6 +130,54 @@
     {% endif %}
 
     {% comment %}
+        When pretix' periodic task last compared the organizer's card payments
+        with SumUp, and what it found. The only sign on screen that it runs at
+        all: its pace is the server's cron, which pretix leaves anywhere between
+        every minute and every hour. The button does the same for this event at
+        once.
+    {% endcomment %}
+    {% if sumup_comparison %}
+        <div class="row">
+            <div class="col-md-12">
+                <div class="alert {% if sumup_comparison.problem %}alert-warning{% else %}alert-info{% endif %}">
+                    {% if can_write_orders %}
+                        <form action="{% url "plugins:pretix_openpos:sales.compare" organizer=request.event.organizer.slug event=request.event.slug %}"
+                              method="post" class="pull-right" style="margin-left: 15px;">
+                            {% csrf_token %}
+                            <button type="submit" class="btn btn-default btn-sm">
+                                {% trans "Compare with SumUp now" %}
+                            </button>
+                        </form>
+                    {% endif %}
+                    {% if sumup_comparison.at %}
+                        <strong>
+                            {% blocktrans trimmed with time=sumup_comparison.at|date:"SHORT_DATETIME_FORMAT" %}
+                                Last automatic comparison with SumUp: {{ time }}.
+                            {% endblocktrans %}
+                        </strong>
+                        {{ sumup_comparison.text }}
+                        {% if sumup_comparison.late %}
+                            <br>
+                            {% blocktrans trimmed %}
+                                That is more than two hours ago, though pretix' periodic task should
+                                run at least every hour: check that it still runs on this server.
+                            {% endblocktrans %}
+                        {% endif %}
+                    {% elif sumup_comparison.text %}
+                        {{ sumup_comparison.text }}
+                    {% else %}
+                        {% blocktrans trimmed %}
+                            No automatic comparison with SumUp has run yet. It runs with pretix'
+                            periodic task: if this line never shows a time, that task is not
+                            running on this server.
+                        {% endblocktrans %}
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    {% endif %}
+
+    {% comment %}
         Card refunds SumUp has not taken yet: its "not refundable in its current
         state", which a refund asked for moments after the payment gets. The
         server asks again on its own; this says so, and when it last did, so

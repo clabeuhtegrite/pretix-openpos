@@ -754,6 +754,8 @@ class GivenBackInSumUp(NoOpShredderMixin, OrderLogEntryType):
                      "the refund on this order.")
         elif data.get("confirmed") and not data.get("external"):
             done = _("The refund that was waiting for SumUp is done.")
+        elif data.get("already"):
+            done = _("pretix already had this refund recorded, so nothing was added.")
         else:
             done = _("Open POS recorded the refund.")
         return "{} {}".format(

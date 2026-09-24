@@ -71,13 +71,14 @@ def openpos_order_reactivated(sender, order, **kwargs):
 @minimum_interval(minutes_after_success=5, minutes_after_error=5)
 def openpos_sumup_reconcile(sender, **kwargs):
     """
-    Card refunds and SumUp brought to agree, every few minutes.
+    Card refunds and SumUp brought to agree, each time pretix' cron job runs.
 
-    pretix sends this whenever its cron job runs (``runperiodic``, which every
+    pretix sends this whenever that job runs (``runperiodic``, which every
     pretix installation schedules for its own reminders and expiries), at
-    whatever pace that job keeps; this asks SumUp at most every five minutes
-    of it. See :mod:`.reconcile` for what is compared, and why nothing it does
-    can send money twice.
+    whatever pace the server gives it: pretix advises anything between every
+    minute and every hour. This asks SumUp at most every five minutes of it.
+    See :mod:`.reconcile` for what is compared, and why nothing it does can
+    send money twice; the Sales page says when it last did.
     """
     from .reconcile import reconcile_all
 

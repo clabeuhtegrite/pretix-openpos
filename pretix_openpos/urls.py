@@ -42,6 +42,11 @@ urlpatterns = [
         views.CatchUpView.as_view(),
         name="sales.catch_up",
     ),
+    re_path(
+        r"^control/event/(?P<organizer>[^/]+)/(?P<event>[^/]+)/openpos/sales/sumup/$",
+        views.CompareWithSumUpView.as_view(),
+        name="sales.compare",
+    ),
     # One evening's arrivals, next to its takings: who came in, and when.
     re_path(
         r"^control/event/(?P<organizer>[^/]+)/(?P<event>[^/]+)/openpos/arrivals/$",
