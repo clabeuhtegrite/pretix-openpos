@@ -11,8 +11,9 @@ pretix tells plugins about every cancellation and every reactivation, with a
 signal carrying the order. This module answers both. A cancellation made
 anywhere but at a till becomes a reversal in the journal, in the name of
 whoever made it; a reactivation undoes that reversal when the money never left.
-Both are new rows, as everything in the journal is: nothing written before is
-touched.
+A card sent back from pretix without a cancellation — its refund dialog's
+default — is reversed too, when the card provider reports it done. All are new
+rows, as everything in the journal is: nothing written before is touched.
 """
 import contextvars
 import logging
@@ -141,16 +142,76 @@ def journal_cancellation(order, *, recorded_at=None):
     rows = _journal_rows(order)
     if not rows:
         return []
+    entry = _latest_entry(order, "pretix.event.order.canceled")
+    return _reverse(
+        order,
+        rows,
+        who=_who(entry),
+        reason=((entry.parsed_data.get("comment") if entry else "") or "")[:190],
+        kept=order.total if order.status != Order.STATUS_CANCELED else Decimal("0.00"),
+        recorded_at=recorded_at,
+    )
+
+
+def journal_card_refund(refund):
+    """
+    Reverse, in the journal, a till's card sale that pretix sent back to the card.
+
+    Returns the rows written, and none for a sale the journal already shows
+    reversed. A card refund from pretix gives the whole transaction back, so
+    the sale stops being takings whatever becomes of the order. "Cancel order"
+    cancels first and offers the refund after: the cancellation has written
+    the reversal, and this finds it done. The refund dialog's own "Cancel the
+    order", and the REST API's ``mark_canceled``, send the money first: this
+    writes the reversal, and the cancellation that follows finds it done. And
+    the dialog ticks "Mark the order as pending" by default, and offers "Do
+    nothing": no cancellation ever comes, and before this the takings went on
+    counting money the customer had back.
+
+    The whole sale is reversed, deposit handed back included, because the whole
+    card transaction was: the card was charged the net, and the net went back.
+    """
+    order = refund.order
+    rows = _journal_rows(order)
+    if not rows:
+        return []
+    return _reverse(
+        order,
+        rows,
+        who=_who(_refund_entry(order, refund)),
+        reason=(refund.comment or "")[:190],
+        kept=Decimal("0.00"),
+    )
+
+
+def _refund_entry(order, refund):
+    """
+    pretix' own "refund created" entry for this refund, if it is written yet.
+
+    Matched on the refund's number rather than taken as the latest. pretix
+    writes it just before sending the money, from its refund dialog and its
+    REST API alike; a refund made by some other code may have none, and the
+    latest entry of that kind would then name whoever made an earlier refund.
+    Better nobody in the journal than the wrong person.
+    """
+    entries = (
+        order.all_logentries()
+        .filter(action_type="pretix.event.order.refund.created")
+        .order_by("-datetime", "-pk")[:20]
+    )
+    for entry in entries:
+        if entry.parsed_data.get("local_id") == refund.local_id:
+            return entry
+    return None
+
+
+def _reverse(order, rows, *, who, reason, kept, recorded_at=None):
+    """The reversal rows themselves, for whichever of the above asked."""
     event = order.event
     already = PosSale.cancelled_seqs(event, [row.seq for row in rows])
     live = [row for row in rows if row.seq not in already]
     if not live:
         return []
-
-    entry = _latest_entry(order, "pretix.event.order.canceled")
-    who = _who(entry)
-    reason = ((entry.parsed_data.get("comment") if entry else "") or "")[:190]
-    kept = order.total if order.status != Order.STATUS_CANCELED else Decimal("0.00")
 
     written = []
     with transaction.atomic():
@@ -307,6 +368,30 @@ def record_reactivation(order):
                 )
     except Exception as exc:
         _failed(order, "reactivation", exc)
+        return []
+    return written
+
+
+def record_card_refund(refund):
+    """
+    Journal a card refund made from pretix, and say so on the order.
+
+    Called by the card provider once SumUp has accepted the refund, from inside
+    whatever pretix is doing — its refund dialog, its REST API, a whole event
+    cancelled. The money is back on the card whatever happens here, so nothing
+    here may raise: a row that could not be written is logged on the order.
+    """
+    order = refund.order
+    try:
+        with transaction.atomic():
+            written = journal_card_refund(refund)
+            if written:
+                order.log_action(
+                    "pretix_openpos.order.journal.refunded",
+                    data={"rows": _summary(written)},
+                )
+    except Exception as exc:
+        _failed(order, "refund", exc)
         return []
     return written
 

@@ -154,6 +154,7 @@
                         <th>{% trans "Date" %}</th>
                         <th>{% trans "Order" %}</th>
                         <th>{% trans "SumUp reference" %}</th>
+                        <th>{% trans "SumUp's answer" %}</th>
                         <th class="text-right">{% trans "Amount" %}</th>
                     </tr>
                     </thead>
@@ -167,6 +168,7 @@
                                 </a>
                             </td>
                             <td><code>{{ row.transaction|default:"—" }}</code></td>
+                            <td>{{ row.answer|default:"—" }}</td>
                             <td class="text-right">{{ row.refund.amount|money:currency }}</td>
                         </tr>
                     {% endfor %}

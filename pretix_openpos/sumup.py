@@ -92,7 +92,7 @@ class SumUpError(Exception):
     translation.
     """
 
-    def __init__(self, message, *, code=ERR_REFUSED, retryable=False, detail=""):
+    def __init__(self, message, *, code=ERR_REFUSED, retryable=False, detail="", reason=""):
         super().__init__(detail or message)
         self.message = message
         #: One of the ``ERR_*`` constants above. Branch on this, never on
@@ -102,6 +102,26 @@ class SumUpError(Exception):
         self.retryable = retryable
         #: For the log. May carry SumUp's own wording; never the credentials.
         self.detail = detail
+        #: What SumUp said, in its own words and short: the status, then its
+        #: explanation. Empty when SumUp was never reached. For the back office
+        #: only — see :meth:`explained` — never for the till's screen.
+        self.reason = reason
+
+    def explained(self):
+        """
+        The message, followed by SumUp's own words when there are some.
+
+        For the back office, where the person reading is reconciling money and
+        has to tell a key that may not refund from a transaction SumUp will not
+        refund yet. SumUp's own dashboard, refusing the same refund, says
+        neither. The till keeps the plain message: a volunteer at a counter can
+        act on "take it in cash", not on an HTTP status.
+        """
+        if not self.reason:
+            return str(self.message)
+        return str(_("{message} SumUp answered: {reason}").format(
+            message=self.message, reason=self.reason
+        ))
 
 
 class SumUpAccount:
@@ -184,6 +204,12 @@ class SumUpAccount:
         logger.warning(
             "SumUp %s %s answered %s: %s", method, path, response.status_code, detail
         )
+        # SumUp's answer never repeats the key it was sent, but this is the
+        # one string built from it that is meant to be shown, so it is made
+        # sure of rather than assumed.
+        reason = _explanation(response)
+        if self._api_key:
+            reason = reason.replace(self._api_key, "…")
         # The two refusals a counter actually meets, which SumUp names in the
         # body of a 422 rather than with a status of their own. Neither is
         # retryable in this module's sense: the amount was *not* put on the
@@ -196,6 +222,7 @@ class SumUpAccount:
                   "connected, then try again."),
                 code=ERR_OFFLINE,
                 detail=detail,
+                reason=reason,
             )
         if kind == "READER_BUSY":
             # SumUp holds a reader for a minute after every request it accepts,
@@ -206,18 +233,21 @@ class SumUpAccount:
                   "again in a minute."),
                 code=ERR_BUSY,
                 detail=detail,
+                reason=reason,
             )
         if response.status_code in (401, 403):
             return SumUpError(
                 _("SumUp refused the API key. Check it in the Open POS settings."),
                 code=ERR_UNAUTHORIZED,
                 detail=detail,
+                reason=reason,
             )
         if response.status_code == 404:
             return SumUpError(
                 _("SumUp does not know this reader or transaction."),
                 code=ERR_NOT_FOUND,
                 detail=detail,
+                reason=reason,
             )
         if response.status_code >= 500:
             return SumUpError(
@@ -225,13 +255,16 @@ class SumUpAccount:
                 code=ERR_UNAVAILABLE,
                 retryable=True,
                 detail=detail,
+                reason=reason,
             )
         return SumUpError(
             # The body may name the field that was wrong, which is the one
-            # thing worth passing on; it is SumUp's own text and stays in the
-            # log rather than on the screen.
+            # thing worth passing on; it is SumUp's own text, so it stays off
+            # the till's screen and goes to the log, and to the back office as
+            # ``reason``.
             _("SumUp refused this request."),
             detail=detail,
+            reason=reason,
         )
 
     # -- readers -----------------------------------------------------------
@@ -435,7 +468,12 @@ class SumUpAccount:
         self._call(
             "POST",
             f"/v1.0/merchants/{self.merchant_code}/payments/{transaction_id}/refunds",
-            json=({"amount": float(amount)} if amount is not None else None),
+            # An empty object for the whole transaction, never no body at all.
+            # The spec calls the body optional, but SumUp's own client
+            # (sumup-go, ``TransactionsClient.Refund``) always sends one, as
+            # JSON: that is the request SumUp is known to take. Without an
+            # amount, SumUp refunds the transaction in full.
+            json=({"amount": float(amount)} if amount is not None else {}),
             # 201 is what SumUp answers a refund with. Left out, every refund
             # that went through was reported as refused: the operator told to
             # refund from the SumUp app a card that had already been paid back.
@@ -458,6 +496,54 @@ def _error_type(response):
     errors = body.get("errors") if isinstance(body, dict) else None
     kind = errors.get("type") if isinstance(errors, dict) else None
     return kind if isinstance(kind, str) else None
+
+
+def _explanation(response):
+    """
+    What SumUp said, in its own words, short enough to show an organizer.
+
+    The status comes first: a 403 and a 409 are different people's problems,
+    the key's and the transaction's. Then whatever wording SumUp gave, which it
+    puts in a different place on nearly every route — a problem document's
+    ``detail``, the Readers API's ``errors`` object, a list of ``errors`` each
+    with a ``code``, an older ``error_code`` and ``message``, a map of field
+    names to complaints. Anything that is not text is left out, and an answer
+    that is not JSON at all, a proxy's error page, leaves the status alone.
+    """
+    try:
+        body = response.json()
+    except ValueError:
+        body = None
+    if isinstance(body, list):
+        body = body[0] if body and isinstance(body[0], dict) else None
+    words = []
+    if isinstance(body, dict):
+        words += [
+            body.get("error_code"),
+            body.get("detail") or body.get("message") or body.get("title"),
+        ]
+        errors = body.get("errors")
+        if isinstance(errors, list):
+            errors = errors[0] if errors and isinstance(errors[0], dict) else None
+        if isinstance(errors, dict):
+            named = [
+                errors.get("code") or errors.get("type"),
+                errors.get("detail") or errors.get("message"),
+            ]
+            if not any(isinstance(word, str) for word in named):
+                # A field and what is wrong with it, as SumUp's validation
+                # answers put it: {"total_amount": ["must be greater than 0"]}.
+                field, complaint = next(iter(errors.items()), (None, None))
+                if isinstance(complaint, list) and complaint:
+                    complaint = complaint[0]
+                if isinstance(field, str) and isinstance(complaint, str):
+                    named = [f"{field}: {complaint}"]
+            words += named
+    parts = [str(response.status_code)]
+    for word in words:
+        if isinstance(word, str) and word.strip() and word.strip() not in parts:
+            parts.append(word.strip())
+    return " · ".join(parts)[:190]
 
 
 #: How a reader checkout ends without anybody being charged.

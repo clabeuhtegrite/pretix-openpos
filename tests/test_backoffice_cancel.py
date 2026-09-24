@@ -846,7 +846,10 @@ def test_a_refund_sumup_did_not_answer_says_to_look_before_trying_again(
     detail = response.json()["detail"]
     assert "not known whether the money went back" in detail
     assert "tx_1" in detail
-    assert order.refunds.get().state == OrderRefund.REFUND_STATE_FAILED
+    refund = order.refunds.get()
+    assert refund.state == OrderRefund.REFUND_STATE_FAILED
+    # No words of SumUp's to keep, so the refund keeps what the operator read.
+    assert "could not be reached" in refund.info_data["sumup_error"]
 
 
 @pytest.mark.django_db
@@ -925,3 +928,255 @@ def test_the_provider_refuses_a_part_even_when_asked_directly(
     with pytest.raises(PaymentException, match="whole payment"):
         provider_for(payment).execute_refund(refund)
     assert sumup.refunds == []
+
+
+# -- a card given back without cancelling the order ------------------------------
+
+
+def refund_from_pretix(client, event, order, payment, action):
+    """pretix' own dialog, from "Create a refund" on the order, as it posts."""
+    return client.post(
+        order_url(event, order, "refund"),
+        {
+            "start-action": action,
+            "start-mode": "full",
+            f"refund-{payment.pk}": "10.00",
+            "perform": "on",
+            "last_known_refund_id": "0",
+        },
+    )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "action,status",
+    [
+        # What the dialog ticks by default on a paid order.
+        ("mark_pending", Order.STATUS_PENDING),
+        ("do_nothing", Order.STATUS_PAID),
+    ],
+)
+def test_a_card_refunded_without_cancelling_leaves_the_takings(
+    backoffice, till, event, ticket, reader_till, sumup, action, status
+):
+    """
+    Either choice sent the money back to the card and left the takings counting
+    it, the order still standing and the journal none the wiser. Found while
+    preparing the first real refund on the Solo, 2026-09-24.
+    """
+    sale = card_sale(till, sumup, [{"item": ticket.pk, "count": 1}])
+    order = order_of(event, sale["order"]["code"])
+    payment = order.payments.get()
+
+    refund_from_pretix(backoffice, event, order, payment, action)
+
+    assert sumup.refunds == [("tx_1", None)]
+    order.refresh_from_db()
+    assert order.status == status
+    [reversal] = reversals_of(event, sale["journal_seq"])
+    assert reversal.total == Decimal("-10.00")
+    assert reversal.payment_type == PosSale.PAYMENT_CARD
+    assert reversal.device is None
+    assert reversal.cashier == "boss@example.org"
+    assert till.get("summary").json()["event"]["total"] == "0.00"
+    # The order's history says why pretix and the journal now tell it apart.
+    page = backoffice.get(order_url(event, order)).content.decode()
+    assert "Refunded to the card from pretix" in page
+    # And the till no longer offers to cancel what has been given back.
+    assert till_line(till, sale["journal_seq"])["can_cancel"] is False
+
+
+@pytest.mark.django_db
+def test_refund_and_cancel_in_one_dialog_reverse_the_sale_once(
+    backoffice, till, event, ticket, reader_till, sumup
+):
+    """
+    The dialog's own "Cancel the order": the refund goes first and writes the
+    reversal, and the cancellation pretix makes after it finds it written.
+    """
+    sale = card_sale(till, sumup, [{"item": ticket.pk, "count": 1}])
+    order = order_of(event, sale["order"]["code"])
+    payment = order.payments.get()
+
+    refund_from_pretix(backoffice, event, order, payment, "mark_refunded")
+
+    order.refresh_from_db()
+    assert order.status == Order.STATUS_CANCELED
+    assert len(reversals_of(event, sale["journal_seq"])) == 1
+    assert till.get("summary").json()["event"]["total"] == "0.00"
+
+
+@pytest.mark.django_db
+def test_a_card_refunded_through_the_rest_api_alone_leaves_the_takings(
+    organizer, till, event, ticket, reader_till, sumup
+):
+    sale = card_sale(till, sumup, [{"item": ticket.pk, "count": 1}])
+    order = order_of(event, sale["order"]["code"])
+    token = api_token(organizer, event)
+
+    response = api(
+        token, "post", f"{event.slug}/orders/{order.code}/payments/1/refund/",
+        {"amount": "10.00"},
+    )
+
+    assert response.status_code == 200, response.content
+    order.refresh_from_db()
+    assert order.status == Order.STATUS_PENDING
+    [reversal] = reversals_of(event, sale["journal_seq"])
+    # In the name of the token that asked, as a cancellation through the API is.
+    assert reversal.cashier == "Compta"
+    assert till.get("summary").json()["event"]["total"] == "0.00"
+
+
+@pytest.mark.django_db
+def test_a_refund_with_no_entry_of_its_own_names_nobody(till, event, ticket, reader_till, sumup):
+    """
+    Not whoever made the refund before it: the journal would then name the
+    wrong person, which is worse than naming none.
+    """
+    from pretix_openpos.backoffice import journal_card_refund
+
+    sale = card_sale(till, sumup, [{"item": ticket.pk, "count": 1}])
+    order = order_of(event, sale["order"]["code"])
+    payment = order.payments.get()
+    order.log_action("pretix.event.order.refund.created", {"local_id": 99, "provider": "manual"})
+    refund = order.refunds.create(
+        payment=payment, amount=payment.amount, provider=payment.provider,
+        state=OrderRefund.REFUND_STATE_DONE, source=OrderRefund.REFUND_SOURCE_ADMIN,
+    )
+
+    [reversal] = journal_card_refund(refund)
+
+    assert reversal.cashier == ""
+    # And a second time, nothing: the sale is reversed already.
+    assert journal_card_refund(refund) == []
+
+
+@pytest.mark.django_db
+def test_a_card_refund_the_journal_could_not_take_is_said_on_the_order(
+    backoffice, till, event, ticket, reader_till, sumup, monkeypatch
+):
+    sale = card_sale(till, sumup, [{"item": ticket.pk, "count": 1}])
+    order = order_of(event, sale["order"]["code"])
+    payment = order.payments.get()
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(PosSale, "record", broken)
+    refund_from_pretix(backoffice, event, order, payment, "mark_pending")
+
+    # The money went back all the same...
+    assert sumup.refunds == [("tx_1", None)]
+    assert order.refunds.get().state == OrderRefund.REFUND_STATE_DONE
+    # ...and the order says what the journal missed.
+    entry = order.all_logentries().get(action_type="pretix_openpos.order.journal.failed")
+    assert entry.parsed_data["action"] == "refund"
+    page = backoffice.get(order_url(event, order)).content.decode()
+    assert "The card refund could not be written to the till journal" in page
+
+
+# -- what SumUp said when it said no ---------------------------------------------
+
+
+REFUSAL = {
+    "type": "https://developer.sumup.com/problem/conflict",
+    "title": "Conflict",
+    "status": 409,
+    "detail": "The transaction is not refundable in its current state",
+}
+
+
+@pytest.mark.django_db
+def test_a_refund_sumup_refuses_from_pretix_keeps_what_sumup_said(
+    backoffice, organizer, till, event, ticket, reader_till, sumup
+):
+    """
+    On 2026-09-24 SumUp refused the first real refund, and its own dashboard
+    refused it too, giving no reason anywhere. Whatever SumUp does say is kept
+    where the organiser reconciling the evening looks.
+    """
+    sale = card_sale(till, sumup, [{"item": ticket.pk, "count": 1}])
+    order = order_of(event, sale["order"]["code"])
+    token = api_token(organizer, event)
+    sumup.next_response = FakeResponse(409, REFUSAL)
+
+    response = api(
+        token, "post", f"{event.slug}/orders/{order.code}/payments/1/refund/",
+        {"amount": "10.00"},
+    )
+
+    assert response.status_code == 400
+    assert (
+        "SumUp answered: 409 · The transaction is not refundable in its current state"
+        in response.json()["detail"]
+    )
+    refund = order.refunds.get(state=OrderRefund.REFUND_STATE_FAILED)
+    assert refund.info_data["sumup_error"] == (
+        "409 · The transaction is not refundable in its current state"
+    )
+    # Under the failed refund on the order page, and beside it on Sales.
+    assert REFUSAL["detail"] in backoffice.get(order_url(event, order)).content.decode()
+    assert REFUSAL["detail"] in backoffice.get(sales_url(event)).content.decode()
+
+
+@pytest.mark.django_db
+def test_a_till_refund_sumup_refuses_keeps_what_sumup_said_off_the_till(
+    backoffice, till, event, ticket, reader_till, sumup
+):
+    sale = card_sale(till, sumup, [{"item": ticket.pk, "count": 1}])
+    order = order_of(event, sale["order"]["code"])
+    sumup.next_response = FakeResponse(409, REFUSAL)
+
+    response = till.post("cancel", {"seq": sale["journal_seq"], "idempotency_key": "annule-01"})
+
+    assert response.json()["card_refund"] == "failed"
+    # The volunteer at the counter reads what to do, not SumUp's wording...
+    assert REFUSAL["detail"] not in response.content.decode()
+    # ...which the back office keeps.
+    refund = order.refunds.get()
+    assert refund.state == OrderRefund.REFUND_STATE_FAILED
+    assert refund.info_data["sumup_error"] == (
+        "409 · The transaction is not refundable in its current state"
+    )
+    assert REFUSAL["detail"] in backoffice.get(sales_url(event)).content.decode()
+    assert REFUSAL["detail"] in backoffice.get(order_url(event, order)).content.decode()
+
+
+@pytest.mark.django_db
+def test_a_card_refund_names_its_sumup_transaction_on_the_order(
+    backoffice, till, event, ticket, reader_till, sumup
+):
+    sale = card_sale(till, sumup, [{"item": ticket.pk, "count": 1}])
+    order = order_of(event, sale["order"]["code"])
+    till.post("cancel", {"seq": sale["journal_seq"], "idempotency_key": "annule-01"})
+    refund = order.refunds.get()
+
+    shown = provider_for(refund.payment).refund_control_render(None, refund)
+
+    # The till's refund carries no transaction of its own: it is looked up.
+    assert "tx_1" in shown
+    # Nothing refused, so nothing of SumUp's to show.
+    assert "answer" not in shown
+
+
+@pytest.mark.django_db
+def test_a_card_refund_with_nothing_to_say_adds_nothing_to_the_order(till, event, ticket, sumup):
+    sale = sell(till, [{"item": ticket.pk, "count": 1}], payment_type="card").json()
+    order = order_of(event, sale["order"]["code"])
+    payment = order.payments.get()
+    provider = provider_for(payment)
+
+    # A card taken on somebody's phone: no reader, no transaction to name.
+    phone = order.refunds.create(
+        payment=payment, amount=payment.amount, provider=payment.provider,
+        state=OrderRefund.REFUND_STATE_CREATED, source=OrderRefund.REFUND_SOURCE_ADMIN,
+    )
+    # And one that names no payment at all.
+    loose = order.refunds.create(
+        payment=None, amount=payment.amount, provider=payment.provider,
+        state=OrderRefund.REFUND_STATE_CREATED, source=OrderRefund.REFUND_SOURCE_ADMIN,
+    )
+
+    assert provider.refund_control_render(None, phone) == ""
+    assert provider.refund_control_render(None, loose) == ""

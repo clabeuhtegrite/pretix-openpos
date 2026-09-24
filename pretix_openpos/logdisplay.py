@@ -618,6 +618,28 @@ class JournalCancelled(NoOpShredderMixin, OrderLogEntryType):
 
 
 @log_entry_types.new()
+class JournalRefunded(NoOpShredderMixin, OrderLogEntryType):
+    """
+    A till's card sale refunded from pretix, reversed at the refund.
+
+    Seen when no cancellation reversed it first: pretix' refund dialog marks
+    the order pending by default, or does nothing to it, and its "Cancel the
+    order" cancels only once the money has gone back. Either way the card has
+    its money, so the takings stop counting the sale.
+    """
+
+    action_type = "pretix_openpos.order.journal.refunded"
+
+    def display(self, logentry, data):
+        return format_html(
+            "{}<ul>{}</ul>",
+            _("Refunded to the card from pretix, and written to the till journal, so "
+              "the takings no longer count this sale:"),
+            _journal_rows(data, logentry.event.currency),
+        )
+
+
+@log_entry_types.new()
 class JournalReactivated(NoOpShredderMixin, OrderLogEntryType):
     """A reactivated till sale, counted in the takings again."""
 
@@ -661,6 +683,9 @@ class JournalFailed(NoOpShredderMixin, OrderLogEntryType):
         if data.get("action") == "reactivation":
             return _("The reactivation could not be written to the till journal. The "
                      "server log has the details.")
+        if data.get("action") == "refund":
+            return _("The card refund could not be written to the till journal, which "
+                     "still counts this sale. The server log has the details.")
         return _("The cancellation could not be written to the till journal. The Open POS "
                  "Sales page lists this sale until it is.")
 
