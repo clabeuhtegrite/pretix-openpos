@@ -151,7 +151,7 @@ export default function AttendeeSearch({ pairing, listId, onPick, onClose }: Pro
         {error && <div className="error-banner">{error}</div>}
 
         <div className="search-results">
-          {busy && <div className="search-note">{t("search.searching")}</div>}
+          {busy && <div className="search-note loading">{t("search.searching")}</div>}
           {!busy && results !== null && results.length === 0 && (
             <div className="search-note">{t("search.none")}</div>
           )}

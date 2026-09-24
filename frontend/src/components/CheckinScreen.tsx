@@ -562,6 +562,14 @@ export default function CheckinScreen({
         </div>
       }
     >
+      {busy && (
+        // On the picture, where the operator is looking, rather than only in
+        // the line under it. pretix usually answers before this shows at all:
+        // it fades in after a moment, so a quick scan goes straight to its
+        // verdict and a slow one is seen to have been read.
+        <div className="scanner-status is-checking">{t("checkin.busy")}</div>
+      )}
+
       {searchOpen && listId && (
         <AttendeeSearch
           pairing={pairing}

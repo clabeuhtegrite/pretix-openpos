@@ -132,7 +132,7 @@ describe("reading the drawer", () => {
   it("says it is on its way, then shows the drawer by name", async () => {
     show();
 
-    expect(screen.getByText("…")).toBeDefined();
+    expect(screen.getByText(t("app.loading"))).toBeDefined();
     expect(await screen.findByRole("heading", { name: t("drawer.title", { name: "Bar" }) })).toBeDefined();
     expect(drawer).toHaveBeenCalledWith(pairing, expect.any(AbortSignal));
   });
@@ -150,6 +150,24 @@ describe("reading the drawer", () => {
     expect(await screen.findByText(t("error.offline"))).toBeDefined();
     await user.click(button(t("drawer.retry")));
 
+    expect(await screen.findByText(t("drawer.isClosed"))).toBeDefined();
+  });
+
+  it("shows the second try under way, and takes no third tap meanwhile", async () => {
+    // "Réessayer" used to look exactly as it had until the server answered,
+    // which on a slow network is long enough to be pressed again.
+    drawer.mockRejectedValueOnce(new ApiError(0, "network"));
+    const { user } = show();
+    await screen.findByText(t("error.offline"));
+    let answer: (state: DrawerState) => void = () => {};
+    drawer.mockReturnValueOnce(new Promise<DrawerState>((resolve) => (answer = resolve)));
+
+    await user.click(button(t("drawer.retry")));
+
+    const retrying = button(t("app.loading"));
+    expect(retrying).toHaveProperty("disabled", true);
+    expect(retrying.getAttribute("aria-busy")).toBe("true");
+    answer(closed);
     expect(await screen.findByText(t("drawer.isClosed"))).toBeDefined();
   });
 

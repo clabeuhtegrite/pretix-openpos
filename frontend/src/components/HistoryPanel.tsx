@@ -57,6 +57,8 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
   const [lines, setLines] = useState<JournalLine[] | null>(null);
   const [truncated, setTruncated] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** The list is being fetched, which is what "Réessayer" waits on. */
+  const [loading, setLoading] = useState(false);
   const [openSeq, setOpenSeq] = useState<number | null>(null);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
@@ -66,6 +68,7 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
   const keys = useRef(cancellationKeys()).current;
 
   const load = useCallback(async () => {
+    setLoading(true);
     try {
       const data = await api.history(pairing);
       setLines(data.results);
@@ -73,6 +76,8 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
       setError(null);
     } catch (e) {
       setError(e instanceof ApiError && e.isNetwork ? t("error.offline") : String(e));
+    } finally {
+      setLoading(false);
     }
   }, [pairing]);
 
@@ -247,6 +252,7 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
                 <button
                   className="btn danger"
                   disabled={busy}
+                  aria-busy={busy || undefined}
                   onClick={() => {
                     if (confirm(t("history.confirm", { order: selected.order }))) void cancel(selected);
                   }}
@@ -263,7 +269,22 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
         ) : (
           <>
             <div className="history-list">
-              {lines === null && <div className="search-note">{t("history.loading")}</div>}
+              {/* "Loading" only while it is: a list that could not be fetched
+                  used to say so above and "Chargement…" here, for ever, with
+                  no way to ask again short of closing the panel. */}
+              {lines === null && !error && (
+                <div className="search-note loading">{t("history.loading")}</div>
+              )}
+              {lines === null && error && (
+                <button
+                  className="btn"
+                  onClick={() => void load()}
+                  disabled={loading}
+                  aria-busy={loading || undefined}
+                >
+                  {loading ? t("history.loading") : t("history.retry")}
+                </button>
+              )}
               {lines?.length === 0 && <div className="search-note">{t("history.empty")}</div>}
               {lines?.map((line) => {
                 const cancellation = line.kind === "cancellation";

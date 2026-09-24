@@ -76,6 +76,20 @@ function TerminalPrompt({
   fallbackCents: number;
   onRetry: () => void;
 }) {
+  // Stop has been pressed and the reader has not answered yet. Said in place of
+  // the request for a card, which the cashier has just decided against; the
+  // bar goes on moving, because the wait is still the reader's.
+  if (terminal?.cancelling) {
+    return (
+      <div className="pay-reader is-waiting is-stopping">
+        <p className="pay-reader-prompt">{t("payment.readerStopping")}</p>
+        {terminal.stalled && (
+          <p className="pay-reader-note">{t("payment.readerStalled")}</p>
+        )}
+      </div>
+    );
+  }
+
   if (terminal === null || terminal.phase === "starting") {
     return (
       <p className="pay-reader is-waiting">{t("payment.readerStarting")}</p>
@@ -181,6 +195,8 @@ export default function PaymentPanel({
    */
   const readerPaid = onReader && terminal?.phase === "paid";
   const methodLocked = busy || readerBusy || readerPaid;
+  /** Stop has been pressed, and the reader has not answered yet. */
+  const stopping = readerBusy && terminal?.cancelling === true;
 
   /**
    * Answering the question, and — on a reader till — putting the basket on it.
@@ -397,9 +413,14 @@ export default function PaymentPanel({
               // Leaving is not on offer once the card has been charged: the
               // only correct move is recording the sale, which is the button
               // beside this one.
-              disabled={busy || readerPaid}
+              disabled={busy || readerPaid || stopping}
+              aria-busy={stopping || undefined}
             >
-              {readerBusy ? t("payment.readerStop") : t("payment.back")}
+              {stopping
+                ? t("payment.readerStoppingShort")
+                : readerBusy
+                  ? t("payment.readerStop")
+                  : t("payment.back")}
             </button>
             {/* Absent rather than disabled: the two buttons above are the step,
                 and a greyed-out "Valider" beside them reads as a till that is
@@ -411,6 +432,7 @@ export default function PaymentPanel({
                 className="btn success"
                 style={{ flex: 2 }}
                 disabled={busy || (method === "cash" && short)}
+                aria-busy={busy || undefined}
                 onClick={() =>
                   // The third figure exists only when a reader took the money,
                   // and is only ever read in that case.

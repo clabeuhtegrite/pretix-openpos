@@ -16,6 +16,20 @@ import type { Pairing, TerminalPayment } from "./types";
  */
 export const TERMINAL_POLL_MS = 2000;
 
+/**
+ * How long a cancellation stays on screen once the server has said the reader
+ * still has the basket.
+ *
+ * SumUp stops a reader asynchronously and confirms nothing, so the answer to
+ * the cancel itself usually still reads "pending", and it is the next poll
+ * that finds the payment cancelled, a second or two later. Past this the
+ * reader has evidently not obeyed (a customer halfway through their PIN, a
+ * request lost between the server and SumUp), and the screen goes back to
+ * saying what is true: the reader is still waiting, and stopping it can be
+ * asked again.
+ */
+export const TERMINAL_CANCEL_WAIT_MS = 10_000;
+
 export interface TerminalState {
   /**
    * `starting` while the reader is being asked, `waiting` while the customer
@@ -37,6 +51,15 @@ export interface TerminalState {
    * card that was in fact charged.
    */
   stalled: boolean;
+  /**
+   * The cashier has asked for the basket back off the reader, and the reader
+   * has not answered yet. Only ever true while `starting` or `waiting`.
+   *
+   * Set the moment the button is pressed, not when the server answers: asking
+   * SumUp takes the server two or three seconds, and a panel that stayed
+   * exactly as it was for that long read as a till that had not heard the tap.
+   */
+  cancelling: boolean;
 }
 
 /**
@@ -87,10 +110,14 @@ export function useTerminal(
   const onPaidRef = useRef(onPaid);
   onPaidRef.current = onPaid;
 
+  /** The key of the payment a stop is being asked for, while it is being asked. */
+  const cancelInFlightRef = useRef<string | null>(null);
+  const cancelTimerRef = useRef<number | undefined>(undefined);
+
   const apply = useCallback((payment: TerminalPayment) => {
     const money = { amount: payment.amount, currency: payment.currency };
     if (payment.status === "successful") {
-      setState({ ...money, phase: "paid", message: null, stalled: false });
+      setState({ ...money, phase: "paid", message: null, stalled: false, cancelling: false });
       onPaidRef.current(payment);
       return;
     }
@@ -100,10 +127,20 @@ export function useTerminal(
         phase: "failed",
         message: failureMessage(payment.failure),
         stalled: false,
+        cancelling: false,
       });
       return;
     }
-    setState({ ...money, phase: "waiting", message: null, stalled: false });
+    // Still on the reader. A cancellation already asked for stays on screen:
+    // "pending" is exactly what SumUp says in the moment before the reader
+    // obeys, so it is no reason to go back to asking for a card.
+    setState((current) => ({
+      ...money,
+      phase: "waiting",
+      message: null,
+      stalled: false,
+      cancelling: current?.cancelling ?? false,
+    }));
   }, []);
 
   /**
@@ -118,7 +155,11 @@ export function useTerminal(
     async (key: string, positions: PositionPayload[]) => {
       if (!pairing) return;
       keyRef.current = key;
-      setState({ phase: "starting", amount: null, currency: null, message: null, stalled: false });
+      window.clearTimeout(cancelTimerRef.current);
+      setState({
+        phase: "starting", amount: null, currency: null, message: null, stalled: false,
+        cancelling: false,
+      });
       try {
         apply(await api.terminalStart(pairing, { idempotency_key: key, positions }));
       } catch (err) {
@@ -134,6 +175,7 @@ export function useTerminal(
             currency: null,
             message: t("payment.readerTaken"),
             stalled: false,
+            cancelling: false,
           });
           return;
         }
@@ -146,9 +188,10 @@ export function useTerminal(
           // lost request look identical from here. Polling under the same key
           // finds out, and until it does the customer is asked for their card
           // rather than told of a failure that may not have happened.
-          setState({
+          setState((current) => ({
             phase: "waiting", amount: null, currency: null, message: null, stalled: true,
-          });
+            cancelling: current?.cancelling ?? false,
+          }));
           return;
         }
         setState({
@@ -157,6 +200,7 @@ export function useTerminal(
           currency: null,
           message: describeError(err),
           stalled: false,
+          cancelling: false,
         });
       }
     },
@@ -176,25 +220,57 @@ export function useTerminal(
       setState(null);
       return;
     }
+    // One request at a time. A second tap while the first is on its way would
+    // only ask SumUp the same thing twice.
+    if (cancelInFlightRef.current === key) return;
+    cancelInFlightRef.current = key;
+    window.clearTimeout(cancelTimerRef.current);
+    setState((current) =>
+      current && (current.phase === "starting" || current.phase === "waiting")
+        ? { ...current, cancelling: true }
+        : current,
+    );
     try {
-      apply(await api.terminalCancel(pairing, key));
+      const payment = await api.terminalCancel(pairing, key);
+      // Answered after the attempt it was about was dropped or retried: a poll
+      // got there first, and the screen belongs to another attempt now.
+      if (keyRef.current !== key) return;
+      apply(payment);
+      if (payment.status !== "successful" && payment.status !== "failed") {
+        cancelTimerRef.current = window.setTimeout(() => {
+          setState((current) =>
+            current?.cancelling ? { ...current, cancelling: false } : current,
+          );
+        }, TERMINAL_CANCEL_WAIT_MS);
+      }
     } catch (err) {
+      if (keyRef.current !== key) return;
       if (isRetryable(err)) {
-        // Same reasoning as above: not being able to ask is not an answer.
-        setState((current) => (current ? { ...current, stalled: true } : current));
+        // Same reasoning as above: not being able to ask is not an answer. The
+        // reader may well still have the basket, so the way to ask again goes
+        // back on screen.
+        setState((current) =>
+          current ? { ...current, stalled: true, cancelling: false } : current,
+        );
         return;
       }
       setState({
         phase: "failed", amount: null, currency: null, message: describeError(err), stalled: false,
+        cancelling: false,
       });
+    } finally {
+      if (cancelInFlightRef.current === key) cancelInFlightRef.current = null;
     }
   }, [pairing, apply]);
 
   /** Forget the attempt entirely — the panel is going back to its question. */
   const reset = useCallback(() => {
     keyRef.current = null;
+    window.clearTimeout(cancelTimerRef.current);
     setState(null);
   }, []);
+
+  useEffect(() => () => window.clearTimeout(cancelTimerRef.current), []);
 
   const phase = state?.phase;
   useEffect(() => {
@@ -222,6 +298,7 @@ export function useTerminal(
             currency: null,
             message: describeError(err),
             stalled: false,
+            cancelling: false,
           });
         });
     }, TERMINAL_POLL_MS);

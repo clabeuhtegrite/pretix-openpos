@@ -267,10 +267,9 @@ describe("the panel", () => {
         onClose={vi.fn()}
       />,
     );
-    expect(screen.getByRole("button", { name: t("takings.loading") })).toHaveProperty(
-      "disabled",
-      true,
-    );
+    const refreshing = screen.getByRole("button", { name: t("takings.loading") });
+    expect(refreshing).toHaveProperty("disabled", true);
+    expect(refreshing.getAttribute("aria-busy")).toBe("true");
   });
 
   it("closes on a tap beside it, and keeps the tap to itself", async () => {

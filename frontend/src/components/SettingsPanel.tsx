@@ -21,6 +21,10 @@ interface Props {
   onSoundChange: (on: boolean) => void;
   onCashierChange: (name: string) => void;
   onRefresh: () => void;
+  /** The catalogue is being reloaded: the panel closes once it is in. */
+  refreshing?: boolean;
+  /** The last reload did not reach the server, and the till kept what it had. */
+  refreshFailed?: boolean;
   onUnpair: () => void;
   onClose: () => void;
   onEventChange: (slug: string) => void;
@@ -111,7 +115,7 @@ function EventField({
 
 export default function SettingsPanel({
   pairing, currency, cashier, theme, onThemeChange, sound, onSoundChange, onCashierChange,
-  onRefresh, onUnpair,
+  onRefresh, refreshing = false, refreshFailed = false, onUnpair,
   onClose, onEventChange,
 }: Props) {
   const [summary, setSummary] = useState<SummaryResponse | null>(null);
@@ -270,9 +274,7 @@ export default function SettingsPanel({
             })}
           </div>
         )}
-        {!summary && !summaryFailed && (
-          <p style={{ color: "var(--text-dim)" }}>…</p>
-        )}
+        {!summary && !summaryFailed && <p className="loading">{t("app.loading")}</p>}
         {!summary && summaryFailed && (
           <div className="attendance-note">
             {t("summary.failed")}{" "}
@@ -294,8 +296,16 @@ export default function SettingsPanel({
         )}
 
         <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 24 }}>
-          <button className="btn ghost" onClick={onRefresh}>
-            {t("settings.refresh")}
+          {refreshFailed && !refreshing && (
+            <div className="error-banner">{t("settings.refreshFailed")}</div>
+          )}
+          <button
+            className="btn ghost"
+            onClick={onRefresh}
+            disabled={refreshing}
+            aria-busy={refreshing || undefined}
+          >
+            {refreshing ? t("settings.refreshing") : t("settings.refresh")}
           </button>
           <button
             className="btn danger"

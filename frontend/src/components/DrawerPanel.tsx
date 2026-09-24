@@ -161,6 +161,8 @@ export default function DrawerPanel({ pairing, cashier, online, onState, onClose
   const [reason, setReason] = useState("");
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false);
+  /** The drawer is being read, which is what "Réessayer" waits on. */
+  const [reading, setReading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // A prop that changes identity on every render of the till must not reload
@@ -186,6 +188,7 @@ export default function DrawerPanel({ pairing, cashier, online, onState, onClose
 
   const read = useCallback(
     async (signal?: AbortSignal) => {
+      setReading(true);
       try {
         const next = await api.drawer(pairing, signal);
         setState(next);
@@ -194,6 +197,8 @@ export default function DrawerPanel({ pairing, cashier, online, onState, onClose
       } catch (e) {
         if (signal?.aborted) return;
         setLoadFailed(describeError(e));
+      } finally {
+        setReading(false);
       }
     },
     [pairing],
@@ -328,12 +333,17 @@ export default function DrawerPanel({ pairing, cashier, online, onState, onClose
     body = loadFailed ? (
       <>
         <div className="error-banner">{loadFailed}</div>
-        <button className="btn" onClick={() => void read()}>
-          {t("drawer.retry")}
+        <button
+          className="btn"
+          onClick={() => void read()}
+          disabled={reading}
+          aria-busy={reading || undefined}
+        >
+          {reading ? t("app.loading") : t("drawer.retry")}
         </button>
       </>
     ) : (
-      <p className="drawer-status">…</p>
+      <p className="drawer-status loading">{t("app.loading")}</p>
     );
     footer = <div className="pay-buttons">{leave}</div>;
   } else if (!drawer) {
@@ -367,6 +377,7 @@ export default function DrawerPanel({ pairing, cashier, online, onState, onClose
             style={{ flex: 2 }}
             onClick={opening ? openDrawer : recordCount}
             disabled={locked}
+            aria-busy={busy || undefined}
           >
             {busy
               ? t("drawer.working")
@@ -410,6 +421,7 @@ export default function DrawerPanel({ pairing, cashier, online, onState, onClose
             style={{ flex: 2 }}
             onClick={() => recordMove(step)}
             disabled={locked || moved === 0 || !reason.trim()}
+            aria-busy={busy || undefined}
           >
             {busy
               ? t("drawer.working")
@@ -548,11 +560,18 @@ export default function DrawerPanel({ pairing, cashier, online, onState, onClose
             style={{ flex: 2 }}
             onClick={() => closeOnCount(current.seq)}
             disabled={locked}
+            aria-busy={busy || undefined}
           >
             {busy ? t("drawer.working") : t("drawer.closeAction")}
           </button>
         ) : session.stale ? (
-          <button className="btn danger" style={{ flex: 2 }} onClick={closeUncounted} disabled={locked}>
+          <button
+            className="btn danger"
+            style={{ flex: 2 }}
+            onClick={closeUncounted}
+            disabled={locked}
+            aria-busy={busy || undefined}
+          >
             {busy ? t("drawer.working") : t("drawer.closeUncounted")}
           </button>
         ) : (

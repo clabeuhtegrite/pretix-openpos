@@ -259,6 +259,7 @@ describe("keeping it current", () => {
       name: t("attendance.loading"),
     });
     expect(refresh).toHaveProperty("disabled", true);
+    expect(refresh.getAttribute("aria-busy")).toBe("true");
   });
 
   it("says why when the count could not be read", () => {

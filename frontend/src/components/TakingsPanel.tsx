@@ -271,9 +271,7 @@ export default function TakingsPanel({
 
         {summary && <div className="takings-scope">{scopeLabel(summary.scope)}</div>}
 
-        {!summary && !failed && (
-          <p style={{ color: "var(--text-dim)" }}>{t("takings.loading")}</p>
-        )}
+        {!summary && !failed && <p className="loading">{t("takings.loading")}</p>}
         {!summary && failed && <div className="error-banner">{t("summary.failed")}</div>}
 
         {summary && (
@@ -327,7 +325,12 @@ export default function TakingsPanel({
         )}
 
         <div className="takings-actions">
-          <button className="btn ghost" onClick={onRefresh} disabled={busy}>
+          <button
+            className="btn ghost"
+            onClick={onRefresh}
+            disabled={busy}
+            aria-busy={busy || undefined}
+          >
             {busy ? t("takings.loading") : failed && !summary ? t("summary.retry") : t("attendance.refresh")}
           </button>
           <button className="btn primary" onClick={onClose}>

@@ -139,6 +139,13 @@ function sold(overrides: Partial<SaleResult> = {}): SaleResult {
   };
 }
 
+/** An answer the test hands over when it chooses to. */
+function later<T>() {
+  let resolve: (value: T) => void = () => {};
+  const promise = new Promise<T>((yes) => (resolve = yes));
+  return { promise, resolve };
+}
+
 /** Pretend the app is installed to the home screen, which is the normal case. */
 function installed(): void {
   Object.defineProperty(window, "matchMedia", {
@@ -237,6 +244,16 @@ describe("getting to the till", () => {
     expect(await screen.findByRole("heading", { name: "Festival" })).toBeDefined();
   });
 
+  it("says it is loading while the event opens, rather than three dots", async () => {
+    const opening = later<PosConfig>();
+    apiMock.config.mockReturnValue(opening.promise);
+    show();
+
+    expect(screen.getByText(t("app.loading"))).toBeDefined();
+    opening.resolve(config());
+    await ready();
+  });
+
   it("marks an event running in test mode, loudly", async () => {
     // A night sold into test mode is a night's takings that do not exist.
     apiMock.config.mockResolvedValue(config({
@@ -317,6 +334,27 @@ describe("getting to the till", () => {
     await user.click(screen.getByRole("button", { name: t("error.retry") }));
 
     expect(await screen.findByRole("button", { name: /Bière/ })).toBeDefined();
+  });
+
+  it("keeps the page up while it tries again, and says it is trying", async () => {
+    // The page used to vanish into three dots at the tap, and come back
+    // unchanged when the server still said no: a retry that looked like it
+    // had not been pressed.
+    apiMock.config.mockRejectedValueOnce(new ApiError(403, "Unknown device."));
+    apiMock.catalog.mockRejectedValueOnce(new ApiError(403, "Unknown device."));
+    const { user } = show();
+    await screen.findByText(t("error.refused", { detail: "Unknown device." }));
+    const answer = later<PosConfig>();
+    apiMock.config.mockReturnValueOnce(answer.promise);
+
+    await user.click(screen.getByRole("button", { name: t("error.retry") }));
+
+    const retrying = screen.getByRole("button", { name: t("error.retrying") });
+    expect(retrying).toHaveProperty("disabled", true);
+    expect(retrying.getAttribute("aria-busy")).toBe("true");
+    expect(screen.getByText(t("error.refused", { detail: "Unknown device." }))).toBeDefined();
+    answer.resolve(config());
+    await ready();
   });
 
   it("lets a refused till be unpaired, once the operator has confirmed", async () => {
@@ -409,6 +447,60 @@ describe("getting to the till", () => {
     await ready();
     expect(loadPairing()?.event).toBe("gala");
     expect(apiMock.catalog).toHaveBeenLastCalledWith(expect.objectContaining({ event: "gala" }));
+  });
+
+  it("shows the next event loading, not the last one's refusal", async () => {
+    const refused = new ApiError(403, "Open POS is not enabled for the event festival.");
+    const gala = later<PosConfig>();
+    apiMock.config.mockImplementation((p: { event: string }) =>
+      p.event === "festival" ? Promise.reject(refused) : gala.promise,
+    );
+    apiMock.catalog.mockImplementation((p: { event: string }) =>
+      p.event === "festival" ? Promise.reject(refused) : Promise.resolve(catalog),
+    );
+    apiMock.posEvents.mockResolvedValue({
+      results: [
+        { slug: "gala", organizer: "demo", name: "Gala", currency: "EUR", testmode: false, date_from: null },
+      ],
+    });
+    const { user } = show();
+    await screen.findByText(t("error.refused", { detail: refused.message }));
+
+    await user.click(await screen.findByRole("button", { name: /Gala/ }));
+
+    expect(screen.getByText(t("app.loading"))).toBeDefined();
+    expect(screen.queryByText(t("error.refused", { detail: refused.message }))).toBeNull();
+    gala.resolve(config());
+    await ready();
+  });
+
+  it("does not let a late answer for the event it left land on the next", async () => {
+    // Retry pressed on one event, then another event picked before the first
+    // answered: the till is on the second, whatever the first says after.
+    const refused = new ApiError(403, "Open POS is not enabled for the event festival.");
+    apiMock.config.mockRejectedValueOnce(refused);
+    apiMock.catalog.mockRejectedValueOnce(refused);
+    apiMock.posEvents.mockResolvedValue({
+      results: [
+        { slug: "gala", organizer: "demo", name: "Gala", currency: "EUR", testmode: false, date_from: null },
+      ],
+    });
+    const { user } = show();
+    await screen.findByText(t("error.refused", { detail: refused.message }));
+    const festival = later<PosConfig>();
+    apiMock.config.mockImplementation((p: { event: string }) =>
+      p.event === "festival"
+        ? festival.promise
+        : Promise.resolve(config({ event: { ...config().event, slug: "gala", name: "Gala" } })),
+    );
+    await user.click(screen.getByRole("button", { name: t("error.retry") }));
+
+    await user.click(await screen.findByRole("button", { name: /Gala/ }));
+    expect(await screen.findByRole("heading", { name: "Gala" })).toBeDefined();
+    await act(async () => festival.resolve(config()));
+
+    expect(screen.getByRole("heading", { name: "Gala" })).toBeDefined();
+    expect(screen.queryByRole("heading", { name: "Festival" })).toBeNull();
   });
 
   it("offers them too when a series has nothing on tonight", async () => {
@@ -1153,6 +1245,11 @@ describe("a new build on the server", () => {
 
     await user.click(screen.getByRole("button", { name: t("update.reload") }));
 
+    // Said at once: fetching the new build over a venue's wifi takes a moment,
+    // and the old page stays on screen until it is in.
+    const updating = screen.getByRole("button", { name: t("update.reloading") });
+    expect(updating).toHaveProperty("disabled", true);
+    expect(updating.getAttribute("aria-busy")).toBe("true");
     await waitFor(() => expect(reload).toHaveBeenCalled());
     expect(remove).toHaveBeenCalledWith("v1");
     // Written before the reload: whatever comes back has to know it tried.
@@ -1324,6 +1421,44 @@ describe("correcting a sale", () => {
 });
 
 describe("the settings", () => {
+  it("stay open while the catalogue reloads, and close once it is in", async () => {
+    // They used to close at the tap, and the till then looked exactly as it
+    // had whether the catalogue came or not.
+    const { user } = show();
+    await ready();
+    const reloaded = later<Catalog>();
+    apiMock.catalog.mockReturnValueOnce(reloaded.promise);
+
+    await user.click(screen.getByRole("button", { name: "settings" }));
+    await user.click(await screen.findByRole("button", { name: t("settings.refresh") }));
+
+    expect(screen.getByRole("button", { name: t("settings.refreshing") })).toHaveProperty(
+      "disabled",
+      true,
+    );
+    await act(async () => reloaded.resolve(catalog));
+    await waitFor(() => expect(screen.queryByText(t("settings.title"))).toBeNull());
+  });
+
+  it("say so when the catalogue could not be reloaded, and the till goes on selling", async () => {
+    const { user } = show();
+    await ready();
+    apiMock.config.mockRejectedValueOnce(new ApiError(0, "network"));
+    apiMock.catalog.mockRejectedValueOnce(new ApiError(0, "network"));
+
+    await user.click(screen.getByRole("button", { name: "settings" }));
+    await user.click(await screen.findByRole("button", { name: t("settings.refresh") }));
+
+    expect(await screen.findByText(t("settings.refreshFailed"))).toBeDefined();
+    expect(screen.getByText(t("settings.title"))).toBeDefined();
+    expect(tile(/Bière/)).toBeDefined();
+
+    // A sentence about an earlier attempt, not about the panel opened next.
+    await user.click(screen.getByRole("button", { name: t("settings.close") }));
+    await user.click(screen.getByRole("button", { name: "settings" }));
+    expect(screen.queryByText(t("settings.refreshFailed"))).toBeNull();
+  });
+
   it("remembers the cashier across a reload", async () => {
     const { user } = show();
     await ready();

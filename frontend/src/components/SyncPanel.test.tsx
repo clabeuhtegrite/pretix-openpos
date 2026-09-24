@@ -320,10 +320,9 @@ describe("sending now", () => {
 
     show({ syncing: true });
 
-    expect(screen.getByRole("button", { name: t("offline.syncing") })).toHaveProperty(
-      "disabled",
-      true,
-    );
+    const sending = screen.getByRole("button", { name: t("offline.syncing") });
+    expect(sending).toHaveProperty("disabled", true);
+    expect(sending.getAttribute("aria-busy")).toBe("true");
   });
 
   it("is refused when there is nothing to send", () => {

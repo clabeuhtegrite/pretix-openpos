@@ -172,6 +172,7 @@ export default function SyncPanel({ online, syncing, report, event, onSync, onCl
           <button
             className="btn primary"
             disabled={!online || syncing || mine.length === 0}
+            aria-busy={syncing || undefined}
             onClick={onSync}
           >
             {syncing ? t("offline.syncing") : t("offline.sync")}
