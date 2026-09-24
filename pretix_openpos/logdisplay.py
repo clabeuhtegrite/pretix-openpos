@@ -690,6 +690,77 @@ class JournalFailed(NoOpShredderMixin, OrderLogEntryType):
                  "Sales page lists this sale until it is.")
 
 
+@log_entry_types.new()
+class RefundPending(NoOpShredderMixin, OrderLogEntryType):
+    """A card refund SumUp would not take yet, left waiting and asked for again."""
+
+    action_type = "pretix_openpos.order.refund.pending"
+
+    def display(self, logentry, data):
+        return _("SumUp did not take the card refund yet, so Open POS asks again on its "
+                 "own until it does. SumUp answered: {answer}").format(
+            answer=data.get("answer") or "—"
+        )
+
+
+@log_entry_types.new()
+class RefundAccepted(NoOpShredderMixin, OrderLogEntryType):
+    """A waiting card refund SumUp took on a later try."""
+
+    action_type = "pretix_openpos.order.refund.accepted"
+
+    def display(self, logentry, data):
+        return _("SumUp took the card refund on a later try.")
+
+
+@log_entry_types.new()
+class RefundGaveUp(NoOpShredderMixin, OrderLogEntryType):
+    """A waiting card refund SumUp kept refusing, failed for a person to look at."""
+
+    action_type = "pretix_openpos.order.refund.gave_up"
+
+    def display(self, logentry, data):
+        return _("SumUp still refused the card refund, so Open POS stopped asking. Refund "
+                 "it from the SumUp dashboard or with “Create a refund”. SumUp answered: "
+                 "{answer}").format(answer=data.get("answer") or "—")
+
+
+@log_entry_types.new()
+class GivenBackInSumUp(NoOpShredderMixin, OrderLogEntryType):
+    """
+    A card payment given back in SumUp — its dashboard, its app — brought into pretix.
+
+    Says what SumUp reported, then what Open POS did about it: the two are
+    read together by whoever wonders why an order nobody touched in pretix
+    was cancelled overnight.
+    """
+
+    action_type = "pretix_openpos.order.sumup.given_back"
+
+    def display(self, logentry, data):
+        amount = _money(data.get("amount"), logentry.event.currency)
+        transaction = data.get("transaction_id") or "—"
+        if data.get("status") == "CANCELLED":
+            reported = _("Card payment {transaction} was cancelled in SumUp ({amount}).")
+        else:
+            reported = _("Card payment {transaction} was refunded in SumUp ({amount}).")
+        if not data.get("whole"):
+            done = _("Open POS recorded it as a refund made outside pretix: process it on "
+                     "this order to say what becomes of the order.")
+        elif data.get("cancelled"):
+            done = _("Open POS cancelled the order and recorded the refund.")
+        elif data.get("cancel_failed"):
+            done = _("Open POS recorded the refund but could not cancel the order: process "
+                     "the refund on this order.")
+        elif data.get("confirmed") and not data.get("external"):
+            done = _("The refund that was waiting for SumUp is done.")
+        else:
+            done = _("Open POS recorded the refund.")
+        return "{} {}".format(
+            reported.format(transaction=transaction, amount=amount), done
+        )
+
+
 @receiver(logentry_display, dispatch_uid="openpos_organizer_logentry_display")
 def describe_organizer_entry(sender, logentry, **kwargs):
     """

@@ -342,9 +342,10 @@ def refused_card_refunds(event):
     for refund in refunds:
         payment = payments.get(keys.get(refund.order_id))
         if payment is not None and payment.refunded is not None:
-            # Given back since, from pretix' refund dialog or by a retry at
-            # the till. pretix keeps the failed refund on the order, as it
-            # should; the debt it recorded is paid.
+            # Given back since, from pretix' refund dialog, by a retry at the
+            # till, or in SumUp, which reconcile.py reads back. pretix keeps
+            # the failed refund on the order, as it should; the debt it
+            # recorded is paid.
             continue
         rows.append(
             {
@@ -353,6 +354,39 @@ def refused_card_refunds(event):
                 "transaction": payment.transaction_id if payment else "",
                 # Why, in SumUp's words, when the refund that failed kept them.
                 "answer": (refund.info_data or {}).get("sumup_error", ""),
+            }
+        )
+    return rows
+
+
+def waiting_card_refunds(event):
+    """
+    Card refunds SumUp has not taken yet, which the server is asking for again.
+
+    Nothing for anybody to do — that is the point of listing them apart from
+    the refused ones below. What they are for is the answer to "did the
+    customer get their money back?" asked the next morning: not yet, SumUp
+    said so at such a time, and it will be asked again. One SumUp still
+    refuses after three days leaves this list for that one.
+    """
+    from django.utils.dateparse import parse_datetime
+
+    from .reconcile import TRIED_AT, pending_refunds, terminal_for
+
+    rows = []
+    for refund in pending_refunds(order__event=event)[:200]:
+        info = refund.info_data or {}
+        transaction = info.get("transaction_id")
+        if not transaction:
+            terminal = terminal_for(refund.order)
+            transaction = terminal.transaction_id if terminal else ""
+        rows.append(
+            {
+                "refund": refund,
+                "order": refund.order,
+                "transaction": transaction,
+                "answer": info.get("sumup_error", ""),
+                "tried": parse_datetime(info.get(TRIED_AT) or ""),
             }
         )
     return rows
@@ -749,6 +783,7 @@ class SalesView(EventPermissionRequiredMixin, ListView):
         # needs seeing whatever range is on screen.
         ctx["off_tariff"], ctx["off_tariff_difference"] = sold_off_tariff(all_sales)
         ctx["refused_refunds"] = refused_card_refunds(self.request.event)
+        ctx["waiting_refunds"] = waiting_card_refunds(self.request.event)
         # Not filtered by evening either: a sale pretix struck off is wrong in
         # the takings of whichever night it was sold on, and one button puts
         # every one of them right.

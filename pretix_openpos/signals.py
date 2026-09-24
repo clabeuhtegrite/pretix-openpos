@@ -3,9 +3,11 @@ from django.urls import resolve, reverse
 from django.utils.translation import gettext_lazy as _
 from pretix.api.signals import register_device_security_profile
 from pretix.base.signals import (
-    event_copy_data, order_canceled, order_reactivated, register_payment_providers, register_sales_channel_types,
+    event_copy_data, order_canceled, order_reactivated, periodic_task, register_payment_providers,
+    register_sales_channel_types,
 )
 from pretix.control.signals import nav_event, nav_organizer
+from pretix.helpers.periodic import minimum_interval
 
 from .arrivals import EventArrivalsView
 from .channels import PosSalesChannelType
@@ -63,6 +65,23 @@ def openpos_order_reactivated(sender, order, **kwargs):
     from .backoffice import record_reactivation
 
     record_reactivation(order)
+
+
+@receiver(periodic_task, dispatch_uid="openpos_sumup_reconcile")
+@minimum_interval(minutes_after_success=5, minutes_after_error=5)
+def openpos_sumup_reconcile(sender, **kwargs):
+    """
+    Card refunds and SumUp brought to agree, every few minutes.
+
+    pretix sends this whenever its cron job runs (``runperiodic``, which every
+    pretix installation schedules for its own reminders and expiries), at
+    whatever pace that job keeps; this asks SumUp at most every five minutes
+    of it. See :mod:`.reconcile` for what is compared, and why nothing it does
+    can send money twice.
+    """
+    from .reconcile import reconcile_all
+
+    reconcile_all()
 
 
 @receiver(nav_event, dispatch_uid="openpos_nav_event")

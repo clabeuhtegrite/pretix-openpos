@@ -1,6 +1,6 @@
 # Fonctionnement de pretix-openpos
 
-Documentation de fonctionnement du plugin, version 0.23.0. Elle couvre trois
+Documentation de fonctionnement du plugin, version 0.24.0. Elle couvre trois
 choses, dans cet ordre : ce que le plugin ajoute à pretix, comment le mettre en
 service, et ce qui se passe exactement quand un bénévole encaisse.
 
@@ -114,7 +114,10 @@ quand elle annule (§5bis, *Une vente annulée depuis pretix*). Pas pour une car
 prise sur le téléphone de quelqu'un, ni pour une carte déjà remboursée, ni en
 partie. Sous chaque remboursement carte de la page de commande,
 `refund_control_render()` affiche la transaction SumUp et, pour un remboursement
-que SumUp a refusé, sa réponse.
+que SumUp a refusé ou qu'il n'a pas encore accepté, sa réponse. Ce second cas,
+et un paiement rendu depuis SumUp lui-même, sont ceux de
+[reconcile.py](../pretix_openpos/reconcile.py) (§5quinquies, *SumUp et pretix
+mis d'accord*).
 
 ### 2.3 Un profil de sécurité pour les devices
 
@@ -394,7 +397,7 @@ En Docker/Kubernetes, [`deploy/Dockerfile`](../deploy/Dockerfile) intègre le pl
 
 ```bash
 cd frontend && npm run build && cd ..
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.23.0 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.24.0 .
 ```
 
 Deux pièges :
@@ -937,6 +940,9 @@ change, on rembourse à la main. Carte encaissée sur un lecteur : la ligne
 *Terminal de paiement (Open POS)* propose « Montant total », déjà cochée ;
 valider demande à SumUp de rembourser la transaction **en entier**, sans le
 lecteur ni la carte, exactement comme `cancel/` le fait pour la caisse. SumUp
+répond « pas encore » (son 409, ce qu'obtient un remboursement demandé juste
+après le paiement) : le remboursement reste *en cours* et le serveur le
+redemande tout seul (§5quinquies, *SumUp et pretix mis d'accord*). SumUp
 refuse : pretix marque le remboursement échoué, la page Ventes le liste, et la
 réponse de SumUp s'affiche (§5quinquies, *Annuler une vente carte*). SumUp
 ne répond pas : le message demande de vérifier la transaction dans l'app SumUp
@@ -1451,22 +1457,25 @@ sans la carte du client**, et répond ce qu'il en est :
 | `none` | Espèces, ou carte prise sur le téléphone de quelqu'un | Le montant à rendre, comme avant |
 | `done` | SumUp a accepté le remboursement | *Déjà remboursé sur la carte du client*, rien à rendre |
 | `already` | C'était déjà fait | Idem |
+| `pending` | SumUp n'accepte pas **encore** le remboursement ; le serveur le redemande | *Remboursement carte en cours…*, rien à rendre |
 | `failed` | **L'argent est toujours sur la carte du client** | Un bandeau rouge, et quoi faire : rembourser depuis l'app SumUp |
 
 Une correction de commande après une annulation carte ne porte donc **pas
-d'avoir** : l'argent est reparti. Le panier corrigé s'encaisse en entier.
+d'avoir** : l'argent est reparti, ou va repartir. Le panier corrigé s'encaisse
+en entier.
 
 Un remboursement refusé se relance depuis pretix : *Créer un remboursement* sur
 la commande propose la carte, et SumUp est redemandé (§5bis, *Une vente annulée
-depuis pretix*). Une fois passé, la vente quitte la liste des remboursements
-refusés de la page Ventes ; le remboursement échoué reste dans l'historique de
-la commande, comme pretix le garde.
+depuis pretix*). Il peut aussi se faire depuis le tableau de bord SumUp : le
+serveur le voit tout seul (ci-dessous). Une fois passé, la vente quitte la liste
+des remboursements refusés de la page Ventes ; le remboursement échoué reste
+dans l'historique de la commande, comme pretix le garde.
 
 **Pourquoi SumUp refuse.** Le tableau de bord SumUp refuse le même
 remboursement sans dire pourquoi. Depuis la 0.22.1, le plugin garde la réponse
 de SumUp sur le remboursement échoué : son statut HTTP et ses propres mots,
-`409 · The transaction is not refundable in its current state` par exemple,
-jamais la clé d'API. Elle s'affiche sous le remboursement sur la page de
+`422 · Refund failed. · INVALID_AMOUNT · Amount exceeds the refundable amount`
+par exemple, jamais la clé d'API. Elle s'affiche sous le remboursement sur la page de
 commande, dans la colonne *Réponse de SumUp* de la page Ventes, et à la suite
 du message dans la fenêtre de remboursement de pretix. La caisse, elle, garde
 son bandeau : ce qu'il y a à faire ne dépend pas du motif.
@@ -1485,8 +1494,69 @@ l'écrit lui-même : *créé*, puis *effectué* ou *échoué*.
 
 Si la connexion meurt entre l'annulation et le remboursement, la caisse
 réessaie avec la même clé : le serveur lui rend l'annulation telle quelle *et*
-finit le remboursement, ou répond qu'il était déjà fait. Rien d'autre ne
-repasserait derrière.
+finit le remboursement, ou répond qu'il était déjà fait. Un remboursement jamais
+demandé, lui, n'est repris par rien d'autre ; un remboursement que SumUp n'a pas
+encore accepté l'est, par le serveur.
+
+### SumUp et pretix mis d'accord
+
+Deux trous, trouvés avec les premiers vrais remboursements, le 24 septembre
+2026, et bouchés en 0.24.0 par [reconcile.py](../pretix_openpos/reconcile.py).
+
+**SumUp refuse un remboursement demandé juste après le paiement.** Il répond
+`409 · The transaction is not refundable in its current state` ; le même
+remboursement, fait depuis son tableau de bord quelques minutes plus tard, est
+passé. Ce 409 n'est donc plus un refus : le remboursement reste **en cours**
+(l'état *transit* de pretix, de l'argent en route, qui empêche aussi de
+rembourser deux fois le même paiement), la caisse affiche *Remboursement carte
+en cours* sans rien faire rendre, et le serveur redemande. La page Ventes les
+liste sous *Remboursements carte en attente de SumUp*, avec la réponse de SumUp
+et l'heure de la dernière demande ; la page de commande aussi. Au bout de
+**trois jours** de « pas encore », ce n'est plus une question d'attente : le
+remboursement passe *échoué*, dans la liste des refusés, pour qu'une personne
+regarde. Même chose dans la fenêtre de remboursement de pretix et pour son API.
+
+**Un paiement rendu depuis SumUp n'arrivait jamais dans pretix.** Remboursé ou
+annulé depuis le tableau de bord ou l'app SumUp, il restait payé dans pretix et
+compté dans la recette, et un remboursement que pretix avait marqué échoué
+restait dans la liste des dettes envers un client qui avait son argent. Le
+serveur lit donc l'historique SumUp des paiements rendus (remboursés ou
+annulés) des 30 derniers jours et met pretix d'accord avec chacun de ceux
+qu'un lecteur de l'organisateur a encaissés :
+
+- **tout le paiement rendu, commande encore payée** : la commande est annulée,
+  sans e-mail, comme le ferait *Annuler la commande* de pretix, le
+  remboursement est enregistré comme fait hors de pretix et marqué effectué, et
+  la vente sort de la recette, au journal, **au nom de « SumUp »**, avec pour
+  motif *Le paiement carte a été remboursé dans SumUp* (ou *annulé*) ;
+- **commande déjà annulée**, avec un remboursement échoué par exemple : le
+  remboursement est enregistré et effectué, et la vente quitte la liste des
+  remboursements refusés ;
+- **un remboursement en attente de SumUp** : il est marqué effectué ;
+- **une partie seulement** : elle est enregistrée comme remboursement fait hors
+  de pretix, que la page de commande propose de traiter. La commande reste
+  telle quelle : une bière rendue n'annule pas la tournée. Annulé ensuite sur
+  la commande par quelqu'un, ce remboursement n'est pas réécrit au passage
+  suivant ; seule une nouvelle partie rendue dans SumUp le serait ;
+- **un paiement sans vente** (*Paiements carte sans vente* de la page Ventes) :
+  il quitte cette liste.
+
+L'historique de chaque commande dit ce que SumUp a indiqué et ce qui a été fait.
+
+**Jamais deux fois le même argent.** Le seul remboursement que le serveur envoie
+est un remboursement que quelqu'un a déjà demandé, et il relit la transaction
+chez SumUp juste avant : un paiement déjà rendu depuis le tableau de bord est
+enregistré, pas remboursé une seconde fois. Un paiement rendu **en partie**
+pendant qu'un remboursement total attend fait échouer ce dernier, pour qu'une
+personne décide.
+
+**Quand.** À chaque passage de la tâche périodique de pretix (`runperiodic`,
+que toute installation de pretix planifie déjà pour ses propres relances et
+expirations), au plus toutes les cinq minutes. Rien n'est demandé à SumUp pour
+un organisateur qui n'a ni paiement carte non rendu depuis 30 jours ni
+remboursement en attente. Si la liste des remboursements en attente ne voit
+jamais son heure de *Dernière demande* avancer, c'est que cette tâche ne tourne
+pas.
 
 ### Deux caisses sur un seul lecteur
 

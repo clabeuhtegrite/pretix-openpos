@@ -56,6 +56,28 @@ def cancelled_by_a_till() -> bool:
     return _till_cancelling.get()
 
 
+#: Who a reversal Open POS writes on its own is written in the name of.
+_acting_for = contextvars.ContextVar("openpos_acting_for", default="")
+
+
+@contextmanager
+def acting_for(name):
+    """
+    Put the reversal about to be written in the journal under ``name``.
+
+    For what Open POS does on its own, which pretix records as nobody's: a
+    card payment SumUp says went back, from its dashboard or its app. The
+    journal row is written by the same code as any other cancellation or card
+    refund, and it would name nobody either — so it names where the money was
+    given back.
+    """
+    token = _acting_for.set(name)
+    try:
+        yield
+    finally:
+        _acting_for.reset(token)
+
+
 def _journal_rows(order):
     """
     The rows a till wrote for this order: the sale, and the deposit handed back
@@ -146,7 +168,7 @@ def journal_cancellation(order, *, recorded_at=None):
     return _reverse(
         order,
         rows,
-        who=_who(entry),
+        who=_acting_for.get() or _who(entry),
         reason=((entry.parsed_data.get("comment") if entry else "") or "")[:190],
         kept=order.total if order.status != Order.STATUS_CANCELED else Decimal("0.00"),
         recorded_at=recorded_at,
@@ -178,7 +200,7 @@ def journal_card_refund(refund):
     return _reverse(
         order,
         rows,
-        who=_who(_refund_entry(order, refund)),
+        who=_acting_for.get() or _who(_refund_entry(order, refund)),
         reason=(refund.comment or "")[:190],
         kept=Decimal("0.00"),
     )

@@ -254,6 +254,8 @@ export const MESSAGES = {
     "history.correct": "Correct the order",
     "history.correctHelp": "Correcting puts the items back in the basket and settles the difference at payment — no need to hand the whole amount back and take it again.",
     "history.refundedToCard": "Already refunded to the customer's card.",
+    "history.refundPending":
+      "Card refund on its way: SumUp does not take it right after the payment, so the server asks again on its own. Nothing to hand back.",
     "history.refundFailed":
       "The refund did not go through: the money is still on the customer's card. Refund it from the SumUp app.",
     "history.finish": "Finish",
@@ -658,6 +660,8 @@ export const MESSAGES = {
     "history.correct": "Corriger la commande",
     "history.correctHelp": "Corriger remet les articles au panier et règle la différence à l’encaissement — inutile de rendre toute la somme pour la reprendre ensuite.",
     "history.refundedToCard": "Déjà remboursé sur la carte du client.",
+    "history.refundPending":
+      "Remboursement carte en cours : SumUp ne l’accepte pas juste après le paiement, le serveur le redemande tout seul. Rien à rendre au client.",
     "history.refundFailed":
       "Le remboursement n’est pas passé : l’argent est toujours sur la carte du client. Remboursez-le depuis l’application SumUp.",
     "history.finish": "Terminer",

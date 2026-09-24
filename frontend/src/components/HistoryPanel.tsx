@@ -130,8 +130,12 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
             const card = done.cancellation.payment_type === "card";
             // The reader gave the money back by itself, so the till is holding
             // nothing for this customer: the corrected sale is charged in full
-            // and there is nothing to count out of the drawer.
-            const sentBack = done.card_refund === "done" || done.card_refund === "already";
+            // and there is nothing to count out of the drawer. The same when
+            // SumUp said "not yet": the server keeps asking, and the card gets
+            // the money then — handing it over as well would pay it twice.
+            const waiting = done.card_refund === "pending";
+            const sentBack =
+              done.card_refund === "done" || done.card_refund === "already" || waiting;
             const stuck = done.card_refund === "failed";
             return (
               <div className="history-done">
@@ -148,7 +152,9 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
                   </div>
                 )}
                 {sentBack && (
-                  <div className="history-done-meta">{t("history.refundedToCard")}</div>
+                  <div className="history-done-meta">
+                    {t(waiting ? "history.refundPending" : "history.refundedToCard")}
+                  </div>
                 )}
                 {/* Loud, and not a line of small print: a cancellation that
                     looks complete while the money is still on the customer's

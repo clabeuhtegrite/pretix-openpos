@@ -63,9 +63,13 @@ it was written for. Read the scope section before deciding it fits.
   puts the basket on the reader and waits for the customer. The server prices
   the basket when it asks for the card and books the order from that same
   priced basket, so the charge and the order cannot disagree. Cancelling such a
-  sale refunds the card by itself. SumUp's callback is never believed — it only
-  makes the server go and ask over an authenticated connection — so an
-  installation SumUp cannot reach works identically, a second or two slower.
+  sale refunds the card by itself, and a refund SumUp will not take yet — it
+  refuses one asked for right after the payment — is asked for again until it
+  does. A payment refunded or cancelled in SumUp's own dashboard or app shows
+  up in pretix on its own: the order cancelled and refunded, the sale out of
+  the takings. SumUp's callback is never believed — it only makes the server go
+  and ask over an authenticated connection — so an installation SumUp cannot
+  reach works identically, a second or two slower.
 - A dedicated **`openpos` sales channel**, so a product can be limited to the
   door, kept off it, or made to exist *only* on site.
 - **One price per product**, pretix' own. The till has no price list of its
@@ -246,7 +250,7 @@ If you run pretix in Docker or Kubernetes, [`deploy/Dockerfile`](deploy/Dockerfi
 bakes the plugin into the official image:
 
 ```bash
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.23.0 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.24.0 .
 ```
 
 The PWA bundle is built inside the image, from the tree you are building, so the

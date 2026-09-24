@@ -12,11 +12,11 @@ import pytest
 import requests
 
 from pretix_openpos.sumup import (
-    ERR_BUSY, ERR_NOT_FOUND, ERR_OFFLINE, ERR_REFUSED, ERR_UNAVAILABLE, SumUpAccount, SumUpError, minor_units,
-    still_running, succeeded,
+    ERR_BUSY, ERR_CONFLICT, ERR_NOT_FOUND, ERR_OFFLINE, ERR_REFUSED, ERR_UNAVAILABLE, SumUpAccount, SumUpError,
+    given_back, minor_units, still_running, succeeded,
 )
 
-from .sumup_stub import FakeResponse, reader_busy, reader_offline
+from .sumup_stub import NOT_REFUNDABLE, FakeResponse, reader_busy, reader_offline
 
 
 @pytest.fixture
@@ -373,9 +373,12 @@ def test_not_yet_is_recognised_by_code_and_never_by_wording(account, sumup, monk
     "status,code,retryable",
     [
         (404, ERR_NOT_FOUND, False),
-        # A refund SumUp will not make, or a reader already paired: nothing to
-        # do with a busy reader, which SumUp reports as a 422.
-        (409, ERR_REFUSED, False),
+        # A refund SumUp will not make *yet*, or a reader already paired:
+        # nothing to do with a busy reader, which SumUp reports as a 422. Not
+        # retryable in this module's sense — asking again at once gets the
+        # same answer — but a caller refunding waits and asks again later.
+        (409, ERR_CONFLICT, False),
+        (422, ERR_REFUSED, False),
         (503, ERR_UNAVAILABLE, True),
     ],
 )
@@ -676,3 +679,156 @@ def test_sumup_s_words_never_carry_the_key(account, sumup):
 
     assert "sup_sk_test" not in caught.value.reason
     assert caught.value.reason == "401 · invalid token …"
+
+
+# -- what went back to the card ----------------------------------------------
+
+
+@pytest.mark.django_db
+def test_a_refund_asked_for_too_soon_is_told_apart_from_a_refusal(account, sumup):
+    """
+    SumUp's answer to the first real refunds, asked for moments after the
+    payment: the same refund went through in its dashboard minutes later.
+    """
+    sumup.next_response = FakeResponse(409, NOT_REFUNDABLE)
+
+    with pytest.raises(SumUpError) as caught:
+        account.refund("tx_7")
+
+    assert caught.value.code == ERR_CONFLICT
+    assert caught.value.reason == "409 · The transaction is not refundable in its current state"
+
+
+@pytest.mark.django_db
+def test_a_transaction_is_read_by_the_id_a_refund_names(account, sumup):
+    sumup.transactions["ctx_1"] = {"id": "tx_1", "client_transaction_id": "ctx_1",
+                                   "status": "SUCCESSFUL", "amount": 10.0}
+
+    assert account.transaction_by_id("tx_1")["status"] == "SUCCESSFUL"
+    assert sumup.calls[-1][1] == "/v2.1/merchants/MERCH1/transactions"
+
+
+@pytest.mark.django_db
+def test_a_transaction_that_is_not_there_by_id_is_an_error(account, sumup):
+    # Unlike by the checkout's handle: a refund names a transaction that was
+    # read when the sale was booked, so it exists.
+    with pytest.raises(SumUpError) as caught:
+        account.transaction_by_id("tx_nope")
+
+    assert caught.value.code == ERR_NOT_FOUND
+
+
+@pytest.mark.django_db
+def test_the_history_is_asked_for_payments_given_back_since_a_time(account, sumup):
+    from datetime import datetime, timezone
+
+    list(account.given_back_payments(datetime(2026, 9, 24, 12, 30, tzinfo=timezone.utc)))
+
+    [query] = sumup.history_reads
+    assert query == {
+        "oldest_time": "2026-09-24T12:30:00Z",
+        "statuses[]": ["CANCELLED", "REFUNDED"],
+        "types[]": ["PAYMENT"],
+        "order": "descending",
+        "limit": 100,
+    }
+
+
+@pytest.mark.django_db
+def test_the_history_follows_its_next_link_page_by_page(account, sumup):
+    from datetime import datetime, timezone
+
+    for n in range(5):
+        sumup.transactions[f"ctx_{n}"] = {
+            "id": f"tx_{n}", "client_transaction_id": f"ctx_{n}",
+            "status": "REFUNDED", "amount": "1.00", "refunded_amount": 1.0,
+        }
+    sumup.transactions["ctx_paid"] = {
+        "id": "tx_paid", "client_transaction_id": "ctx_paid",
+        "status": "SUCCESSFUL", "amount": "1.00",
+    }
+
+    items = list(account.given_back_payments(datetime(2026, 9, 1, tzinfo=timezone.utc), limit=2))
+
+    # Newest first, every one of them once, and none still paid.
+    assert [item["id"] for item in items] == ["tx_4", "tx_3", "tx_2", "tx_1", "tx_0"]
+    assert len(sumup.history_reads) == 3
+    # The link's cursor is laid over the filters, which it does not repeat.
+    assert sumup.history_reads[1]["newest_ref"] == "tx_3"
+    assert sumup.history_reads[1]["statuses[]"] == ["CANCELLED", "REFUNDED"]
+
+
+@pytest.mark.django_db
+def test_a_next_link_that_repeats_the_filters_keeps_all_of_them(account, sumup):
+    from datetime import datetime, timezone
+
+    for n in range(3):
+        sumup.transactions[f"ctx_{n}"] = {
+            "id": f"tx_{n}", "client_transaction_id": f"ctx_{n}",
+            "status": "REFUNDED" if n % 2 else "CANCELLED", "amount": "1.00",
+        }
+    sumup.history_link_extra = "&statuses[]=CANCELLED&statuses[]=REFUNDED&types[]=PAYMENT"
+
+    items = list(account.given_back_payments(datetime(2026, 9, 1, tzinfo=timezone.utc), limit=2))
+
+    assert [item["id"] for item in items] == ["tx_2", "tx_1", "tx_0"]
+    assert sumup.history_reads[1]["statuses[]"] == ["CANCELLED", "REFUNDED"]
+    assert sumup.history_reads[1]["types[]"] == ["PAYMENT"]
+
+
+@pytest.mark.django_db
+def test_the_history_stops_after_so_many_pages(account, sumup):
+    from datetime import datetime, timezone
+
+    for n in range(5):
+        sumup.transactions[f"ctx_{n}"] = {
+            "id": f"tx_{n}", "client_transaction_id": f"ctx_{n}",
+            "status": "CANCELLED", "amount": "1.00",
+        }
+
+    items = list(
+        account.given_back_payments(datetime(2026, 9, 1, tzinfo=timezone.utc), limit=2, pages=2)
+    )
+
+    assert len(items) == 4
+    assert len(sumup.history_reads) == 2
+
+
+@pytest.mark.parametrize(
+    "transaction,expected",
+    [
+        (None, Decimal("0.00")),
+        ({"status": "SUCCESSFUL", "amount": 10.0}, Decimal("0.00")),
+        # Reversed before it settled: all of it, whatever else is said.
+        ({"status": "CANCELLED", "amount": 10.0}, Decimal("10.00")),
+        ({"status": "SUCCESSFUL", "simple_status": "CANCELLED", "amount": "7.5"}, Decimal("7.50")),
+        # The history's line says how much.
+        ({"status": "REFUNDED", "amount": 10.0, "refunded_amount": 10.0}, Decimal("10.00")),
+        ({"status": "REFUNDED", "amount": 10.0, "refunded_amount": 2.5}, Decimal("2.50")),
+        # The transaction itself only lists its events, twice over: once.
+        (
+            {
+                "status": "REFUNDED", "amount": 10.0,
+                "events": [{"type": "REFUND", "status": "SUCCESSFUL", "amount": 4.0},
+                           {"type": "PAYOUT", "status": "PAID_OUT", "amount": 10.0},
+                           {"type": "REFUND", "status": "FAILED", "amount": 6.0}],
+                "transaction_events": [{"event_type": "REFUND", "status": "SUCCESSFUL",
+                                        "amount": 4.0}],
+            },
+            Decimal("4.00"),
+        ),
+        (
+            {"simple_status": "REFUNDED", "amount": 10.0,
+             "transaction_events": [{"event_type": "REFUND", "status": "PENDING",
+                                     "amount": -10.0}]},
+            Decimal("10.00"),
+        ),
+        # Refunded, and not a word of how much: not guessed.
+        ({"status": "REFUNDED", "amount": 10.0}, None),
+        ({"status": "REFUNDED", "amount": 10.0,
+          "events": [{"type": "REFUND", "status": "SUCCESSFUL", "amount": "n/a"}]}, None),
+        ({"status": "REFUNDED", "amount": 10.0, "refunded_amount": True}, None),
+    ],
+)
+def test_how_much_went_back_is_read_from_what_sumup_says(transaction, expected):
+    assert given_back(transaction) == expected

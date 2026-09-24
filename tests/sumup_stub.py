@@ -19,6 +19,10 @@ written from memory, and three of its answers were wrong in ways that made the
 suite pass against an API that does not exist: a refund answered 204 where
 SumUp answers 201, a reader's status at the top level where SumUp puts it
 under ``data``, and a busy reader as a 409 where SumUp sends a 422 naming it.
+
+A 409 is what SumUp does answer a refund asked for moments after the payment —
+the first real refunds, on 24 September 2026 — and ``not_refundable_yet`` is
+how a test has it say so.
 """
 import json
 import re
@@ -42,6 +46,32 @@ def reader_offline():
     return FakeResponse(
         422, {"errors": {"type": "READER_OFFLINE", "detail": "The device is offline."}}
     )
+
+
+#: SumUp's answer to a refund of a transaction whose state does not allow one
+#: yet, word for word from its API reference — and from the order page of the
+#: first refund it refused.
+NOT_REFUNDABLE = {
+    "type": "https://developer.sumup.com/problem/conflict",
+    "title": "Conflict",
+    "status": 409,
+    "detail": "The transaction is not refundable in its current state",
+}
+
+#: SumUp's answer to a refund its payment processor rejects, from the same
+#: reference: a refusal for good, where the 409 is one for now.
+REFUND_FAILED = {
+    "type": "https://developer.sumup.com/problem/unprocessable-entity",
+    "title": "Unprocessable Entity",
+    "status": 422,
+    "detail": "Refund failed.",
+    "errors": [{
+        "code": "INVALID_AMOUNT",
+        "detail": "Amount exceeds the refundable amount",
+        "reason": "amount_too_high",
+        "max_refundable_amount": 1000,
+    }],
+}
 
 
 def reader_busy():
@@ -80,6 +110,17 @@ class FakeSumUp:
         #: 3.3.39.0 does: old enough to take a payment, too old to be asked
         #: about one.
         self.reader_states = {}
+        #: Transaction ids a refund is answered 409 for, as SumUp answers one
+        #: asked for moments after the payment. Taken out, the refund goes.
+        self.not_refundable_yet = set()
+        #: Answer every refund with this ``FakeResponse`` while it is set,
+        #: whatever else is asked in between: a refusal that stays.
+        self.refuse_refunds_with = None
+        #: The query of every history read, for a test to say what was asked.
+        self.history_reads = []
+        #: Added to the history's next link. SumUp's example of one carries
+        #: the cursor and the order only; a test may make it repeat more.
+        self.history_link_extra = ""
         self._counter = 0
 
     # -- setting a scene ---------------------------------------------------
@@ -105,7 +146,10 @@ class FakeSumUp:
         }
         return reader_id
 
-    def pay(self, client_transaction_id=None, *, transaction_id="tx_1", status="SUCCESSFUL"):
+    def pay(
+        self, client_transaction_id=None, *, transaction_id="tx_1", status="SUCCESSFUL",
+        amount="10.00",
+    ):
         """Have the cardholder answer the reader."""
         if client_transaction_id is None:
             client_transaction_id = next(iter(self.transactions))
@@ -113,7 +157,7 @@ class FakeSumUp:
             "id": transaction_id,
             "client_transaction_id": client_transaction_id,
             "status": status,
-            "amount": "10.00",
+            "amount": amount,
         }
         for checkout in self._checkouts_for(client_transaction_id):
             checkout["status"] = (
@@ -122,6 +166,36 @@ class FakeSumUp:
                 else "failed"
             )
         return client_transaction_id
+
+    def give_back(self, transaction_id="tx_1", *, amount=None, status="REFUNDED", stated=True):
+        """
+        Give a payment back from SumUp's side: its dashboard, or its app.
+
+        ``status`` is what SumUp then says of the payment: ``REFUNDED``, or
+        ``CANCELLED`` for one reversed before it settled. ``amount`` is how much
+        went back, the whole of it by default. ``stated=False`` leaves the
+        figure off the history's line, where SumUp documents one, so that only
+        the transaction's own events say how much — twice, as SumUp lists them.
+        """
+        transaction = self.find(transaction_id)
+        refunded = amount if amount is not None else transaction["amount"]
+        transaction["status"] = status
+        if status == "REFUNDED":
+            event = {"type": "REFUND", "status": "SUCCESSFUL", "amount": float(refunded)}
+            detailed = {"event_type": "REFUND", "status": "SUCCESSFUL", "amount": float(refunded)}
+            transaction["events"] = [event]
+            transaction["transaction_events"] = [detailed]
+            if stated:
+                transaction["refunded_amount"] = float(refunded)
+            else:
+                transaction.pop("refunded_amount", None)
+        return transaction
+
+    def find(self, transaction_id):
+        """The transaction with this id, as SumUp keeps it."""
+        return next(
+            t for t in self.transactions.values() if t and t.get("id") == transaction_id
+        )
 
     def walk_away(self, client_transaction_id=None, *, status="cancelled"):
         """
@@ -193,6 +267,8 @@ class FakeSumUp:
             return self._reader_status(state.group(1))
         if method == "GET" and path == f"/v2.1/merchants/{self.merchant}/transactions":
             return self._transaction
+        if method == "GET" and path == f"/v2.1/merchants/{self.merchant}/transactions/history":
+            return self._history
         refund = re.fullmatch(
             rf"/v1\.0/merchants/{re.escape(self.merchant)}/payments/([^/]+)/refunds", path
         )
@@ -282,13 +358,61 @@ class FakeSumUp:
         return FakeResponse(202, {})
 
     def _transaction(self, body, params):
-        key = params.get("client_transaction_id") or params.get("id")
-        transaction = self.transactions.get(key)
+        if "id" in params:
+            transaction = next(
+                (t for t in self.transactions.values() if t and t.get("id") == params["id"]),
+                None,
+            )
+        else:
+            transaction = self.transactions.get(params.get("client_transaction_id"))
         if transaction is None:
             # Either no such transaction, or one the cardholder has not
             # answered yet. SumUp cannot tell those apart either.
             return FakeResponse(404, {"message": "not found"})
-        return FakeResponse(200, transaction)
+        # The full resource carries its refunds as events only: the total
+        # refunded is a field of the history's lines, not of this.
+        return FakeResponse(
+            200, {k: v for k, v in transaction.items() if k != "refunded_amount"}
+        )
+
+    def _history(self, body, params):
+        """
+        The history, filtered as SumUp filters it, one page at a time.
+
+        Newest first when asked, and paged by the id of the last line given,
+        through a ``next`` link that is a bare query string, as SumUp's is.
+        """
+        self.history_reads.append(dict(params))
+        statuses = set(params.get("statuses[]") or ())
+        lines = [
+            {
+                "id": t["id"],
+                "transaction_id": t["id"],
+                "client_transaction_id": t["client_transaction_id"],
+                "type": "PAYMENT",
+                "status": t["status"],
+                "amount": float(t["amount"]),
+                **({"refunded_amount": t["refunded_amount"]} if "refunded_amount" in t else {}),
+            }
+            for t in self.transactions.values()
+            if t and (not statuses or t["status"] in statuses)
+        ]
+        if params.get("order") == "descending":
+            lines.reverse()
+        after = params.get("newest_ref")
+        if after:
+            lines = lines[[line["id"] for line in lines].index(after) + 1:]
+        limit = int(params.get("limit") or 10)
+        page, rest = lines[:limit], lines[limit:]
+        links = (
+            [{
+                "rel": "next",
+                "href": f"limit={limit}&newest_ref={page[-1]['id']}&order=descending"
+                        f"{self.history_link_extra}",
+            }]
+            if rest else []
+        )
+        return FakeResponse(200, {"items": page, "links": links})
 
     def _refund(self, transaction_id):
         def handler(body, params):
@@ -298,7 +422,15 @@ class FakeSumUp:
             ]
             if not known:
                 return FakeResponse(404, {"message": "no such transaction"})
-            self.refunds.append((transaction_id, (body or {}).get("amount")))
+            if self.refuse_refunds_with is not None:
+                return self.refuse_refunds_with
+            if transaction_id in self.not_refundable_yet:
+                return FakeResponse(409, NOT_REFUNDABLE)
+            amount = (body or {}).get("amount")
+            self.refunds.append((transaction_id, amount))
+            # What the payment then says of itself, in the history and on the
+            # transaction alike.
+            self.give_back(transaction_id, amount=amount)
             return FakeResponse(201, {})
 
         return handler

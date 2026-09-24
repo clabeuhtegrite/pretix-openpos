@@ -138,7 +138,8 @@ class OpenPosCardProvider(OpenPosPaymentProvider):
         return False
 
     def execute_refund(self, refund):
-        from .sumup import SumUpAccount, SumUpError
+        from .reconcile import mark_pending
+        from .sumup import ERR_CONFLICT, SumUpAccount, SumUpError
 
         terminal = self._terminal_payment(refund.payment)
         if terminal is None:
@@ -160,6 +161,18 @@ class OpenPosCardProvider(OpenPosPaymentProvider):
             # transaction in full, which is what the card was charged.
             SumUpAccount(self.event.organizer).refund(terminal.transaction_id)
         except SumUpError as exc:
+            if exc.code == ERR_CONFLICT:
+                # "Not refundable in its current state": SumUp's answer to a
+                # refund asked for moments after the payment, which the same
+                # refund made a few minutes later does not get. Left in
+                # transit — pretix counts it as on its way, and offers no
+                # second refund of the payment meanwhile — and asked for again
+                # by the periodic task until SumUp takes it.
+                mark_pending(
+                    refund, exc.reason or str(exc.message),
+                    transaction_id=terminal.transaction_id,
+                )
+                return
             # Kept on the refund, which pretix marks failed next: the order
             # page shows it under the failed line and the Sales page beside it.
             # The dialog's message is gone at the next click, and SumUp's own
@@ -202,21 +215,38 @@ class OpenPosCardProvider(OpenPosPaymentProvider):
     def refund_control_render(self, request, refund) -> str:
         """
         Under a card refund on the order page: the SumUp transaction, and, for
-        one that failed, what SumUp answered.
+        one that failed or is waiting for SumUp, what SumUp answered.
 
         The answer is the part worth the space. A refund SumUp will not make is
         refused in its own dashboard too, without a word of why; this is where
         the organiser reconciling the evening finds out whether it was the key,
-        the transaction, or SumUp being down.
+        the transaction, or SumUp being down. One waiting says so, and when
+        SumUp was last asked: the proof that somebody still is.
         """
+        from django.utils.dateparse import parse_datetime
+
+        from .reconcile import PENDING_SINCE, TRIED_AT
+
         info = refund.info_data or {}
         transaction = info.get("transaction_id")
         if not transaction and refund.payment is not None:
             terminal = self._terminal_payment(refund.payment)
             transaction = terminal.transaction_id if terminal else ""
-        answer = info.get("sumup_error") if refund.state == refund.REFUND_STATE_FAILED else ""
+        waiting = (
+            refund.state == refund.REFUND_STATE_TRANSIT and PENDING_SINCE in info
+        )
+        answer = (
+            info.get("sumup_error")
+            if refund.state == refund.REFUND_STATE_FAILED or waiting
+            else ""
+        )
         if not transaction and not answer:
             return ""
         return get_template("pretix_openpos/refund_control.html").render(
-            {"transaction": transaction, "answer": answer}
+            {
+                "transaction": transaction,
+                "answer": answer,
+                "waiting": waiting,
+                "tried": parse_datetime(info.get(TRIED_AT) or "") if waiting else None,
+            }
         )

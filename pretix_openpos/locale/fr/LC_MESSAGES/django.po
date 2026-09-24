@@ -932,6 +932,67 @@ msgstr ""
 "L’annulation n’a pas pu être écrite au journal de caisse. La page Ventes "
 "d’Open POS liste cette vente tant qu’elle ne l’est pas."
 
+#: logdisplay.py:700
+#, python-brace-format
+msgid ""
+"SumUp did not take the card refund yet, so Open POS asks again on its own "
+"until it does. SumUp answered: {answer}"
+msgstr ""
+"SumUp n’a pas encore accepté le remboursement carte : Open POS le redemande "
+"tout seul jusqu’à ce qu’il passe. Réponse de SumUp : {answer}"
+
+#: logdisplay.py:713
+msgid "SumUp took the card refund on a later try."
+msgstr "SumUp a accepté le remboursement carte à un nouvel essai."
+
+#: logdisplay.py:723
+#, python-brace-format
+msgid ""
+"SumUp still refused the card refund, so Open POS stopped asking. Refund it "
+"from the SumUp dashboard or with “Create a refund”. SumUp answered: {answer}"
+msgstr ""
+"SumUp refusait toujours le remboursement carte, Open POS a donc cessé de le "
+"demander. Remboursez-le depuis le tableau de bord SumUp ou avec « Créer un "
+"remboursement ». Réponse de SumUp : {answer}"
+
+#: logdisplay.py:744
+#, python-brace-format
+msgid "Card payment {transaction} was cancelled in SumUp ({amount})."
+msgstr "Le paiement carte {transaction} a été annulé dans SumUp ({amount})."
+
+#: logdisplay.py:746
+#, python-brace-format
+msgid "Card payment {transaction} was refunded in SumUp ({amount})."
+msgstr "Le paiement carte {transaction} a été remboursé dans SumUp ({amount})."
+
+#: logdisplay.py:748
+msgid ""
+"Open POS recorded it as a refund made outside pretix: process it on this "
+"order to say what becomes of the order."
+msgstr ""
+"Open POS l’a enregistré comme un remboursement fait hors de pretix : traitez-"
+"le sur cette commande pour dire ce que devient la commande."
+
+#: logdisplay.py:751
+msgid "Open POS cancelled the order and recorded the refund."
+msgstr "Open POS a annulé la commande et enregistré le remboursement."
+
+#: logdisplay.py:753
+msgid ""
+"Open POS recorded the refund but could not cancel the order: process the "
+"refund on this order."
+msgstr ""
+"Open POS a enregistré le remboursement mais n’a pas pu annuler la commande : "
+"traitez le remboursement sur cette commande."
+
+#: logdisplay.py:756
+msgid "The refund that was waiting for SumUp is done."
+msgstr "Le remboursement qui attendait SumUp est fait."
+
+#: logdisplay.py:758
+msgid "Open POS recorded the refund."
+msgstr "Open POS a enregistré le remboursement."
+
 #: logdisplay.py:686
 msgid ""
 "The card refund could not be written to the till journal, which still counts "
@@ -1152,6 +1213,14 @@ msgstr ""
 #: pwa.py:100
 msgid "Point of sale for pretix"
 msgstr "Caisse pour pretix"
+
+#: reconcile.py:373
+msgid "The card payment was cancelled in SumUp."
+msgstr "Le paiement carte a été annulé dans SumUp."
+
+#: reconcile.py:375
+msgid "The card payment was refunded in SumUp."
+msgstr "Le paiement carte a été remboursé dans SumUp."
 
 #: signals.py:159 templates/pretix_openpos/sumup.html:4
 #: templates/pretix_openpos/sumup.html:6
@@ -2193,6 +2262,23 @@ msgstr "Transaction SumUp"
 msgid "SumUp's answer"
 msgstr "Réponse de SumUp"
 
+#: templates/pretix_openpos/refund_control.html:12
+msgid "Waiting for SumUp"
+msgstr "En attente de SumUp"
+
+#: templates/pretix_openpos/refund_control.html:14
+msgid ""
+"Open POS asks SumUp again on its own until it takes the refund. Nothing to "
+"do here."
+msgstr ""
+"Open POS redemande tout seul à SumUp jusqu’à ce qu’il accepte le "
+"remboursement. Rien à faire ici."
+
+#: templates/pretix_openpos/refund_control.html:16
+#, python-format
+msgid "Last asked: %(time)s"
+msgstr "Dernière demande : %(time)s"
+
 #: templates/pretix_openpos/sales.html:10
 msgid "The journal does not add up."
 msgstr "Le journal ne se recoupe pas."
@@ -2274,23 +2360,45 @@ msgstr "Débité"
 msgid "Still waiting"
 msgstr "Toujours en attente"
 
+#: templates/pretix_openpos/sales.html:142
+msgid "Card refunds waiting for SumUp"
+msgstr "Remboursements carte en attente de SumUp"
+
+#: templates/pretix_openpos/sales.html:145
+msgid ""
+"SumUp does not take a refund asked for right after the payment. Open POS "
+"asks again on its own until it does: there is nothing to do, and nothing to "
+"hand back to the customer, whose card gets the money then. A refund SumUp "
+"still refuses after three days moves to the list of refused ones."
+msgstr ""
+"SumUp n’accepte pas un remboursement demandé juste après le paiement. Open "
+"POS le redemande tout seul jusqu’à ce qu’il passe : il n’y a rien à faire, "
+"ni rien à rendre au client, dont la carte reçoit l’argent à ce moment-là. Un "
+"remboursement que SumUp refuse encore après trois jours passe dans la liste "
+"des refusés."
+
+#: templates/pretix_openpos/sales.html:158
+msgid "Last asked"
+msgstr "Dernière demande"
+
 #: templates/pretix_openpos/sales.html:144
 msgid "Card refunds SumUp refused"
 msgstr "Remboursements carte refusés par SumUp"
 
-#: templates/pretix_openpos/sales.html:146
+#: templates/pretix_openpos/sales.html:195
 msgid ""
 "These sales were cancelled, and the refund did not go through. The money is "
 "still on the customer's card. Refund it with “Create a refund” on the order, "
 "which sends it back through SumUp, or from the SumUp dashboard using the "
-"reference below. Nothing tries again on its own, and the cancellation itself "
-"stands."
+"reference below: Open POS sees it there on its own, records the refund on "
+"the order and takes it off this list. The cancellation itself stands."
 msgstr ""
 "Ces ventes ont été annulées, et le remboursement n’est pas passé. L’argent "
 "est toujours sur la carte du client. Remboursez-le avec « Créer un "
 "remboursement » sur la commande, qui le renvoie par SumUp, ou depuis le "
-"tableau de bord SumUp avec la référence ci-dessous. Rien ne réessaie de lui-"
-"même, et l’annulation, elle, tient."
+"tableau de bord SumUp avec la référence ci-dessous : Open POS l’y voit tout "
+"seul, enregistre le remboursement sur la commande et le retire de cette "
+"liste. L’annulation, elle, tient."
 
 #: templates/pretix_openpos/sales.html:158
 #: templates/pretix_openpos/sales.html:206

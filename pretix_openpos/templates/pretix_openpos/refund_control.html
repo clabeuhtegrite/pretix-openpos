@@ -8,4 +8,15 @@
         <dt>{% trans "SumUp's answer" %}</dt>
         <dd>{{ answer }}</dd>
     {% endif %}
+    {% if waiting %}
+        <dt>{% trans "Waiting for SumUp" %}</dt>
+        <dd>
+            {% trans "Open POS asks SumUp again on its own until it takes the refund. Nothing to do here." %}
+            {% if tried %}
+                <br>{% blocktrans trimmed with time=tried|date:"SHORT_DATETIME_FORMAT" %}
+                    Last asked: {{ time }}
+                {% endblocktrans %}
+            {% endif %}
+        </dd>
+    {% endif %}
 </dl>
