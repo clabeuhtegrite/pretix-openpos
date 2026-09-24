@@ -347,6 +347,27 @@ describe("a ticket left in front of the lens", () => {
     });
   });
 
+  it("says on the picture that the ticket is being checked, until the verdict", async () => {
+    // Only in the line under the camera, it was easy to miss with the phone
+    // held up to a ticket; on a slow network the door looked as if it had
+    // not read anything, and the ticket was presented again.
+    let release: (value: RedeemResult) => void = () => {};
+    redeem.mockImplementation(() => new Promise((resolve) => {
+      release = resolve;
+    }));
+    const { container } = show();
+
+    await scan("ticket-1");
+
+    const checking = container.querySelector(".scanner-status.is-checking");
+    expect(checking?.textContent).toBe(t("checkin.busy"));
+    await act(async () => {
+      release(admitted());
+    });
+    expect(container.querySelector(".scanner-status.is-checking")).toBeNull();
+    expect(screen.getByText(t("checkin.ok"))).toBeDefined();
+  });
+
   it("ignores an empty read altogether", async () => {
     show();
 

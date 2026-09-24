@@ -260,6 +260,13 @@ describe("the takings", () => {
     expect(screen.queryByRole("button", { name: t("summary.detail") })).toBeNull();
   });
 
+  it("says the takings are on their way while they are", () => {
+    summary.mockReturnValue(new Promise(() => {}));
+    show();
+
+    expect(screen.getByText(t("app.loading"))).toBeDefined();
+  });
+
   it("says so, and offers another go, rather than three dots for ever", async () => {
     // This is the closing-time screen. At half past one a spinner that never
     // resolves is worse than a sentence saying what happened.
@@ -447,6 +454,32 @@ describe("getting back to the till", () => {
     await user.click(screen.getByRole("button", { name: t("settings.refresh") }));
 
     expect(onRefresh).toHaveBeenCalledOnce();
+  });
+
+  it("shows the reload under way, and takes no second tap", () => {
+    // The panel used to close the moment the button was pressed, and the
+    // till then looked exactly as it had, whether the catalogue came or not.
+    show({ refreshing: true });
+
+    const reloading = screen.getByRole("button", { name: t("settings.refreshing") });
+    expect(reloading).toHaveProperty("disabled", true);
+    expect(reloading.getAttribute("aria-busy")).toBe("true");
+  });
+
+  it("says so when the reload did not reach the server", () => {
+    show({ refreshFailed: true });
+
+    expect(screen.getByText(t("settings.refreshFailed"))).toBeDefined();
+    expect(screen.getByRole("button", { name: t("settings.refresh") })).toHaveProperty(
+      "disabled",
+      false,
+    );
+  });
+
+  it("drops that sentence while it tries again", () => {
+    show({ refreshFailed: true, refreshing: true });
+
+    expect(screen.queryByText(t("settings.refreshFailed"))).toBeNull();
   });
 
   it("closes on the button", async () => {

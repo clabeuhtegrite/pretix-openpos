@@ -7,6 +7,7 @@
  *               ?terminal=waiting|paid|failed|stalled|reprice  ?checkout=fail
  *               ?events=one|blocked|mixed  ?load=refused|series  ?redeem=fail
  *               ?takings=empty|nights|series  ?drawer=closed|open|stale|counted|moved
+ *               ?slow=1
  */
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
@@ -167,6 +168,7 @@ const json = (body: unknown, status = 200) =>
   });
 
 let terminalPolls = 0;
+let terminalStopped = false;
 
 // ?events= : ce que l'appareil peut atteindre. Par défaut deux événements
 // ouverts ; « one » le seul où il est ; « blocked » un second sans Open POS ;
@@ -200,7 +202,9 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
 
   if (q.get("offline") === "1") throw new TypeError("offline harness");
 
-  await new Promise((r) => setTimeout(r, 40));
+  // ?slow=1 : le serveur met deux secondes et demie à répondre, le temps de
+  // voir ce que chaque écran montre pendant qu'il attend.
+  await new Promise((r) => setTimeout(r, q.get("slow") ? 2500 : 40));
 
   // Ce que l'appareil dit de lui à pretix quand sa version a changé. pretix
   // répond par la fiche de l'appareil, que la caisse ne lit pas.
@@ -266,6 +270,7 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   const readerAmount = reader === "reprice" ? "12.50" : null;
   if (url.includes("/openpos/terminal/start/")) {
     terminalPolls = 0;
+    terminalStopped = false;
     if (reader === "failed")
       return json({ status: "failed", amount: "0.00", currency: "EUR", failure: "card_declined" });
     return json({ status: "pending", amount: readerAmount, currency: "EUR", failure: "" });
@@ -275,13 +280,23 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     // « stalled » est l'écran d'une caisse qui a perdu le serveur pendant que
     // le lecteur tient encore la carte : on ne répond donc plus du tout.
     if (reader === "stalled" && terminalPolls > 1) throw new TypeError("harness: stalled");
+    if (terminalStopped)
+      return json({ status: "failed", amount: readerAmount, currency: "EUR", failure: "CANCELLED" });
     if (reader === "paid" && terminalPolls > 1)
       return json({ status: "successful", amount: "12.50", currency: "EUR", failure: "" });
     if (reader === "failed")
       return json({ status: "failed", amount: "0.00", currency: "EUR", failure: "card_declined" });
     return json({ status: "pending", amount: readerAmount, currency: "EUR", failure: "" });
   }
-  if (url.includes("/openpos/terminal/cancel/")) return json({ status: "cancelled" });
+  // Comme en vrai : le serveur demande l'arrêt au lecteur puis relit SumUp,
+  // ce qui prend deux à trois secondes, et l'arrêt étant asynchrone chez
+  // SumUp, sa réponse dit encore « en cours ». C'est la relève suivante qui
+  // trouve le paiement annulé.
+  if (url.includes("/openpos/terminal/cancel/")) {
+    await new Promise((r) => setTimeout(r, 2500));
+    terminalStopped = true;
+    return json({ status: "pending", amount: readerAmount, currency: "EUR", failure: "" });
+  }
   if (url.includes("/openpos/checkout/")) {
     const sale = bodyOf(init);
     if (sale.payment_type === "cash" && drawer && (!drawer.session || drawer.session.stale))

@@ -23,7 +23,7 @@ Paramètres d'URL, cumulables :
 |---|---|
 | `role=pos` / `role=door` | le rôle attribué à l'appareil |
 | `card=terminal` | un lecteur SumUp est attribué à cette caisse |
-| `terminal=paid` / `failed` / `stalled` / `reprice` | ce que fait le lecteur (défaut : il attend la carte) |
+| `terminal=paid` / `failed` / `stalled` / `reprice` | ce que fait le lecteur (défaut : il attend la carte) ; *Annuler le paiement* met deux secondes et demie à répondre, comme le vrai serveur qui arrête le lecteur puis relit SumUp |
 | `theme=light` / `theme=dark` | force la palette |
 | `offline=1` | le serveur ne répond plus |
 | `queue=3` | trois ventes en attente dans la file |
@@ -37,6 +37,7 @@ Paramètres d'URL, cumulables :
 | `load=refused` / `series` | l’événement de l’appareil ne s’ouvre pas : Open POS désactivé dessus, ou une série sans date ce soir |
 | `takings=empty` / `nights` / `series` | la recette de l’événement (Réglages → Détail de la recette) : rien de vendu ; un festival sur deux soirées, avec une vente du back-office ; une date d’une série (défaut : une soirée complète) |
 | `drawer=closed` / `open` / `stale` / `counted` / `moved` | une caisse espèces est attribuée à l’appareil : fermée, ouverte avec une entrée et une sortie, ouverte depuis un autre jour, comptée et prête à fermer, comptée puis une vente passée ; l’ouvrir, la compter et la fermer dans l’app la font vraiment changer d’état |
+| `slow=1` | le serveur met deux secondes et demie à répondre : ce que montre chaque écran pendant qu’il attend (chargement, réessai, catalogue rechargé, scan à la porte) |
 
 `browser=1` est nécessaire : sans lui l'app affiche l'écran d'installation.
 

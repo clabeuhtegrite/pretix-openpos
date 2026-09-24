@@ -189,6 +189,27 @@ describe("the list", () => {
     show();
 
     expect(await screen.findByText(t("error.offline"))).toBeDefined();
+    // And stops saying it is loading, which it no longer is.
+    expect(screen.queryByText(t("history.loading"))).toBeNull();
+  });
+
+  it("offers another go, and shows it under way", async () => {
+    // A list that could not be read used to say so, and "Chargement…" under
+    // it for as long as the panel stayed open, with no way to ask again.
+    history.mockRejectedValueOnce(new ApiError(0, "network"));
+    const { user } = show();
+    await screen.findByText(t("error.offline"));
+    let answer: (value: unknown) => void = () => {};
+    history.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+
+    await user.click(screen.getByRole("button", { name: t("history.retry") }));
+
+    const retrying = screen.getByRole("button", { name: t("history.loading") });
+    expect(retrying).toHaveProperty("disabled", true);
+    expect(retrying.getAttribute("aria-busy")).toBe("true");
+    answer({ device: "TILL1", results: [saleLine()], truncated: false });
+    expect(await screen.findByText(/POS01/)).toBeDefined();
+    expect(screen.queryByText(t("error.offline"))).toBeNull();
   });
 });
 
@@ -322,10 +343,9 @@ describe("cancelling", () => {
 
     await user.click(screen.getByRole("button", { name: t("history.cancel") }));
 
-    expect(screen.getByRole("button", { name: t("history.cancelling") })).toHaveProperty(
-      "disabled",
-      true,
-    );
+    const cancelling = screen.getByRole("button", { name: t("history.cancelling") });
+    expect(cancelling).toHaveProperty("disabled", true);
+    expect(cancelling.getAttribute("aria-busy")).toBe("true");
     release(cancelled);
   });
 

@@ -262,6 +262,7 @@ describe("while it is being tried", () => {
 
     const button = await screen.findByRole("button", { name: t("pairing.pairing") });
     expect(button).toHaveProperty("disabled", true);
+    expect(button.getAttribute("aria-busy")).toBe("true");
     release(device);
   });
 });

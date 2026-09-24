@@ -164,7 +164,12 @@ export default function PairingScreen({ onPaired }: Props) {
           />
           <div className="help">{t("pairing.tokenHelp")}</div>
         </div>
-        <button className="btn" type="submit" disabled={busy || !input.trim()}>
+        <button
+          className="btn"
+          type="submit"
+          disabled={busy || !input.trim()}
+          aria-busy={busy || undefined}
+        >
           {busy ? t("pairing.pairing") : t("pairing.submit")}
         </button>
       </form>

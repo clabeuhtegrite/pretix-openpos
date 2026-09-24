@@ -1,6 +1,6 @@
 # Fonctionnement de pretix-openpos
 
-Documentation de fonctionnement du plugin, version 0.22.1. Elle couvre trois
+Documentation de fonctionnement du plugin, version 0.23.0. Elle couvre trois
 choses, dans cet ordre : ce que le plugin ajoute à pretix, comment le mettre en
 service, et ce qui se passe exactement quand un bénévole encaisse.
 
@@ -394,7 +394,7 @@ En Docker/Kubernetes, [`deploy/Dockerfile`](../deploy/Dockerfile) intègre le pl
 
 ```bash
 cd frontend && npm run build && cd ..
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.22.1 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.23.0 .
 ```
 
 Deux pièges :
@@ -568,6 +568,11 @@ saisi par réflexe n'est pas quelque chose qu'on met à un geste de distance.
    cache n'est pas utilisé non plus dans ce cas : un device révoqué qui
    vendrait sur un vieux catalogue serait refusé à la première vente, devant
    le client.
+   Tant que la réponse n'est pas là, l'écran le dit (« Chargement… », avec
+   une roue). Sur l'écran d'erreur, *Réessayer* tourne (« Nouvel essai… ») et
+   l'erreur reste affichée jusqu'à la réponse suivante, au lieu de céder la
+   place à un écran vide ; une réponse arrivée après un changement
+   d'événement est ignorée, puisqu'elle décrit celui qu'on vient de quitter.
    Au même moment, si l'app n'est plus celle que pretix a enregistrée pour ce
    device (une nouvelle version, ou une mise à jour du système), elle le lui
    dit par `POST /api/v1/device/update`, l'endpoint natif que pretixSCAN
@@ -1378,6 +1383,15 @@ lecteur, un pour revenir. Et ce que répond l'annulation, c'est ce qui s'est
 réellement passé — une carte présentée dans la même seconde est un paiement, et
 la caisse est prévenue plutôt que de laisser partir un client qui a payé.
 
+Entre l'appui et la réponse, il se passe deux à trois secondes : le serveur
+demande l'arrêt au lecteur puis relit SumUp, et comme SumUp arrête le lecteur
+sans attendre, cette réponse dit souvent encore « en cours » ; c'est la relève
+suivante qui trouve le paiement annulé. La caisse affiche donc « Annulation du
+paiement sur le lecteur… » dès l'appui, avec un bouton *Annulation…* qu'on ne
+peut pas presser une seconde fois, jusqu'à ce que le paiement soit clos —
+annulé, ou payé si la carte est passée entre-temps. Si rien n'est venu au bout
+de dix secondes, *Annuler le paiement* revient, pour redemander l'arrêt.
+
 ### Un paiement que personne ne paie
 
 L'API Transactions n'a rien tant qu'aucune carte n'a été présentée. Seule, elle
@@ -1612,14 +1626,46 @@ Sur un iPhone antérieur à iOS 17, le son se tait quand le téléphone est en
 silencieux ; il n'y a pas de contournement propre, et le seul remède est de
 sortir le téléphone du silencieux.
 
+### Ce qui attend le serveur
+
+Un appui que le serveur doit confirmer se voit tout de suite, et se voit tant
+que la réponse n'est pas là. Un bouton qui attend dit ce qu'il fait —
+*Annulation…*, *Rechargement…*, *Nouvel essai…*, *Enregistrement…* — avec une
+petite roue qui tourne devant, et ne se laisse pas presser une seconde fois.
+Une liste qui se charge dit « Chargement… » avec la même roue ; une liste qui
+n'a pas pu l'être dit pourquoi et propose *Réessayer*, au lieu d'un
+« Chargement… » qui ne finissait jamais.
+
+**Pourquoi c'est là :** jusqu'à la 0.22.1, *Annuler le paiement* sur un
+paiement carte ne changeait rien à l'écran pendant les deux à trois secondes où
+le serveur arrête le lecteur et relit SumUp (§5quinquies). Une caisse qui ne
+bouge pas après un appui passe pour figée, et une caisse figée se fait presser
+de nouveau. Les attentes du même genre ont été reprises en même temps :
+*Recharger le catalogue* fermait les réglages avant d'avoir la réponse et ne
+disait rien d'un échec ; *Réessayer* quittait l'écran d'erreur pour trois points
+de suspension ; la barre de mise à jour ne changeait pas pendant que la
+nouvelle version se charge ; à la porte, un billet envoyé à pretix sur un
+réseau lent ne se signalait que par une ligne de petit texte sous l'image.
+
+À la porte, « Vérification… » s'affiche donc sur l'image, là où l'on regarde,
+mais un quart de seconde après l'envoi seulement : sur un bon réseau pretix
+répond avant, et une case qui clignoterait avant chaque verdict serait du
+bruit.
+
+Les roues cessent de tourner quand l'appareil demande moins d'animations
+(*Réduire les animations* sur iOS) ; les mots restent. Dans le harness,
+`?slow=1` fait répondre le serveur en deux secondes et demie, le temps de
+regarder chacun de ces écrans.
+
 ### Le contraste
 
 Les deux palettes visent le niveau AA de WCAG pour tout texte à l'écran, et ce
 n'est pas décoratif : la personne qui lit est en train de rendre la monnaie. Un
-script du harness (`node harness/audit.mjs`) parcourt dix écrans dans les deux
-palettes, compose les fonds translucides et échoue s'il trouve un texte
-au-dessous du seuil ou une cible tactile sous 44 px. Il tourne contre le serveur
-de développement, pas en CI — §9.
+script du harness (`node harness/audit.mjs`) parcourt dix-sept écrans dans les
+deux palettes, dont ceux qu'on ne voit que pendant que le serveur répond,
+compose les fonds translucides et échoue s'il trouve un texte au-dessous du
+seuil ou une cible tactile sous 44 px. Il tourne contre le serveur de
+développement, pas en CI — §9.
 
 Deux conséquences visibles : le bleu des boutons pleins est plus sombre que
 celui qui sert d'encre, et **une vente annulée est barrée dans le journal**.
@@ -2073,7 +2119,10 @@ caisse ne dépend de SumUp que pour la carte.
   Elle reste entière sur un appareil rattaché à une caisse espèces : c'est ce
   que l'événement a vendu, pas ce que le tiroir devrait contenir, qui ne
   s'affiche qu'à côté d'un comptage (§5septies) ;
-- *Recharger* et *Dépairer*. Dépairer révoque aussi l'appareil dans pretix,
+- *Recharger le catalogue* et *Dépairer*. Le rechargement tourne jusqu'à la
+  réponse et ne ferme les réglages qu'une fois le catalogue revenu ; s'il n'a
+  pas pu l'être, les réglages restent ouverts et le disent, et la caisse garde
+  celui qu'elle avait. Dépairer révoque aussi l'appareil dans pretix,
   comme pretix le demande à toute app qui retire un appareil (`/device/revoke`) :
   il passe *révoqué* dans la liste des appareils de l'organisateur au lieu d'y
   rester actif avec un token valable que plus personne ne détient. Sans réseau

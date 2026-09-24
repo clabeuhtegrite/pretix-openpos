@@ -12,6 +12,7 @@
 export const MESSAGES = {
   en: {
     "app.title": "Open POS",
+    "app.loading": "Loading…",
     "pairing.title": "Pair this till",
     "pairing.intro":
       "Create a device in your pretix organizer settings with the “Open POS” security profile, then paste its pairing code below.",
@@ -73,6 +74,8 @@ export const MESSAGES = {
       "The reader is taking a payment on the other till. Wait for it to finish, or take this sale in cash.",
     "payment.readerRetry": "Try again",
     "payment.readerStop": "Cancel the payment",
+    "payment.readerStopping": "Taking the payment off the reader…",
+    "payment.readerStoppingShort": "Cancelling…",
     "payment.readerCredit":
       "There is a credit on this basket, and a card reader cannot settle one. Take this payment in cash.",
     "payment.readerNoRefund":
@@ -101,6 +104,9 @@ export const MESSAGES = {
     "settings.unpairConfirm": "Unpair this till? You will need a new pairing code.",
     "settings.close": "Close",
     "settings.refresh": "Reload catalogue",
+    "settings.refreshing": "Reloading…",
+    "settings.refreshFailed":
+      "The catalogue could not be reloaded. The till carries on with the one it had.",
     "settings.theme": "Appearance",
     "settings.themeSystem": "System",
     "settings.themeLight": "Light",
@@ -113,10 +119,12 @@ export const MESSAGES = {
     "settings.soundHelp":
       "A short click on each product, and two low notes when a ticket is refused at the door. iPhones cannot vibrate in a browser, so sound is the only way to hear a refusal without looking up. It plays even with the ringer switch off.",
     "update.reload": "New version — reload",
+    "update.reloading": "Loading the new version…",
     "error.offline": "No connection to the server.",
     "error.refused":
       "The server refused this till: {detail} Try again; if the till has been revoked, unpair it and pair it again with a new code.",
     "error.retry": "Retry",
+    "error.retrying": "Trying again…",
     "error.title": "Something went wrong",
     "error.otherEvent": "or switch to another event",
     "testmode": "TEST MODE",
@@ -262,6 +270,7 @@ export const MESSAGES = {
     "history.open": "History",
     "history.title": "On this till",
     "history.loading": "Loading…",
+    "history.retry": "Try again",
     "history.empty": "Nothing recorded on this till.",
     "history.badgeCancelled": "cancelled",
     "history.badgeTestmode": "test",
@@ -406,6 +415,7 @@ export const MESSAGES = {
   },
   fr: {
     "app.title": "Open POS",
+    "app.loading": "Chargement…",
     "pairing.title": "Appairer cette caisse",
     "pairing.intro":
       "Créez un appareil dans les réglages de votre organisateur pretix avec le profil de sécurité « Open POS », puis collez son code d’appairage ci-dessous.",
@@ -467,6 +477,8 @@ export const MESSAGES = {
       "Le lecteur encaisse sur l’autre caisse. Attendez la fin, ou prenez cette vente en espèces.",
     "payment.readerRetry": "Réessayer",
     "payment.readerStop": "Annuler le paiement",
+    "payment.readerStopping": "Annulation du paiement sur le lecteur…",
+    "payment.readerStoppingShort": "Annulation…",
     "payment.readerCredit":
       "Un avoir est en cours sur ce panier, et le lecteur ne sait pas le déduire. Encaissez en espèces.",
     "payment.readerNoRefund":
@@ -496,6 +508,9 @@ export const MESSAGES = {
     "settings.unpairConfirm": "Désappairer cette caisse ? Il faudra un nouveau code d’appairage.",
     "settings.close": "Fermer",
     "settings.refresh": "Recharger le catalogue",
+    "settings.refreshing": "Rechargement…",
+    "settings.refreshFailed":
+      "Le catalogue n’a pas pu être rechargé. La caisse garde celui qu’elle avait.",
     "settings.theme": "Apparence",
     "settings.themeSystem": "Système",
     "settings.themeLight": "Clair",
@@ -508,10 +523,12 @@ export const MESSAGES = {
     "settings.soundHelp":
       "Un clic court à chaque produit, et deux notes graves quand un billet est refusé à la porte. Les iPhone ne peuvent pas vibrer dans un navigateur : le son est le seul moyen d’entendre un refus sans lever les yeux. Il sonne même si le téléphone est en silencieux.",
     "update.reload": "Nouvelle version — recharger",
+    "update.reloading": "Chargement de la nouvelle version…",
     "error.offline": "Pas de connexion au serveur.",
     "error.refused":
       "Le serveur a refusé cette caisse : {detail} Réessayez ; si la caisse a été révoquée, dépairez-la et appairez-la avec un nouveau code.",
     "error.retry": "Réessayer",
+    "error.retrying": "Nouvel essai…",
     "error.title": "Une erreur est survenue",
     "error.otherEvent": "ou changer d’événement",
     "testmode": "MODE TEST",
@@ -657,6 +674,7 @@ export const MESSAGES = {
     "history.open": "Historique",
     "history.title": "Sur cette caisse",
     "history.loading": "Chargement…",
+    "history.retry": "Réessayer",
     "history.empty": "Rien d’enregistré sur cette caisse.",
     "history.badgeCancelled": "annulée",
     "history.badgeTestmode": "test",

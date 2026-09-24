@@ -433,9 +433,11 @@ describe("a sale being corrected", () => {
 
 describe("while the server is being asked", () => {
   it("says what it is doing", () => {
-    show({ busy: true });
+    const { confirm } = show({ busy: true });
 
     expect(screen.getByText(t("payment.working"))).toBeDefined();
+    // Which is what turns the wheel on it.
+    expect(confirm().getAttribute("aria-busy")).toBe("true");
   });
 
   it("takes no second press of confirm", () => {
@@ -516,7 +518,10 @@ describe("when the server refuses", () => {
 
 describe("on a till with a card reader of its own", () => {
   /** What the hook reports while the customer has the reader in front of them. */
-  const waiting = { phase: "waiting" as const, amount: "12.34", currency: "EUR", message: null, stalled: false };
+  const waiting = {
+    phase: "waiting" as const, amount: "12.34", currency: "EUR", message: null, stalled: false,
+    cancelling: false,
+  };
 
   it("puts the basket on the reader the moment card is chosen", async () => {
     // No confirmation step in between: the customer is standing there with a
@@ -540,6 +545,7 @@ describe("on a till with a card reader of its own", () => {
 
   const paid = {
     phase: "paid" as const, amount: "12.34", currency: "EUR", message: null, stalled: false,
+    cancelling: false,
   };
 
   it("will not let a charged card be booked as cash", async () => {
@@ -631,7 +637,7 @@ describe("on a till with a card reader of its own", () => {
   it("says why a card was refused, and offers another go", async () => {
     const failed = {
       phase: "failed" as const, amount: null, currency: null,
-      message: t("payment.readerRefused"), stalled: false,
+      message: t("payment.readerRefused"), stalled: false, cancelling: false,
     };
     const { user, onTerminalStart } = show({ cardMode: "terminal", terminal: failed }, null);
 
@@ -656,6 +662,54 @@ describe("on a till with a card reader of its own", () => {
     // Walking away in the same tap is how a card gets charged for a sale
     // nobody recorded.
     expect(onCancel).not.toHaveBeenCalled();
+  });
+
+  it("says at once that the stop is on its way, and takes no second tap", async () => {
+    // The server takes two or three seconds to ask SumUp, and SumUp a moment
+    // more to obey. The panel used to stay exactly as it was all that time —
+    // "ask the customer for their card", under a button still offering to
+    // cancel — so nobody could tell the tap had registered.
+    const { user, onTerminalStop } = show(
+      { cardMode: "terminal", terminal: { ...waiting, cancelling: true } },
+      null,
+    );
+
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+
+    const stopping = screen.getByRole("button", { name: t("payment.readerStoppingShort") });
+    expect(stopping).toHaveProperty("disabled", true);
+    expect(stopping.getAttribute("aria-busy")).toBe("true");
+    expect(screen.getByText(t("payment.readerStopping"))).toBeDefined();
+    expect(screen.queryByText(t("payment.readerPrompt"))).toBeNull();
+    expect(screen.queryByRole("button", { name: t("payment.readerStop") })).toBeNull();
+    expect(onTerminalStop).not.toHaveBeenCalled();
+  });
+
+  it("still says the payment carries on when the server is lost mid-stop", async () => {
+    const { user } = show(
+      { cardMode: "terminal", terminal: { ...waiting, cancelling: true, stalled: true } },
+      null,
+    );
+
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+
+    expect(screen.getByText(t("payment.readerStopping"))).toBeDefined();
+    expect(screen.getByText(t("payment.readerStalled"))).toBeDefined();
+  });
+
+  it("says the stop is on its way even before the reader had the basket", async () => {
+    const { user } = show(
+      {
+        cardMode: "terminal",
+        terminal: { ...waiting, phase: "starting", amount: null, currency: null, cancelling: true },
+      },
+      null,
+    );
+
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+
+    expect(screen.getByText(t("payment.readerStopping"))).toBeDefined();
+    expect(screen.queryByText(t("payment.readerStarting"))).toBeNull();
   });
 
   it("locks the method toggle while the reader has the basket", async () => {
@@ -701,6 +755,7 @@ describe("on a till with a card reader of its own", () => {
     // otherwise assume nothing was charged.
     const paid = {
       phase: "paid" as const, amount: "12.34", currency: "EUR", message: null, stalled: false,
+      cancelling: false,
     };
     const { user } = show(
       { cardMode: "terminal", terminal: paid, error: "Something went wrong." },

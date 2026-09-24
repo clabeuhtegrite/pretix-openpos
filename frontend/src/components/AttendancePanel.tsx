@@ -227,7 +227,11 @@ export default function AttendancePanel({ data, busy, error, onRefresh, onClose 
         {error && <div className="error-banner">{error}</div>}
 
         {!data ? (
-          <p style={{ color: "var(--text-dim)" }}>{busy ? t("attendance.loading") : "—"}</p>
+          busy ? (
+            <p className="loading">{t("attendance.loading")}</p>
+          ) : (
+            <p style={{ color: "var(--text-dim)" }}>—</p>
+          )
         ) : (
           <>
             <div className="attendance-headline">
@@ -302,7 +306,12 @@ export default function AttendancePanel({ data, busy, error, onRefresh, onClose 
         )}
 
         <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 20 }}>
-          <button className="btn ghost" onClick={onRefresh} disabled={busy}>
+          <button
+            className="btn ghost"
+            onClick={onRefresh}
+            disabled={busy}
+            aria-busy={busy || undefined}
+          >
             {busy ? t("attendance.loading") : t("attendance.refresh")}
           </button>
           <button className="btn primary" onClick={onClose}>

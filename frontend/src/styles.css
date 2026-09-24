@@ -694,6 +694,64 @@ button {
   color: var(--danger-text);
 }
 
+/*
+ * Waiting on the server: a button whose tap is being answered, and a screen
+ * or a list that is still being fetched.
+ *
+ * The words already say what is happening ("Annulation…"). The wheel says it
+ * is still happening: a label that changed once and then sat still for three
+ * seconds read as a till that had frozen, and a frozen till gets pressed
+ * again. A busy button is faded less than a disabled one, because it is not
+ * unavailable, it is doing what was asked of it.
+ */
+.btn[aria-busy="true"]::before,
+.update-bar[aria-busy="true"]::before,
+.loading::before,
+.scanner-status.is-checking::before {
+  content: "";
+  flex: none;
+  width: 1em;
+  height: 1em;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  animation: busy-turn 0.8s linear infinite;
+}
+
+.btn[aria-busy="true"]:disabled,
+.update-bar[aria-busy="true"]:disabled {
+  opacity: 0.75;
+}
+
+/* Text rather than a flex row: the wheel sits on the line, before the words. */
+.loading {
+  color: var(--text-dim);
+}
+
+.loading::before,
+.scanner-status.is-checking::before {
+  display: inline-block;
+  margin-right: 0.5em;
+  vertical-align: -0.15em;
+}
+
+@keyframes busy-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* The wheel stays, it simply stops turning — as the reader's bar does. */
+@media (prefers-reduced-motion: reduce) {
+  .btn[aria-busy="true"]::before,
+  .update-bar[aria-busy="true"]::before,
+  .loading::before,
+  .scanner-status.is-checking::before {
+    animation: none;
+  }
+}
+
 /* ---------- overlays ---------- */
 
 .overlay {
@@ -981,6 +1039,16 @@ button {
   animation: reader-wait 1.6s linear infinite;
 }
 
+/* Stop has been pressed and the reader has not answered yet. Still a wait on
+   somebody else, so the bar still moves; in the plain ink rather than the
+   blue, because it is winding down rather than asking for a card. */
+.pay-reader.is-stopping::before {
+  background:
+    linear-gradient(90deg, transparent 0 25%, var(--text-dim) 25% 75%, transparent 75% 100%)
+    0 0 / 250% 100% no-repeat,
+    var(--border);
+}
+
 @keyframes reader-wait {
   from {
     background-position: -150% 0;
@@ -996,6 +1064,10 @@ button {
   .pay-reader.is-waiting::before {
     animation: none;
     background: var(--accent-text);
+  }
+
+  .pay-reader.is-stopping::before {
+    background: var(--text-dim);
   }
 }
 
@@ -1292,13 +1364,50 @@ table.takings thead th {
   padding: 16px 22px;
   border-radius: var(--radius);
   background: rgba(0, 0, 0, 0.75);
+  /* White in both palettes: it sits on the camera picture, which is not
+     themed, and the light palette's dark text vanished into its black box. */
+  color: #fff;
   text-align: center;
   max-width: 80%;
 }
 
+/* A deeper red than the verdict's: this is 16px text, not a headline, and
+   white on the brighter red fell short of 4.5:1. */
 .scanner-status.error {
-  background: rgba(239, 68, 68, 0.92);
+  background: rgba(185, 28, 28, 0.95);
   font-weight: 700;
+}
+
+/* A ticket read and sent to pretix, while pretix answers. Held back a quarter
+   of a second: an answer on a good network comes sooner, and a box flashing
+   up before every verdict would be noise. On a slow one it is the only sign
+   that the ticket was read. */
+.scanner-status.is-checking {
+  font-weight: 700;
+  animation: checking-in 0.2s ease-out 0.25s both;
+}
+
+@keyframes checking-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* With no camera there is already a red box in the middle of the stage, and a
+   ticket found by name is checked over it: the box is covered for that moment
+   rather than printed through. */
+.scanner-status.error ~ .scanner-status.is-checking {
+  inset: 0;
+  transform: none;
+  max-width: none;
+  border-radius: 0;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .scanner-status-hint {

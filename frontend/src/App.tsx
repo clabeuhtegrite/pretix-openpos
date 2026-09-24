@@ -341,16 +341,42 @@ export default function App() {
   useBackClose(drawerOpen, () => setDrawerOpen(false));
   useBackClose(sale !== null, () => setSale(null));
 
-  const load = useCallback(async (p: Pairing) => {
-    setLoadError(null);
+  /**
+   * The till is asking the server for its event, and has no answer yet.
+   *
+   * What the error page's retry and the settings panel's reload show while
+   * they wait: both used to look exactly as they had before the tap until the
+   * answer came, so there was no telling a slow server from a tap that had
+   * not registered.
+   */
+  const [loading, setLoading] = useState(false);
+  // Bumped on every call, so an answer for an event the till has since left
+  // cannot land on the one it switched to.
+  const loadRun = useRef(0);
+
+  /**
+   * Open the till on its event: from the server, or from what this device
+   * kept when the server does not answer.
+   *
+   * True when the server answered. The page on screen stays until then — an
+   * error included, which is only replaced once there is something to replace
+   * it with.
+   */
+  const load = useCallback(async (p: Pairing): Promise<boolean> => {
+    const run = ++loadRun.current;
+    setLoading(true);
     try {
       const [nextConfig, nextCatalog] = await Promise.all([api.config(p), api.catalog(p)]);
+      if (run !== loadRun.current) return false;
+      setLoadError(null);
       setConfig(nextConfig);
       setCatalog(nextCatalog);
       // Kept so the till can be started again during an outage.
       saveCached("config", p.event, nextConfig);
       saveCached("catalog", p.event, nextCatalog);
+      return true;
     } catch (err) {
+      if (run !== loadRun.current) return false;
       // A 401 or 403 is the server refusing this till: revoked, deleted, or
       // Open POS switched off on its event. It is said on screen with the way
       // out next to it — retry, or unpair — and never acted on by clearing the
@@ -363,7 +389,7 @@ export default function App() {
       // only be refused again at the first sale, in front of a customer.
       if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
         setLoadError({ text: t("error.refused", { detail: err.message }), refused: true });
-        return;
+        return false;
       }
 
       // The event is a series and no date is on tonight. Said rather than
@@ -374,7 +400,7 @@ export default function App() {
       // that somebody can fix in a minute from the back office.
       if (errorCode(err) === "series_closed") {
         setLoadError({ text: describeError(err), refused: false });
-        return;
+        return false;
       }
 
       // Anything else — no network, a gateway answering for a server that is
@@ -384,13 +410,38 @@ export default function App() {
       const cachedConfig = loadCached<PosConfig>("config", p.event);
       const cachedCatalog = loadCached<Catalog>("catalog", p.event);
       if (cachedConfig && cachedCatalog) {
+        setLoadError(null);
         setConfig(cachedConfig);
         setCatalog(cachedCatalog);
-        return;
+        return false;
       }
       setLoadError({ text: describeError(err), refused: false });
+      return false;
+    } finally {
+      if (run === loadRun.current) setLoading(false);
     }
   }, []);
+
+  /**
+   * Why "Recharger le catalogue" did not, when it did not.
+   *
+   * The panel used to close the moment it was pressed, and a reload that
+   * failed looked exactly like one that worked. It now stays open until the
+   * answer is in, closes on success, and says so on anything else.
+   */
+  const [reloadFailed, setReloadFailed] = useState(false);
+
+  async function reloadCatalog(p: Pairing) {
+    setReloadFailed(false);
+    if (await load(p)) setSettingsOpen(false);
+    // A refusal has put the error page up instead, and this panel with the
+    // rest of the till is gone from under it; anything else leaves the till
+    // selling on the catalogue it had.
+    else setReloadFailed(true);
+  }
+
+  /** The update bar has been pressed, and the new build is being fetched. */
+  const [updating, setUpdating] = useState(false);
 
   useEffect(() => {
     if (pairing) void load(pairing);
@@ -497,6 +548,9 @@ export default function App() {
     setCart([]);
     setCredit(null);
     setDoorListId(null);
+    // The event being left may be the one that would not open: what is on
+    // screen next is the new one loading, not the old one's error.
+    setLoadError(null);
     setConfig(null);
     setCatalog(null);
     setPairing(next);
@@ -510,6 +564,7 @@ export default function App() {
     clearPairing();
     clearBasket();
     setPairing(null);
+    setLoadError(null);
     setConfig(null);
     setCatalog(null);
     setCart([]);
@@ -848,8 +903,13 @@ export default function App() {
         <div className="panel">
           <h2>{t("error.title")}</h2>
           <div className="error-banner">{loadError.text}</div>
-          <button className="btn primary" onClick={() => void load(pairing)}>
-            {t("error.retry")}
+          <button
+            className="btn primary"
+            onClick={() => void load(pairing)}
+            disabled={loading}
+            aria-busy={loading || undefined}
+          >
+            {loading ? t("error.retrying") : t("error.retry")}
           </button>
           {/* An event that will not open is not the device's only one, and
               the others are one tap away rather than a new pairing. */}
@@ -878,7 +938,7 @@ export default function App() {
   if (!config || !catalog) {
     return (
       <div className="centered">
-        <div style={{ color: "var(--text-dim)" }}>…</div>
+        <div className="loading">{t("app.loading")}</div>
       </div>
     );
   }
@@ -957,7 +1017,14 @@ export default function App() {
             {drawerIcon(config.event.currency)}
           </button>
         )}
-        <button className="icon-button" onClick={() => setSettingsOpen(true)} aria-label="settings">
+        <button
+          className="icon-button"
+          onClick={() => {
+            setReloadFailed(false);
+            setSettingsOpen(true);
+          }}
+          aria-label="settings"
+        >
           ⚙
         </button>
       </div>
@@ -976,9 +1043,15 @@ export default function App() {
       {updateAvailable && !servingCustomer && (
         <button
           className="update-bar"
-          onClick={() => void reloadForUpdate(config.version as string)}
+          onClick={() => {
+            setUpdating(true);
+            void reloadForUpdate(config.version as string);
+          }}
+          // Nothing to set back: the page is on its way out.
+          disabled={updating}
+          aria-busy={updating || undefined}
         >
-          {t("update.reload")}
+          {updating ? t("update.reloading") : t("update.reload")}
         </button>
       )}
 
@@ -1127,10 +1200,9 @@ export default function App() {
             // next sale.
             if (on) play("ok");
           }}
-          onRefresh={() => {
-            void load(pairing);
-            setSettingsOpen(false);
-          }}
+          onRefresh={() => void reloadCatalog(pairing)}
+          refreshing={loading}
+          refreshFailed={reloadFailed}
           onUnpair={unpair}
           onClose={() => setSettingsOpen(false)}
           onEventChange={switchEvent}

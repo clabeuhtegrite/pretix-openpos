@@ -17,7 +17,9 @@ vi.mock("./api", async (importOriginal) => {
 import { ApiError } from "./api";
 import { t } from "./i18n";
 import type { Pairing } from "./types";
-import { failureMessage, TERMINAL_POLL_MS, useTerminal } from "./useTerminal";
+import {
+  failureMessage, TERMINAL_CANCEL_WAIT_MS, TERMINAL_POLL_MS, useTerminal,
+} from "./useTerminal";
 
 const pairing: Pairing = {
   token: "tok", organizer: "org", event: "ev", serial: "TILL1", deviceName: "Caisse bar",
@@ -25,6 +27,17 @@ const pairing: Pairing = {
 
 function payment(status: "pending" | "successful" | "failed", failure = "") {
   return { status, amount: "12.34", currency: "EUR", failure };
+}
+
+/** A request whose answer the test hands over when it chooses to. */
+function deferred<T>() {
+  let resolve: (value: T) => void = () => {};
+  let reject: (reason: unknown) => void = () => {};
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes;
+    reject = no;
+  });
+  return { promise, resolve, reject };
 }
 
 /** Let the interval fire once, and the promise it starts resolve. */
@@ -236,6 +249,8 @@ describe("taking the basket back off the reader", () => {
 
     expect(result.current.state?.phase).toBe("waiting");
     expect(result.current.state?.stalled).toBe(true);
+    // The stop was never asked, so the way to ask it goes back on screen.
+    expect(result.current.state?.cancelling).toBe(false);
   });
 
   it("stops on a refusal the server understood", async () => {
@@ -267,6 +282,183 @@ describe("taking the basket back off the reader", () => {
 
     expect(apiMock.terminalCancel).not.toHaveBeenCalled();
     expect(result.current.state).toBeNull();
+  });
+});
+
+describe("while a stop is on its way", () => {
+  // SumUp stops a reader asynchronously: the server asks, reads the payment
+  // back, and answers two or three seconds later that it is still pending.
+  // The poll after that finds it cancelled. None of that may look like a tap
+  // that did not register.
+  async function waiting() {
+    apiMock.terminalStart.mockResolvedValue(payment("pending"));
+    const hook = renderHook(() => useTerminal(pairing, vi.fn()));
+    await act(async () => {
+      await hook.result.current.start("key-1", []);
+    });
+    return hook;
+  }
+
+  it("says so the moment it is pressed, before the server has answered", async () => {
+    const { result } = await waiting();
+    const answer = deferred<ReturnType<typeof payment>>();
+    apiMock.terminalCancel.mockReturnValue(answer.promise);
+
+    act(() => {
+      void result.current.cancel();
+    });
+
+    expect(result.current.state?.cancelling).toBe(true);
+    expect(result.current.state?.phase).toBe("waiting");
+    await act(async () => answer.resolve(payment("failed", "CANCELLED")));
+    expect(result.current.state?.phase).toBe("failed");
+    expect(result.current.state?.cancelling).toBe(false);
+    expect(result.current.state?.message).toBe(t("payment.readerCancelled"));
+  });
+
+  it("goes on saying so while the reader has not obeyed yet, until a poll finds it stopped", async () => {
+    const { result } = await waiting();
+    apiMock.terminalCancel.mockResolvedValue(payment("pending"));
+    apiMock.terminalStatus.mockResolvedValue(payment("pending"));
+
+    await act(async () => {
+      await result.current.cancel();
+    });
+    await poll();
+
+    expect(result.current.state?.phase).toBe("waiting");
+    expect(result.current.state?.cancelling).toBe(true);
+
+    apiMock.terminalStatus.mockResolvedValue(payment("failed", "CANCELLED"));
+    await poll();
+
+    expect(result.current.state?.phase).toBe("failed");
+    expect(result.current.state?.cancelling).toBe(false);
+  });
+
+  it("asks the server once, however many times it is pressed", async () => {
+    const { result } = await waiting();
+    const answer = deferred<ReturnType<typeof payment>>();
+    apiMock.terminalCancel.mockReturnValue(answer.promise);
+
+    act(() => {
+      void result.current.cancel();
+      void result.current.cancel();
+    });
+    act(() => {
+      void result.current.cancel();
+    });
+
+    expect(apiMock.terminalCancel).toHaveBeenCalledTimes(1);
+    await act(async () => answer.resolve(payment("failed", "CANCELLED")));
+  });
+
+  it("gives the stop back once the reader has plainly not obeyed", async () => {
+    // A customer halfway through their PIN, or a request lost between the
+    // server and SumUp. The reader is still waiting, and saying "cancelling"
+    // for ever would leave the cashier no way of asking again.
+    const { result } = await waiting();
+    apiMock.terminalCancel.mockResolvedValue(payment("pending"));
+    apiMock.terminalStatus.mockResolvedValue(payment("pending"));
+
+    await act(async () => {
+      await result.current.cancel();
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(TERMINAL_CANCEL_WAIT_MS);
+    });
+
+    expect(result.current.state?.phase).toBe("waiting");
+    expect(result.current.state?.cancelling).toBe(false);
+
+    // And asking again asks again.
+    await act(async () => {
+      await result.current.cancel();
+    });
+    expect(apiMock.terminalCancel).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves a finished payment alone when that wait runs out", async () => {
+    const { result } = await waiting();
+    apiMock.terminalCancel.mockResolvedValue(payment("pending"));
+    apiMock.terminalStatus.mockResolvedValue(payment("failed", "CANCELLED"));
+
+    await act(async () => {
+      await result.current.cancel();
+    });
+    await poll();
+    const ended = result.current.state;
+    await act(async () => {
+      vi.advanceTimersByTime(TERMINAL_CANCEL_WAIT_MS);
+    });
+
+    expect(result.current.state).toBe(ended);
+    expect(result.current.state?.phase).toBe("failed");
+  });
+
+  it("keeps a stop pressed while the basket was still on its way to the reader", async () => {
+    apiMock.terminalCancel.mockResolvedValue(payment("pending"));
+    const started = deferred<ReturnType<typeof payment>>();
+    apiMock.terminalStart.mockReturnValue(started.promise);
+    const { result } = renderHook(() => useTerminal(pairing, vi.fn()));
+    act(() => {
+      void result.current.start("key-1", []);
+    });
+
+    await act(async () => {
+      await result.current.cancel();
+    });
+    await act(async () => started.resolve(payment("pending")));
+
+    expect(result.current.state?.phase).toBe("waiting");
+    expect(result.current.state?.cancelling).toBe(true);
+  });
+
+  it("drops an answer that comes back after the attempt was forgotten", async () => {
+    const { result } = await waiting();
+    const answer = deferred<ReturnType<typeof payment>>();
+    apiMock.terminalCancel.mockReturnValue(answer.promise);
+    act(() => {
+      void result.current.cancel();
+    });
+
+    act(() => {
+      result.current.reset();
+    });
+    await act(async () => answer.resolve(payment("pending")));
+
+    expect(result.current.state).toBeNull();
+  });
+
+  it("drops a failure that comes back after the attempt was forgotten, too", async () => {
+    const { result } = await waiting();
+    const answer = deferred<ReturnType<typeof payment>>();
+    apiMock.terminalCancel.mockReturnValue(answer.promise);
+    act(() => {
+      void result.current.cancel();
+    });
+
+    act(() => {
+      result.current.reset();
+    });
+    await act(async () => answer.reject(new ApiError(400, "No card payment was started.")));
+
+    expect(result.current.state).toBeNull();
+  });
+
+  it("starts a new attempt with nothing being stopped", async () => {
+    const { result } = await waiting();
+    apiMock.terminalCancel.mockResolvedValue(payment("failed", "CANCELLED"));
+    await act(async () => {
+      await result.current.cancel();
+    });
+
+    await act(async () => {
+      await result.current.start("key-2", []);
+    });
+
+    expect(result.current.state?.phase).toBe("waiting");
+    expect(result.current.state?.cancelling).toBe(false);
   });
 });
 
