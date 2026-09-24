@@ -491,13 +491,17 @@ export interface CancelResult {
    * `"none"` is every other sale — cash, or a card taken on somebody's phone —
    * and the operator gives those back the way they took them. `"done"` and
    * `"already"` mean it is on its way back to the customer's card and there is
-   * nothing to hand over. `"failed"` means it is still on their card and
-   * somebody has to refund it from the SumUp app, which is the one outcome
+   * nothing to hand over. `"pending"` means SumUp would not take the refund
+   * yet — it refuses one asked for right after the payment — and the server
+   * asks again on its own until it does: nothing to hand over either, the card
+   * gets the money a little later. `"failed"` means it is still on their card
+   * and somebody has to refund it from the SumUp app, which is the one outcome
    * that must not be shown as a cancellation that looks complete.
    *
-   * Absent from a server older than the card reader.
+   * Absent from a server older than the card reader; `"pending"` from one
+   * older than 0.24.0.
    */
-  card_refund?: "none" | "done" | "already" | "failed";
+  card_refund?: "none" | "done" | "already" | "pending" | "failed";
 }
 
 /** One ticket of the guest list a till carries for a network dropout. */

@@ -32,7 +32,7 @@ from pretix_openpos.backoffice import cancelled_outside_the_journal, record_canc
 from pretix_openpos.models import PosSale, PosTerminalPayment
 
 from .conftest import order_of, sell
-from .sumup_stub import FakeResponse
+from .sumup_stub import REFUND_FAILED, FakeResponse
 from .test_backoffice import on_night
 from .test_summary import adds_up
 
@@ -813,7 +813,7 @@ def test_a_refund_sumup_refuses_fails_in_pretix_and_is_listed(
     sale = card_sale(till, sumup, [{"item": ticket.pk, "count": 1}])
     order = order_of(event, sale["order"]["code"])
     token = api_token(organizer, event)
-    sumup.next_response = FakeResponse(409, {"message": "not refundable"})
+    sumup.next_response = FakeResponse(422, REFUND_FAILED)
 
     response = api(
         token, "post", f"{event.slug}/orders/{order.code}/payments/1/refund/",
@@ -1079,12 +1079,11 @@ def test_a_card_refund_the_journal_could_not_take_is_said_on_the_order(
 # -- what SumUp said when it said no ---------------------------------------------
 
 
-REFUSAL = {
-    "type": "https://developer.sumup.com/problem/conflict",
-    "title": "Conflict",
-    "status": 409,
-    "detail": "The transaction is not refundable in its current state",
-}
+#: SumUp's own wording, for a refusal that waiting will not change.
+REFUSAL = REFUND_FAILED
+#: What the back office keeps of it: the status, SumUp's words, then its
+#: reason for the one error it lists.
+REFUSAL_WORDS = "422 · Refund failed. · INVALID_AMOUNT · Amount exceeds the refundable amount"
 
 
 @pytest.mark.django_db
@@ -1099,7 +1098,7 @@ def test_a_refund_sumup_refuses_from_pretix_keeps_what_sumup_said(
     sale = card_sale(till, sumup, [{"item": ticket.pk, "count": 1}])
     order = order_of(event, sale["order"]["code"])
     token = api_token(organizer, event)
-    sumup.next_response = FakeResponse(409, REFUSAL)
+    sumup.next_response = FakeResponse(422, REFUSAL)
 
     response = api(
         token, "post", f"{event.slug}/orders/{order.code}/payments/1/refund/",
@@ -1107,17 +1106,16 @@ def test_a_refund_sumup_refuses_from_pretix_keeps_what_sumup_said(
     )
 
     assert response.status_code == 400
-    assert (
-        "SumUp answered: 409 · The transaction is not refundable in its current state"
-        in response.json()["detail"]
-    )
+    assert f"SumUp answered: {REFUSAL_WORDS}" in response.json()["detail"]
     refund = order.refunds.get(state=OrderRefund.REFUND_STATE_FAILED)
-    assert refund.info_data["sumup_error"] == (
-        "409 · The transaction is not refundable in its current state"
-    )
+    assert refund.info_data["sumup_error"] == REFUSAL_WORDS
     # Under the failed refund on the order page, and beside it on Sales.
-    assert REFUSAL["detail"] in backoffice.get(order_url(event, order)).content.decode()
-    assert REFUSAL["detail"] in backoffice.get(sales_url(event)).content.decode()
+    assert "Amount exceeds the refundable amount" in backoffice.get(
+        order_url(event, order)
+    ).content.decode()
+    assert "Amount exceeds the refundable amount" in backoffice.get(
+        sales_url(event)
+    ).content.decode()
 
 
 @pytest.mark.django_db
@@ -1126,21 +1124,23 @@ def test_a_till_refund_sumup_refuses_keeps_what_sumup_said_off_the_till(
 ):
     sale = card_sale(till, sumup, [{"item": ticket.pk, "count": 1}])
     order = order_of(event, sale["order"]["code"])
-    sumup.next_response = FakeResponse(409, REFUSAL)
+    sumup.next_response = FakeResponse(422, REFUSAL)
 
     response = till.post("cancel", {"seq": sale["journal_seq"], "idempotency_key": "annule-01"})
 
     assert response.json()["card_refund"] == "failed"
     # The volunteer at the counter reads what to do, not SumUp's wording...
-    assert REFUSAL["detail"] not in response.content.decode()
+    assert "Amount exceeds the refundable amount" not in response.content.decode()
     # ...which the back office keeps.
     refund = order.refunds.get()
     assert refund.state == OrderRefund.REFUND_STATE_FAILED
-    assert refund.info_data["sumup_error"] == (
-        "409 · The transaction is not refundable in its current state"
-    )
-    assert REFUSAL["detail"] in backoffice.get(sales_url(event)).content.decode()
-    assert REFUSAL["detail"] in backoffice.get(order_url(event, order)).content.decode()
+    assert refund.info_data["sumup_error"] == REFUSAL_WORDS
+    assert "Amount exceeds the refundable amount" in backoffice.get(
+        sales_url(event)
+    ).content.decode()
+    assert "Amount exceeds the refundable amount" in backoffice.get(
+        order_url(event, order)
+    ).content.decode()
 
 
 @pytest.mark.django_db

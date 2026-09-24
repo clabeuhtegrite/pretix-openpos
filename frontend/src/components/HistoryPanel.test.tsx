@@ -405,7 +405,7 @@ describe("after a cancellation", () => {
 
   describe("when a card reader took the money", () => {
     /** The server having refunded the card, or not managed to. */
-    const refund = (card_refund: "done" | "already" | "failed") => ({
+    const refund = (card_refund: "done" | "already" | "pending" | "failed") => ({
       ...cancelled,
       cancellation: { ...cancelled.cancellation, payment_type: "card" as const },
       card_refund,
@@ -430,6 +430,22 @@ describe("after a cancellation", () => {
 
       await user.click(screen.getByRole("button", { name: t("history.correct") }));
 
+      expect(onReuse).toHaveBeenCalledWith(cancelled.sale?.positions, null);
+    });
+
+    it("says the refund is on its way when SumUp would not take it yet", async () => {
+      // SumUp refuses a refund asked for right after the payment, and the
+      // server asks again until it takes it: the card gets the money, so
+      // handing it over at the counter as well would pay it twice.
+      cancelSale.mockResolvedValue(refund("pending"));
+      const { user, onReuse } = show();
+
+      await cancel(user);
+
+      expect(screen.getByText(t("history.refundPending"))).toBeDefined();
+      expect(screen.queryByText(t("history.refundFailed"))).toBeNull();
+      expect(screen.getByRole("button", { name: t("history.finish") })).toBeDefined();
+      await user.click(screen.getByRole("button", { name: t("history.correct") }));
       expect(onReuse).toHaveBeenCalledWith(cancelled.sale?.positions, null);
     });
 

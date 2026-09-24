@@ -33,7 +33,8 @@ from ..models import (
     reversed_positions,
 )
 from ..payment import CARD, CASH
-from ..sumup import CHECKOUT_CLOSED, SumUpAccount, SumUpError, still_running, succeeded
+from ..reconcile import mark_pending
+from ..sumup import CHECKOUT_CLOSED, ERR_CONFLICT, SumUpAccount, SumUpError, still_running, succeeded
 from ..webhook import webhook_url
 
 logger = logging.getLogger(__name__)
@@ -2109,6 +2110,11 @@ class OpenPosViewSet(viewsets.ViewSet):
             SumUp accepted the refund.
         ``already``
             It had been refunded before. Not an error, and not a second refund.
+        ``pending``
+            SumUp will not take it yet — its 409, what a refund asked for
+            moments after the payment gets. The server asks again on its own
+            until SumUp does (see :mod:`..reconcile`), so the operator hands
+            nothing back: the card gets the money, a little later.
         ``failed``
             The money is still on the customer's card. The operator has to
             refund it from the SumUp app, and has to be told so plainly rather
@@ -2128,6 +2134,12 @@ class OpenPosViewSet(viewsets.ViewSet):
             # right one and the only one that cannot be got wrong here.
             SumUpAccount(event.organizer).refund(payment.transaction_id)
         except SumUpError as exc:
+            if exc.code == ERR_CONFLICT:
+                logger.info(
+                    "POS card refund for journal #%s left waiting for SumUp: %s",
+                    sale.seq, exc.detail,
+                )
+                return "pending", exc.reason or str(exc.message)
             logger.warning(
                 "POS card refund failed for journal #%s: %s", sale.seq, exc.detail
             )
@@ -2623,9 +2635,18 @@ class OpenPosViewSet(viewsets.ViewSet):
         other than a refusal means the amount is on its way back and the refund
         stands; a refusal leaves it failed, which is what makes the order page
         say the money was *not* returned. Without this the operator is the only
-        record that it was not, and they are at a bar.
+        record that it was not, and they are at a bar. SumUp's "not yet" leaves
+        it in transit, and the server asks again until SumUp takes it.
         """
         if refund is None or refund.state == OrderRefund.REFUND_STATE_DONE:
+            return
+        if outcome == "pending":
+            mark_pending(
+                refund,
+                refusal,
+                user=request.user if request.user.is_authenticated else None,
+                auth=request.auth,
+            )
             return
         if outcome == "failed":
             refund.state = OrderRefund.REFUND_STATE_FAILED

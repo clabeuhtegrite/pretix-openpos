@@ -130,6 +130,57 @@
     {% endif %}
 
     {% comment %}
+        Card refunds SumUp has not taken yet: its "not refundable in its current
+        state", which a refund asked for moments after the payment gets. The
+        server asks again on its own; this says so, and when it last did, so
+        that nobody refunds the same card a second time by hand. Not filtered
+        by evening, like the list below.
+    {% endcomment %}
+    {% if waiting_refunds %}
+        <div class="row">
+            <div class="col-md-12">
+                <h3>{% trans "Card refunds waiting for SumUp" %}</h3>
+                <div class="alert alert-info">
+                    {% blocktrans trimmed %}
+                        SumUp does not take a refund asked for right after the payment. Open POS
+                        asks again on its own until it does: there is nothing to do, and nothing
+                        to hand back to the customer, whose card gets the money then. A refund
+                        SumUp still refuses after three days moves to the list of refused ones.
+                    {% endblocktrans %}
+                </div>
+                <table class="table table-condensed">
+                    <thead>
+                    <tr>
+                        <th>{% trans "Date" %}</th>
+                        <th>{% trans "Order" %}</th>
+                        <th>{% trans "SumUp reference" %}</th>
+                        <th>{% trans "SumUp's answer" %}</th>
+                        <th>{% trans "Last asked" %}</th>
+                        <th class="text-right">{% trans "Amount" %}</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    {% for row in waiting_refunds %}
+                        <tr>
+                            <td>{{ row.refund.created|date:"SHORT_DATETIME_FORMAT" }}</td>
+                            <td>
+                                <a href="{% url "control:event.order" organizer=request.event.organizer.slug event=request.event.slug code=row.order.code %}">
+                                    {{ row.order.code }}
+                                </a>
+                            </td>
+                            <td><code>{{ row.transaction|default:"—" }}</code></td>
+                            <td>{{ row.answer|default:"—" }}</td>
+                            <td>{{ row.tried|date:"SHORT_DATETIME_FORMAT"|default:"—" }}</td>
+                            <td class="text-right">{{ row.refund.amount|money:currency }}</td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    {% endif %}
+
+    {% comment %}
         Cancellations whose money SumUp would not give back. Said in red on the
         till, once, to whoever pressed the button — while the customer is being
         told the cancellation went through. Not filtered by evening: a debt to a
@@ -144,8 +195,8 @@
                         These sales were cancelled, and the refund did not go through. The money
                         is still on the customer's card. Refund it with “Create a refund” on the
                         order, which sends it back through SumUp, or from the SumUp dashboard using
-                        the reference below. Nothing tries again on its own, and the cancellation
-                        itself stands.
+                        the reference below: Open POS sees it there on its own, records the refund
+                        on the order and takes it off this list. The cancellation itself stands.
                     {% endblocktrans %}
                 </div>
                 <table class="table table-condensed">

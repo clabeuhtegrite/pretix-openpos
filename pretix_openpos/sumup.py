@@ -30,12 +30,17 @@ The API this speaks to, all of it under https://api.sumup.com:
 * ``POST /v0.1/merchants/{m}/readers/{r}/terminate`` — stop one that is still
   waiting for the cardholder.
 * ``GET  /v2.1/merchants/{m}/transactions?client_transaction_id=…`` — what
-  actually happened, and the transaction ``id`` a refund needs.
+  actually happened, and the transaction ``id`` a refund needs. Also asked
+  with ``?id=…``, for a transaction a refund is waiting on.
+* ``GET  /v2.1/merchants/{m}/transactions/history?oldest_time=…`` — the
+  recent payments given back since, from SumUp's side as well as from here.
 * ``POST /v1.0/merchants/{m}/payments/{id}/refunds`` — refund, in full or part.
 * ``GET/POST/DELETE /v0.1/merchants/{m}/readers`` — the paired readers.
 """
 import logging
-from decimal import Decimal
+from datetime import timezone as dt_timezone
+from decimal import Decimal, InvalidOperation
+from urllib.parse import parse_qsl
 
 import requests
 from django.utils.translation import gettext_lazy as _
@@ -61,6 +66,9 @@ TIMEOUT = (5, 15)
 SUCCEEDED = frozenset({"SUCCESSFUL", "PAID_OUT"})
 #: Still going. Anything else is a refusal, a cancellation or a fault.
 PENDING = frozenset({"PENDING"})
+#: Under either of these the card has had its money back, all of it or part.
+#: The history filter and :func:`given_back` both read them.
+GIVEN_BACK = frozenset({"REFUNDED", "CANCELLED"})
 
 
 #: What went wrong, as something code may branch on.
@@ -80,6 +88,12 @@ ERR_OFFLINE = "offline"
 ERR_UNAVAILABLE = "unavailable"
 ERR_UNREADABLE = "unreadable"
 ERR_REFUSED = "refused"
+#: SumUp's 409: the transaction's current state does not allow this *yet*.
+#: What a refund asked for moments after the payment gets — the first real one,
+#: on 24 September 2026, and every one a till makes when a customer changes
+#: their mind at the counter. Not a refusal to act on: the refund is asked for
+#: again later, by reconcile.py.
+ERR_CONFLICT = "conflict"
 
 
 class SumUpError(Exception):
@@ -254,6 +268,15 @@ class SumUpAccount:
                 _("SumUp is having trouble. Try again in a moment."),
                 code=ERR_UNAVAILABLE,
                 retryable=True,
+                detail=detail,
+                reason=reason,
+            )
+        if response.status_code == 409:
+            # Same words for the operator as any refusal; its own code for the
+            # caller, which waits and asks again rather than giving up.
+            return SumUpError(
+                _("SumUp refused this request."),
+                code=ERR_CONFLICT,
                 detail=detail,
                 reason=reason,
             )
@@ -454,6 +477,74 @@ class SumUpAccount:
                 return None
             raise
 
+    def transaction_by_id(self, transaction_id):
+        """
+        What SumUp says about a transaction it has, by the id a refund names.
+
+        Unlike :meth:`transaction`, a 404 here is an error: the transaction was
+        read once, when the sale was booked, so it exists.
+        """
+        return self._call(
+            "GET",
+            f"/v2.1/merchants/{self.merchant_code}/transactions",
+            params={"id": transaction_id},
+        )
+
+    def given_back_payments(self, oldest, *, limit=100, pages=10):
+        """
+        The payments made since ``oldest`` that have since gone back to the card.
+
+        SumUp's transaction history, filtered on SumUp's side to payments
+        created at or after ``oldest`` whose status is now refunded or
+        cancelled — whoever did it, this server or somebody in SumUp's
+        dashboard or app. One call for the whole account, rather than one per
+        card sale of the evening: this is read every few minutes.
+
+        By creation time rather than by ``changes_since``, SumUp's other
+        filter: what "modified" covers is not documented, and the creation
+        time of a payment is not in doubt. The answer is the same handful of
+        refunds on every pass, which the caller recognises and skips.
+
+        Newest first, and at most ``pages`` pages of ``limit``: more than an
+        association gives back in a month, and if it ever is, the most recent
+        are the ones still waiting to be seen.
+        """
+        params = {
+            # SumUp's own examples write UTC with a Z, so this does too.
+            "oldest_time": oldest.astimezone(dt_timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "statuses[]": sorted(GIVEN_BACK),
+            "types[]": ["PAYMENT"],
+            "order": "descending",
+            "limit": limit,
+        }
+        for _page in range(pages):
+            body = self._call(
+                "GET",
+                f"/v2.1/merchants/{self.merchant_code}/transactions/history",
+                params=params,
+            )
+            yield from (item for item in body.get("items") or () if isinstance(item, dict))
+            following = next(
+                (
+                    link.get("href") for link in body.get("links") or ()
+                    if isinstance(link, dict) and link.get("rel") == "next"
+                ),
+                None,
+            )
+            if not following:
+                return
+            # The link is a query string. Laid over the filters rather than
+            # instead of them: SumUp's own example of one carries the cursor
+            # and the order, and nothing says it carries the rest. A filter it
+            # does repeat stays a list, all of it, as it was sent.
+            cursor = {}
+            for key, value in parse_qsl(following.split("?")[-1]):
+                if key.endswith("[]"):
+                    cursor.setdefault(key, []).append(value)
+                else:
+                    cursor[key] = value
+            params = {**params, **cursor}
+
     def refund(self, transaction_id, amount=None):
         """
         Give the money back, in full or in part.
@@ -563,6 +654,57 @@ def minor_units(amount: Decimal) -> int:
 
 def succeeded(transaction) -> bool:
     return bool(transaction) and transaction.get("status") in SUCCEEDED
+
+
+def given_back(transaction):
+    """
+    How much of a payment SumUp says went back to the card.
+
+    ``Decimal("0.00")`` for one still paid, the whole amount for one cancelled
+    — reversed before it settled, which is what SumUp's own dashboard may do
+    with a payment of the same day — and the refunded amount for one refunded,
+    in full or in part. ``None`` for one SumUp calls refunded without saying
+    how much: guessing "all of it" would cancel an order a customer was given
+    one beer back on.
+
+    Both statuses are read: ``status`` is the transaction's, ``simple_status``
+    the merchant's view of it, and SumUp documents a reversal under either.
+    """
+    if not transaction:
+        return Decimal("0.00")
+    statuses = {transaction.get("status"), transaction.get("simple_status")}
+    amount = _money(transaction.get("amount"))
+    if "CANCELLED" in statuses:
+        return amount
+    if "REFUNDED" not in statuses:
+        return Decimal("0.00")
+    refunded = _money(transaction.get("refunded_amount"))
+    if refunded is not None:
+        return refunded
+    # The full resource has no total refunded, only its events — twice, as a
+    # compact list and a detailed one of the same events. One is read, never
+    # both: adding them up would give back twice what the card got.
+    events = transaction.get("events") or transaction.get("transaction_events") or []
+    amounts = [
+        _money(event.get("amount"))
+        for event in events
+        if isinstance(event, dict)
+        and (event.get("type") or event.get("event_type")) == "REFUND"
+        and event.get("status") != "FAILED"
+    ]
+    if not amounts or None in amounts:
+        return None
+    return sum((abs(amount) for amount in amounts), Decimal("0.00"))
+
+
+def _money(value):
+    """A JSON amount — SumUp sends floats — as cents, or ``None``."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return Decimal(str(value)).quantize(Decimal("0.01"))
+    except (InvalidOperation, ValueError):
+        return None
 
 
 def still_running(transaction) -> bool:
