@@ -23,6 +23,16 @@ under ``data``, and a busy reader as a 409 where SumUp sends a 422 naming it.
 A 409 is what SumUp does answer a refund asked for moments after the payment —
 the first real refunds, on 24 September 2026 — and ``not_refundable_yet`` is
 how a test has it say so.
+
+A refund is kept as SumUp answered for those same two, one made through its
+API and one in its dashboard, read back from the live account: the payment
+stays ``SUCCESSFUL``, on the transaction and in the history alike; the
+transaction lists the refund among its events, twice over; and the history
+gives the refund a line of its own, of type ``REFUND`` and status
+``REFUNDED``, whose ``id`` is the event's and whose ``transaction_id`` is the
+payment's, while the payment's line only carries the total refunded. This stub
+had the payment itself turn ``REFUNDED``, as the list of statuses in the spec
+suggests, and the suite passed against an API that does not do that.
 """
 import json
 import re
@@ -118,6 +128,11 @@ class FakeSumUp:
         self.refuse_refunds_with = None
         #: The query of every history read, for a test to say what was asked.
         self.history_reads = []
+        #: The id of every transaction read by its id.
+        self.transaction_reads = []
+        #: The history's line for each refund, in the order they were made.
+        self.refund_lines = []
+        self._refund_events = 0
         #: Added to the history's next link. SumUp's example of one carries
         #: the cursor and the order only; a test may make it repeat more.
         self.history_link_extra = ""
@@ -167,28 +182,38 @@ class FakeSumUp:
             )
         return client_transaction_id
 
-    def give_back(self, transaction_id="tx_1", *, amount=None, status="REFUNDED", stated=True):
+    def give_back(self, transaction_id="tx_1", *, amount=None, status="REFUNDED"):
         """
         Give a payment back from SumUp's side: its dashboard, or its app.
 
-        ``status`` is what SumUp then says of the payment: ``REFUNDED``, or
-        ``CANCELLED`` for one reversed before it settled. ``amount`` is how much
-        went back, the whole of it by default. ``stated=False`` leaves the
-        figure off the history's line, where SumUp documents one, so that only
-        the transaction's own events say how much — twice, as SumUp lists them.
+        ``REFUNDED`` is a refund, as SumUp's dashboard makes one and its API
+        too: ``amount`` of it, the whole payment by default. The payment's own
+        status does not change; the refund is an event on it and a line of the
+        history. ``CANCELLED`` is a payment reversed before it settled, which
+        SumUp documents as the payment's own status.
         """
         transaction = self.find(transaction_id)
-        refunded = amount if amount is not None else transaction["amount"]
-        transaction["status"] = status
-        if status == "REFUNDED":
-            event = {"type": "REFUND", "status": "SUCCESSFUL", "amount": float(refunded)}
-            detailed = {"event_type": "REFUND", "status": "SUCCESSFUL", "amount": float(refunded)}
-            transaction["events"] = [event]
-            transaction["transaction_events"] = [detailed]
-            if stated:
-                transaction["refunded_amount"] = float(refunded)
-            else:
-                transaction.pop("refunded_amount", None)
+        if status == "CANCELLED":
+            transaction["status"] = status
+            return transaction
+        refunded = float(amount if amount is not None else transaction["amount"])
+        self._refund_events += 1
+        event_id = self._refund_events
+        transaction.setdefault("events", []).append({
+            "id": event_id, "type": "REFUND", "status": "REFUNDED", "amount": refunded,
+            "transaction_id": transaction_id,
+        })
+        transaction.setdefault("transaction_events", []).append({
+            "id": event_id, "event_type": "REFUND", "status": "REFUNDED", "amount": refunded,
+        })
+        self.refund_lines.append({
+            "id": str(event_id),
+            "transaction_id": transaction_id,
+            "client_transaction_id": transaction["client_transaction_id"],
+            "type": "REFUND",
+            "status": "REFUNDED",
+            "amount": refunded,
+        })
         return transaction
 
     def find(self, transaction_id):
@@ -359,6 +384,7 @@ class FakeSumUp:
 
     def _transaction(self, body, params):
         if "id" in params:
+            self.transaction_reads.append(params["id"])
             transaction = next(
                 (t for t in self.transactions.values() if t and t.get("id") == params["id"]),
                 None,
@@ -369,8 +395,8 @@ class FakeSumUp:
             # Either no such transaction, or one the cardholder has not
             # answered yet. SumUp cannot tell those apart either.
             return FakeResponse(404, {"message": "not found"})
-        # The full resource carries its refunds as events only: the total
-        # refunded is a field of the history's lines, not of this.
+        # The payment itself carries its refunds as events only: the total
+        # refunded is a field of its history line, not of this.
         return FakeResponse(
             200, {k: v for k, v in transaction.items() if k != "refunded_amount"}
         )
@@ -379,12 +405,16 @@ class FakeSumUp:
         """
         The history, filtered as SumUp filters it, one page at a time.
 
-        Newest first when asked, and paged by the id of the last line given,
-        through a ``next`` link that is a bare query string, as SumUp's is.
+        A line for each payment, then one for each refund: here every refund
+        comes after every payment. SumUp applies both filters to each line's
+        own status and type. Newest first when asked, and paged by the id of
+        the last line given, through a ``next`` link that is a bare query
+        string, as SumUp's is.
         """
         self.history_reads.append(dict(params))
         statuses = set(params.get("statuses[]") or ())
-        lines = [
+        types = set(params.get("types[]") or ())
+        payments = [
             {
                 "id": t["id"],
                 "transaction_id": t["id"],
@@ -392,10 +422,18 @@ class FakeSumUp:
                 "type": "PAYMENT",
                 "status": t["status"],
                 "amount": float(t["amount"]),
-                **({"refunded_amount": t["refunded_amount"]} if "refunded_amount" in t else {}),
+                "refunded_amount": sum(
+                    event["amount"] for event in t.get("events") or ()
+                    if event.get("type") == "REFUND"
+                ),
             }
             for t in self.transactions.values()
-            if t and (not statuses or t["status"] in statuses)
+            if t
+        ]
+        lines = [
+            line for line in payments + self.refund_lines
+            if (not statuses or line["status"] in statuses)
+            and (not types or line["type"] in types)
         ]
         if params.get("order") == "descending":
             lines.reverse()
@@ -428,8 +466,8 @@ class FakeSumUp:
                 return FakeResponse(409, NOT_REFUNDABLE)
             amount = (body or {}).get("amount")
             self.refunds.append((transaction_id, amount))
-            # What the payment then says of itself, in the history and on the
-            # transaction alike.
+            # Written down as a refund from SumUp's dashboard is: the same
+            # shape, on 24 September 2026, for one and the other.
             self.give_back(transaction_id, amount=amount)
             return FakeResponse(201, {})
 

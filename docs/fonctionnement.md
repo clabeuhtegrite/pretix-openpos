@@ -1,6 +1,6 @@
 # Fonctionnement de pretix-openpos
 
-Documentation de fonctionnement du plugin, version 0.24.1. Elle couvre trois
+Documentation de fonctionnement du plugin, version 0.24.2. Elle couvre trois
 choses, dans cet ordre : ce que le plugin ajoute à pretix, comment le mettre en
 service, et ce qui se passe exactement quand un bénévole encaisse.
 
@@ -397,7 +397,7 @@ En Docker/Kubernetes, [`deploy/Dockerfile`](../deploy/Dockerfile) intègre le pl
 
 ```bash
 cd frontend && npm run build && cd ..
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.24.1 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.24.2 .
 ```
 
 Deux pièges :
@@ -1545,12 +1545,28 @@ qu'un lecteur de l'organisateur a encaissés :
 
 L'historique de chaque commande dit ce que SumUp a indiqué et ce qui a été fait.
 
+**Comment SumUp écrit un remboursement** (0.24.2). Un paiement remboursé reste
+« réussi » chez SumUp (`SUCCESSFUL`), dans son historique comme dans la
+transaction elle-même, que le remboursement vienne du tableau de bord ou de
+l'API. Le remboursement a sa propre ligne dans l'historique, de type `REFUND`
+et de statut `REFUNDED`, qui désigne le paiement par son `transaction_id` ; la
+ligne du paiement ne porte que le total remboursé, et la transaction liste le
+remboursement parmi ses évènements. Jusqu'à la 0.24.1, le serveur demandait à
+l'historique les *paiements* remboursés ou annulés : un paiement remboursé n'en
+fait jamais partie, et la page Ventes disait « Remboursés ou annulés dans
+SumUp : 0 », sans erreur, alors qu'un paiement venait d'être remboursé depuis le
+tableau de bord. Depuis la 0.24.2, il demande aussi les lignes de
+remboursement, et relit le paiement que chacune désigne pour savoir ce qu'il a
+rendu en tout : deux remboursements d'un même paiement, c'est deux lignes.
+
 **Jamais deux fois le même argent.** Le seul remboursement que le serveur envoie
 est un remboursement que quelqu'un a déjà demandé, et il relit la transaction
 chez SumUp juste avant : un paiement déjà rendu depuis le tableau de bord est
-enregistré, pas remboursé une seconde fois. Un paiement rendu **en partie**
-pendant qu'un remboursement total attend fait échouer ce dernier, pour qu'une
-personne décide.
+enregistré, pas remboursé une seconde fois. Ce sont les évènements de
+remboursement de la transaction qui le disent, puisque son statut reste
+« réussi » : jusqu'à la 0.24.1, cette relecture n'y voyait rien. Un paiement
+rendu **en partie** pendant qu'un remboursement total attend fait échouer ce
+dernier, pour qu'une personne décide.
 
 **Quand.** À chaque passage de la tâche périodique de pretix (`runperiodic`,
 que toute installation de pretix planifie déjà pour ses propres relances et
@@ -1562,7 +1578,8 @@ remboursement en attente.
 
 **Ce que la page Ventes en dit** (depuis 0.24.1). En haut, l'heure de la
 **dernière comparaison automatique** et ce qu'elle a donné : combien de
-paiements SumUp dit remboursés ou annulés, combien ont été repris dans pretix,
+remboursements et de paiements annulés l'historique SumUp donne (ceux que pretix
+a demandés lui-même compris), combien de paiements ont été repris dans pretix,
 combien de remboursements en attente SumUp a acceptés, combien attendent encore
 et combien ont été abandonnés ; ou la réponse de SumUp quand son historique n'a
 pas pu être lu. La ligne passe en avertissement quand aucune comparaison n'a
