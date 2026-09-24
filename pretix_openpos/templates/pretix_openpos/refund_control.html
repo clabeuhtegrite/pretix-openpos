@@ -1,0 +1,11 @@
+{% load i18n %}
+<dl class="dl-horizontal">
+    {% if transaction %}
+        <dt>{% trans "SumUp transaction" %}</dt>
+        <dd><code>{{ transaction }}</code></dd>
+    {% endif %}
+    {% if answer %}
+        <dt>{% trans "SumUp's answer" %}</dt>
+        <dd>{{ answer }}</dd>
+    {% endif %}
+</dl>

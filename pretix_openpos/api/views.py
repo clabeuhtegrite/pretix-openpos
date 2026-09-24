@@ -1944,8 +1944,8 @@ class OpenPosViewSet(viewsets.ViewSet):
             # connection before it refunded the card. This is what finishes the
             # job — and when it did run, it answers "already" rather than
             # sending the money a second time.
-            body["card_refund"] = (
-                self._refund_card(event, original) if original else "none"
+            body["card_refund"], refusal = (
+                self._refund_card(event, original) if original else ("none", "")
             )
             # And the books are brought in line with what just happened. A
             # cancellation whose card refund was refused the first time leaves a
@@ -1957,6 +1957,7 @@ class OpenPosViewSet(viewsets.ViewSet):
                     request,
                     original.order.refunds.order_by("-local_id").first(),
                     body["card_refund"],
+                    refusal,
                 )
             return Response(body, status=status.HTTP_200_OK)
 
@@ -2088,8 +2089,8 @@ class OpenPosViewSet(viewsets.ViewSet):
         # and rolling the cancellation back afterwards could not un-send it.
         # So the cancellation stands first, and the card is a separate step
         # whose outcome is reported rather than assumed.
-        body["card_refund"] = self._refund_card(event, sale)
-        self._settle_refund(request, refund, body["card_refund"])
+        body["card_refund"], refusal = self._refund_card(event, sale)
+        self._settle_refund(request, refund, body["card_refund"], refusal)
         return Response(body, status=status.HTTP_201_CREATED)
 
     def _refund_card(self, event, sale):
@@ -2097,7 +2098,8 @@ class OpenPosViewSet(viewsets.ViewSet):
         Give a card sale's money back through SumUp, when there is a card to
         give it back to.
 
-        Returns what the till should tell the operator:
+        Returns what the till should tell the operator, and, when SumUp said
+        no, what it said — for the order page, never for the till's screen:
 
         ``none``
             Nothing to do here — a cash sale, or a card taken on somebody's
@@ -2114,9 +2116,9 @@ class OpenPosViewSet(viewsets.ViewSet):
         """
         payment = PosTerminalPayment.settling(sale)
         if payment is None:
-            return "none"
+            return "none", ""
         if payment.refunded:
-            return "already"
+            return "already", ""
 
         try:
             # In full, and without naming an amount: what goes back is what the
@@ -2129,11 +2131,11 @@ class OpenPosViewSet(viewsets.ViewSet):
             logger.warning(
                 "POS card refund failed for journal #%s: %s", sale.seq, exc.detail
             )
-            return "failed"
+            return "failed", exc.reason or str(exc.message)
 
         payment.refunded = now()
         payment.save(update_fields=["refunded", "updated"])
-        return "done"
+        return "done", ""
 
     # -- takings -----------------------------------------------------------
 
@@ -2613,7 +2615,7 @@ class OpenPosViewSet(viewsets.ViewSet):
             auth=request.auth,
         )
 
-    def _settle_refund(self, request, refund, outcome):
+    def _settle_refund(self, request, refund, outcome, refusal=""):
         """
         Write down what SumUp actually did with the money.
 
@@ -2627,7 +2629,12 @@ class OpenPosViewSet(viewsets.ViewSet):
             return
         if outcome == "failed":
             refund.state = OrderRefund.REFUND_STATE_FAILED
-            refund.save(update_fields=["state"])
+            # What SumUp answered, where the order page shows it under the
+            # failed refund and the Sales page beside it. It is the only
+            # record of why: SumUp's own dashboard refuses the same refund
+            # without saying, and the log that has it is the server's.
+            refund.info_data = {**(refund.info_data or {}), "sumup_error": refusal}
+            refund.save(update_fields=["state", "info"])
             # In pretix' own log, on the order, where somebody reconciling the
             # evening will be looking.
             refund.order.log_action(

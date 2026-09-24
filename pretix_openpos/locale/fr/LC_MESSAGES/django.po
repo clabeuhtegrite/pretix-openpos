@@ -890,6 +890,14 @@ msgid "Written to the till journal, so the takings no longer count this sale:"
 msgstr ""
 "Écrit au journal de caisse, la recette ne compte donc plus cette vente :"
 
+#: logdisplay.py:635
+msgid ""
+"Refunded to the card from pretix, and written to the till journal, so the "
+"takings no longer count this sale:"
+msgstr ""
+"Remboursée sur la carte depuis pretix, et écrite au journal de caisse, la "
+"recette ne compte donc plus cette vente :"
+
 #: logdisplay.py:629
 msgid ""
 "Back in the till journal: the order came back paid, so the cancellation is "
@@ -923,6 +931,14 @@ msgid ""
 msgstr ""
 "L’annulation n’a pas pu être écrite au journal de caisse. La page Ventes "
 "d’Open POS liste cette vente tant qu’elle ne l’est pas."
+
+#: logdisplay.py:686
+msgid ""
+"The card refund could not be written to the till journal, which still counts "
+"this sale. The server log has the details."
+msgstr ""
+"Le remboursement carte n’a pas pu être écrit au journal de caisse, qui "
+"compte encore cette vente. Le journal du serveur donne le détail."
 
 #: models.py:62 payment.py:87 templates/pretix_openpos/drawer_session.html:48
 #: templates/pretix_openpos/drawer_session.html:130
@@ -1185,6 +1201,11 @@ msgstr "SumUp rencontre un problème. Réessayez dans un instant."
 #: sumup.py:233
 msgid "SumUp refused this request."
 msgstr "SumUp a refusé cette demande."
+
+#: sumup.py:122
+#, python-brace-format
+msgid "{message} SumUp answered: {reason}"
+msgstr "{message} Réponse de SumUp : {reason}"
 
 #: sumup.py:346
 msgid "SumUp accepted the payment but named no transaction."
@@ -2162,6 +2183,15 @@ msgstr "Monnaie rendue"
 #: templates/pretix_openpos/payment_control.html:26
 msgid "Journal entry"
 msgstr "Écriture du journal"
+
+#: templates/pretix_openpos/refund_control.html:4
+msgid "SumUp transaction"
+msgstr "Transaction SumUp"
+
+#: templates/pretix_openpos/refund_control.html:8
+#: templates/pretix_openpos/sales.html:157
+msgid "SumUp's answer"
+msgstr "Réponse de SumUp"
 
 #: templates/pretix_openpos/sales.html:10
 msgid "The journal does not add up."

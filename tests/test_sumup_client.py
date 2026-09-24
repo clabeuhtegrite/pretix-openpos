@@ -405,6 +405,27 @@ def test_a_refund_names_the_transaction_and_no_amount_by_default(account, sumup)
 
 
 @pytest.mark.django_db
+def test_a_whole_refund_is_asked_for_with_an_empty_json_object(account, sumup):
+    """
+    Never with no body at all. SumUp's spec calls the body optional, but its
+    own client (sumup-go, ``TransactionsClient.Refund``) always sends one, as
+    JSON — the request SumUp is known to take. Open POS sent nothing until
+    0.22.1, and the first real refund, on 2026-09-24, was refused.
+    """
+    sumup.add_reader()
+    client_transaction_id, _checkout_id = account.start_checkout(
+        "rdr_ONE", amount=Decimal("10.00"), currency="EUR", description=""
+    )
+    sumup.pay(client_transaction_id, transaction_id="tx_7")
+
+    account.refund("tx_7")
+
+    [(method, path, body)] = [call for call in sumup.calls if call[1].endswith("/refunds")]
+    assert (method, path) == ("POST", "/v1.0/merchants/MERCH1/payments/tx_7/refunds")
+    assert body == {}
+
+
+@pytest.mark.django_db
 def test_a_refund_sumup_made_is_not_reported_as_refused(account, sumup):
     """
     SumUp answers a refund with 201. Treated as a refusal, every card sale
@@ -561,3 +582,97 @@ def test_an_empty_success_is_an_empty_answer(account, sumup):
 
     # 204, no body: forgetting a reader answers this way and must not blow up.
     assert account.forget_reader("rdr_A") is None
+
+
+# -- what SumUp said, for the back office -------------------------------------
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "response,reason",
+    [
+        # A problem document, as the refund route answers.
+        (
+            FakeResponse(409, {
+                "type": "https://developer.sumup.com/problem/conflict", "title": "Conflict",
+                "status": 409, "detail": "The transaction is not refundable in its current state",
+            }),
+            "409 · The transaction is not refundable in its current state",
+        ),
+        (
+            FakeResponse(403, {"title": "Forbidden", "detail": "users is not allowed to make a refund"}),
+            "403 · users is not allowed to make a refund",
+        ),
+        # The same, with the specifics in a list of errors.
+        (
+            FakeResponse(422, {
+                "detail": "Refund failed.",
+                "errors": [{"code": "INVALID_AMOUNT", "detail": "Amount exceeds the refundable amount"}],
+            }),
+            "422 · Refund failed. · INVALID_AMOUNT · Amount exceeds the refundable amount",
+        ),
+        # The Readers API's own shape.
+        (reader_busy(), "422 · READER_BUSY · There is a pending checkout for the device."),
+        # An older route, answering with a list.
+        (
+            FakeResponse(400, [{"error_code": "NOT_ENOUGH_BALANCE", "message": "Not enough balance"}]),
+            "400 · NOT_ENOUGH_BALANCE · Not enough balance",
+        ),
+        # A field and its complaint.
+        (
+            FakeResponse(422, {"errors": {"total_amount": ["must be greater than 0"]}}),
+            "422 · total_amount: must be greater than 0",
+        ),
+        (FakeResponse(400, {"errors": {"amount": "too high"}}), "400 · amount: too high"),
+        # Nothing readable: the status alone.
+        (FakeResponse(409, {"errors": {"type": 7}}), "409"),
+        (FakeResponse(409, {"errors": []}), "409"),
+        (FakeResponse(409, []), "409"),
+        (FakeResponse(502, text="<html>Bad gateway</html>"), "502"),
+    ],
+)
+def test_a_refusal_keeps_sumup_s_own_words_for_the_back_office(account, sumup, response, reason):
+    sumup.next_response = response
+
+    with pytest.raises(SumUpError) as caught:
+        account.refund("tx_7")
+
+    assert caught.value.reason == reason
+
+
+@pytest.mark.django_db
+def test_sumup_s_words_go_after_the_message_for_the_back_office(account, sumup):
+    sumup.next_response = FakeResponse(409, {"detail": "The transaction is not refundable"})
+
+    with pytest.raises(SumUpError) as caught:
+        account.refund("tx_7")
+
+    # The till's screen keeps its own words...
+    assert str(caught.value.message) == "SumUp refused this request."
+    # ...and the back office gets SumUp's after them.
+    assert caught.value.explained() == (
+        "SumUp refused this request. SumUp answered: 409 · The transaction is not refundable"
+    )
+
+
+@pytest.mark.django_db
+def test_not_reaching_sumup_has_no_words_of_sumup_s_to_add(account, sumup):
+    sumup.next_exception = requests.ConnectTimeout("no route")
+
+    with pytest.raises(SumUpError) as caught:
+        account.refund("tx_7")
+
+    assert caught.value.reason == ""
+    assert caught.value.explained() == str(caught.value.message)
+
+
+@pytest.mark.django_db
+def test_sumup_s_words_never_carry_the_key(account, sumup):
+    """They are shown in the back office, so they are checked, not trusted."""
+    sumup.next_response = FakeResponse(401, {"message": "invalid token sup_sk_test"})
+
+    with pytest.raises(SumUpError) as caught:
+        account.refund("tx_7")
+
+    assert "sup_sk_test" not in caught.value.reason
+    assert caught.value.reason == "401 · invalid token …"

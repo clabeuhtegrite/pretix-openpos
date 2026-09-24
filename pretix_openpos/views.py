@@ -351,6 +351,8 @@ def refused_card_refunds(event):
                 "refund": refund,
                 "order": refund.order,
                 "transaction": payment.transaction_id if payment else "",
+                # Why, in SumUp's words, when the refund that failed kept them.
+                "answer": (refund.info_data or {}).get("sumup_error", ""),
             }
         )
     return rows

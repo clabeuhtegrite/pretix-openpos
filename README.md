@@ -118,7 +118,8 @@ it was written for. Read the scope section before deciding it fits.
   cancelled in pretix itself — the order page, the REST API, a whole event
   called off — is reversed in the journal too, in the name of whoever did it,
   and pretix' own refund dialog sends a reader's card payment back through
-  SumUp.
+  SumUp — reversed in the journal as well when the order is left standing, and
+  with SumUp's own answer shown on the order when it refuses.
 - **Cash drawers**, as many as the venue has. Create one per physical drawer
   in the back office and give it its tills — two tablets at one bar can share
   one. A drawer is opened on the till with a float counted note by note or
@@ -245,7 +246,7 @@ If you run pretix in Docker or Kubernetes, [`deploy/Dockerfile`](deploy/Dockerfi
 bakes the plugin into the official image:
 
 ```bash
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.22.0 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.22.1 .
 ```
 
 The PWA bundle is built inside the image, from the tree you are building, so the

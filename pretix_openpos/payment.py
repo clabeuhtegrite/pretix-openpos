@@ -160,6 +160,16 @@ class OpenPosCardProvider(OpenPosPaymentProvider):
             # transaction in full, which is what the card was charged.
             SumUpAccount(self.event.organizer).refund(terminal.transaction_id)
         except SumUpError as exc:
+            # Kept on the refund, which pretix marks failed next: the order
+            # page shows it under the failed line and the Sales page beside it.
+            # The dialog's message is gone at the next click, and SumUp's own
+            # dashboard, refusing the same refund, gives no reason at all.
+            refund.info_data = {
+                **(refund.info_data or {}),
+                "transaction_id": terminal.transaction_id,
+                "sumup_error": exc.reason or str(exc.message),
+            }
+            refund.save(update_fields=["info"])
             if exc.retryable:
                 # The request may have reached SumUp and the answer been lost.
                 # Asking again blind could send the money twice, so the person
@@ -169,7 +179,7 @@ class OpenPosCardProvider(OpenPosPaymentProvider):
                       "back. Check transaction {transaction} in the SumUp app before "
                       "refunding again.").format(transaction=terminal.transaction_id)
                 ) from exc
-            raise PaymentException(exc.message) from exc
+            raise PaymentException(exc.explained()) from exc
 
         terminal.refunded = now()
         terminal.save(update_fields=["refunded", "updated"])
@@ -178,3 +188,35 @@ class OpenPosCardProvider(OpenPosPaymentProvider):
             "transaction_id": terminal.transaction_id,
         }
         refund.done()
+
+        # The money is back on the card, so the sale is no longer takings. A
+        # cancellation made before the refund has said so in the journal
+        # already, and this finds it done. Otherwise this is what says it:
+        # pretix' refund dialog ticks "Mark the order as pending" by default,
+        # offers "Do nothing", and its "Cancel the order" cancels only once
+        # the money has gone back.
+        from .backoffice import record_card_refund
+
+        record_card_refund(refund)
+
+    def refund_control_render(self, request, refund) -> str:
+        """
+        Under a card refund on the order page: the SumUp transaction, and, for
+        one that failed, what SumUp answered.
+
+        The answer is the part worth the space. A refund SumUp will not make is
+        refused in its own dashboard too, without a word of why; this is where
+        the organiser reconciling the evening finds out whether it was the key,
+        the transaction, or SumUp being down.
+        """
+        info = refund.info_data or {}
+        transaction = info.get("transaction_id")
+        if not transaction and refund.payment is not None:
+            terminal = self._terminal_payment(refund.payment)
+            transaction = terminal.transaction_id if terminal else ""
+        answer = info.get("sumup_error") if refund.state == refund.REFUND_STATE_FAILED else ""
+        if not transaction and not answer:
+            return ""
+        return get_template("pretix_openpos/refund_control.html").render(
+            {"transaction": transaction, "answer": answer}
+        )

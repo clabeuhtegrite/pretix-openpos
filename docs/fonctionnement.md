@@ -1,6 +1,6 @@
 # Fonctionnement de pretix-openpos
 
-Documentation de fonctionnement du plugin, version 0.22.0. Elle couvre trois
+Documentation de fonctionnement du plugin, version 0.22.1. Elle couvre trois
 choses, dans cet ordre : ce que le plugin ajoute à pretix, comment le mettre en
 service, et ce qui se passe exactement quand un bénévole encaisse.
 
@@ -112,7 +112,9 @@ proposer « Montant total » dans la fenêtre de remboursement de pretix, et
 `execute_refund()` envoie le remboursement à SumUp, comme la caisse le fait
 quand elle annule (§5bis, *Une vente annulée depuis pretix*). Pas pour une carte
 prise sur le téléphone de quelqu'un, ni pour une carte déjà remboursée, ni en
-partie.
+partie. Sous chaque remboursement carte de la page de commande,
+`refund_control_render()` affiche la transaction SumUp et, pour un remboursement
+que SumUp a refusé, sa réponse.
 
 ### 2.3 Un profil de sécurité pour les devices
 
@@ -392,7 +394,7 @@ En Docker/Kubernetes, [`deploy/Dockerfile`](../deploy/Dockerfile) intègre le pl
 
 ```bash
 cd frontend && npm run build && cd ..
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.22.0 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.22.1 .
 ```
 
 Deux pièges :
@@ -930,12 +932,27 @@ change, on rembourse à la main. Carte encaissée sur un lecteur : la ligne
 *Terminal de paiement (Open POS)* propose « Montant total », déjà cochée ;
 valider demande à SumUp de rembourser la transaction **en entier**, sans le
 lecteur ni la carte, exactement comme `cancel/` le fait pour la caisse. SumUp
-refuse : pretix marque le remboursement échoué, et la page Ventes le liste. SumUp
+refuse : pretix marque le remboursement échoué, la page Ventes le liste, et la
+réponse de SumUp s'affiche (§5quinquies, *Annuler une vente carte*). SumUp
 ne répond pas : le message demande de vérifier la transaction dans l'app SumUp
 avant de recommencer, puisque la demande a pu passer. Rembourser une partie
 seulement se fait depuis l'app SumUp. Si personne ne rembourse, l'annulation
 reste au journal : c'est pretix qui dit ce qui est vendu, et la commande y
 apparaît avec un montant à rembourser.
+
+**Un remboursement sans annulation.** *Créer un remboursement* sur une commande
+payée coche par défaut *Marquez la commande comme en attente…*, et propose *Ne
+faites rien…* : la carte est remboursée, la commande reste, et pretix ne
+prévient pas le plugin. Jusqu'à la 0.22.0, la recette comptait donc encore une
+vente dont le client avait récupéré l'argent. Depuis la 0.22.1, un remboursement
+carte que SumUp accepte depuis pretix écrit lui-même la contrepassation au
+journal, sur la ligne *back-office pretix*, au nom de qui a remboursé, et
+l'historique de la commande le dit. L'API de pretix sans `mark_canceled` passe
+par le même chemin. Une vente déjà contrepassée ne l'est jamais deux fois : le
+bouton *Annuler la commande* de la page de commande annule avant le
+remboursement, qui trouve la ligne écrite ; l'option *Annuler la commande. Tous
+les billets…* de la fenêtre de remboursement, comme `mark_canceled` dans l'API,
+rembourse d'abord, et c'est l'annulation qui trouve la ligne écrite.
 
 **La réactivation.** Une commande annulée puis réactivée dans pretix revient
 *payée* si personne ne l'avait remboursée : une ligne `reactivation` défait
@@ -1430,6 +1447,19 @@ la commande propose la carte, et SumUp est redemandé (§5bis, *Une vente annul�
 depuis pretix*). Une fois passé, la vente quitte la liste des remboursements
 refusés de la page Ventes ; le remboursement échoué reste dans l'historique de
 la commande, comme pretix le garde.
+
+**Pourquoi SumUp refuse.** Le tableau de bord SumUp refuse le même
+remboursement sans dire pourquoi. Depuis la 0.22.1, le plugin garde la réponse
+de SumUp sur le remboursement échoué : son statut HTTP et ses propres mots,
+`409 · The transaction is not refundable in its current state` par exemple,
+jamais la clé d'API. Elle s'affiche sous le remboursement sur la page de
+commande, dans la colonne *Réponse de SumUp* de la page Ventes, et à la suite
+du message dans la fenêtre de remboursement de pretix. La caisse, elle, garde
+son bandeau : ce qu'il y a à faire ne dépend pas du motif.
+
+La demande de remboursement total porte un corps JSON vide, `{}`, comme le
+client officiel de SumUp (`sumup-go`) l'envoie ; jusqu'à la 0.22.0 elle n'en
+portait aucun.
 
 SumUp répond `201` à un remboursement qu'il accepte. Jusqu'à la 0.17.0, le
 plugin n'attendait que `200` ou `204` et annonçait donc `failed` pour un
