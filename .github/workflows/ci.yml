@@ -16,12 +16,21 @@
 # migrations switched off — the schema is built straight from the models — which
 # is what makes them fast. The integration job is where migrations, PostgreSQL
 # and the savepoint handling are exercised for real.
+#
+# publish-image.yml will not publish a commit until this workflow has passed on
+# it, in the run for its push to main, and it finds that run by this file's
+# name. Renaming the file, or dropping the push trigger, stops every release.
 name: CI
 
 on:
   push:
     branches: [main]
   pull_request:
+
+# Every job reads the tree and nothing else: the images built here are built to
+# be looked at, and pushed nowhere.
+permissions:
+  contents: read
 
 jobs:
   frontend:
