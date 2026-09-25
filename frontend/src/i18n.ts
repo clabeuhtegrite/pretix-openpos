@@ -250,6 +250,10 @@ export const MESSAGES = {
     "offline.contested": "{name} was let in offline, but the ticket was refused on sending: {reason}.",
     "offline.refused": "Refused by the server",
     "offline.dismissRefused": "I have dealt with these",
+    "offline.haltedDevice":
+      "The server is turning this till away: {detail} The sales waiting here stay here. If the till was revoked, pair it again on this event: they will then be sent, with no duplicates.",
+    "offline.haltedWait": "The server asked the till to wait: next try at {time}. Nothing is lost.",
+    "offline.haltedOther": "Sending has stopped, nothing is lost: {detail}",
     "offline.storageFull":
       "This device’s storage is full: it can no longer keep sales made with no network. Do not take money while offline, and tell whoever looks after the tills.",
     "offline.saleQueued": "{total} · kept on this till until the network is back",
@@ -379,6 +383,10 @@ export const MESSAGES = {
     "drawer.openWith": "Open with {amount}",
     "drawer.countHelp":
       "Count what is in the drawer. Once the count is recorded, the till sets it against what the drawer should hold.",
+    "drawer.queued.one":
+      "{n} cash sale made on this device has not reached the server yet ({amount}): the expected amount does not include it yet.",
+    "drawer.queued.other":
+      "{n} cash sales made on this device have not reached the server yet ({amount}): the expected amount does not include them yet.",
     "drawer.countRecord": "Record the count",
     "drawer.countAction": "Count the drawer",
     "drawer.counted": "Counted",
@@ -424,6 +432,8 @@ export const MESSAGES = {
     "drawer.amount": "Amount",
     "drawer.putIn": "Put in {amount}",
     "drawer.takeOut": "Take out {amount}",
+    "drawer.moveUnanswered":
+      "This was sent and the server never answered. Send it again: if it was recorded, it will not be recorded twice.",
     "drawer.bannerClosed": "The {name} drawer is closed: open it before taking cash.",
     "drawer.bannerStale": "The {name} drawer was left open since an earlier day: close it, then open tonight’s.",
     "count.how": "How to count",
@@ -680,6 +690,10 @@ export const MESSAGES = {
     "offline.contested": "{name} est entré hors ligne, mais le billet a été refusé à l’envoi : {reason}.",
     "offline.refused": "Refusé par le serveur",
     "offline.dismissRefused": "J’ai traité ces cas",
+    "offline.haltedDevice":
+      "Le serveur refuse cette caisse\u00a0: {detail} Les ventes en attente restent ici. Si elle a été révoquée, appairez-la de nouveau sur cet événement\u00a0: elles partiront alors, sans doublon.",
+    "offline.haltedWait": "Le serveur demande d’attendre\u00a0: nouvel essai à {time}. Rien n’est perdu.",
+    "offline.haltedOther": "L’envoi s’est arrêté, rien n’est perdu\u00a0: {detail}",
     "offline.storageFull":
       "La mémoire de cet appareil est pleine\u00a0: il ne peut plus garder de ventes faites hors ligne. N’encaissez pas hors ligne, et prévenez la personne qui s’occupe des caisses.",
     "offline.saleQueued": "{total} · conservée sur cette caisse jusqu’au retour du réseau",
@@ -809,6 +823,10 @@ export const MESSAGES = {
     "drawer.openWith": "Ouvrir avec {amount}",
     "drawer.countHelp":
       "Comptez ce qu’il y a dans la caisse. Une fois le comptage enregistré, la caisse le compare à ce qu’elle doit contenir.",
+    "drawer.queued.one":
+      "{n} vente en espèces faite sur cet appareil n’est pas encore arrivée au serveur ({amount})\u00a0: le montant attendu ne la compte pas encore.",
+    "drawer.queued.other":
+      "{n} ventes en espèces faites sur cet appareil ne sont pas encore arrivées au serveur ({amount})\u00a0: le montant attendu ne les compte pas encore.",
     "drawer.countRecord": "Enregistrer le comptage",
     "drawer.countAction": "Compter la caisse",
     "drawer.counted": "Compté",
@@ -854,6 +872,8 @@ export const MESSAGES = {
     "drawer.amount": "Montant",
     "drawer.putIn": "Entrer {amount}",
     "drawer.takeOut": "Sortir {amount}",
+    "drawer.moveUnanswered":
+      "Ce mouvement a été envoyé et le serveur n’a jamais répondu. Renvoyez-le\u00a0: s’il avait été enregistré, il ne le sera pas deux fois.",
     "drawer.bannerClosed": "La caisse {name} est fermée\u00a0: ouvrez-la avant d’encaisser des espèces.",
     "drawer.bannerStale":
       "La caisse {name} est restée ouverte depuis un autre jour\u00a0: fermez-la, puis ouvrez celle de ce soir.",

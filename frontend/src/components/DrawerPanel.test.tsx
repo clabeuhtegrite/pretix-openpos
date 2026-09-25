@@ -20,9 +20,10 @@ vi.mock("../api", async (importOriginal) => {
 
 import { ApiError } from "../api";
 import { denominationLabel } from "../drawer";
-import { t } from "../i18n";
+import { t, tn } from "../i18n";
 import { formatMoney } from "../money";
-import type { DrawerAnswer, DrawerCount, DrawerSession, DrawerState } from "../types";
+import { savePendingMovement, saveQueue } from "../storage";
+import type { DrawerAnswer, DrawerCount, DrawerSession, DrawerState, QueuedSale } from "../types";
 import DrawerPanel from "./DrawerPanel";
 
 /**
@@ -570,6 +571,242 @@ describe("an open drawer", () => {
 
     expect(await screen.findByText("Recomptez.")).toBeDefined();
     expect(await screen.findByRole("button", { name: t("drawer.countAction") })).toBeDefined();
+  });
+});
+
+describe("a movement the server never answered for", () => {
+  /**
+   * The money went, the answer did not. Sent again under a new key, a
+   * movement that did arrive is recorded a second time — money leaving the
+   * drawer twice on paper, and a count that comes out short by that much.
+   */
+  const takeOut = (cents: number) =>
+    button(t("drawer.takeOut", { amount: formatMoney(cents, "EUR") }));
+  const lost = () => new ApiError(0, "network");
+  const keyOf = (call: number) => drawerMovement.mock.calls[call][1].idempotency_key as string;
+
+  async function takeOutTwenty(user: ReturnType<typeof userEvent.setup>, reason = "Glaçons") {
+    await user.click(await screen.findByRole("button", { name: t("drawer.out") }));
+    await user.click(button("2"));
+    await user.click(button("00"));
+    await user.click(button("0"));
+    await user.type(screen.getByLabelText(t("drawer.reason")), reason);
+    await user.click(takeOut(2000));
+  }
+
+  beforeEach(() => {
+    drawer.mockResolvedValue(open);
+  });
+
+  it("goes again under the same key on a plain retry", async () => {
+    drawerMovement.mockRejectedValueOnce(lost()).mockResolvedValue(answer(open, { kind: "out" }));
+    const { user } = show();
+    await takeOutTwenty(user);
+    await waitFor(() => expect(drawerMovement).toHaveBeenCalledTimes(1));
+
+    await user.click(takeOut(2000));
+
+    await waitFor(() => expect(drawerMovement).toHaveBeenCalledTimes(2));
+    expect(keyOf(1)).toBe(keyOf(0));
+  });
+
+  it("says that sending it again is safe", async () => {
+    drawerMovement.mockRejectedValue(lost());
+    const { user } = show();
+    await takeOutTwenty(user);
+
+    expect(await screen.findByText(t("drawer.moveUnanswered"))).toBeDefined();
+  });
+
+  it("keeps its key when the reason is retouched before it goes again", async () => {
+    // If the first one did arrive, what comes back is the entry it made, with
+    // its first reason — and the drawer has lost 20 € once, not twice.
+    drawerMovement.mockRejectedValueOnce(lost()).mockResolvedValue(answer(open, { kind: "out" }));
+    const { user } = show();
+    await takeOutTwenty(user, "Glacons");
+    await waitFor(() => expect(drawerMovement).toHaveBeenCalledTimes(1));
+
+    await user.type(screen.getByLabelText(t("drawer.reason")), "!");
+    await user.click(takeOut(2000));
+
+    await waitFor(() => expect(drawerMovement).toHaveBeenCalledTimes(2));
+    expect(keyOf(1)).toBe(keyOf(0));
+    expect(drawerMovement.mock.calls[1][1].reason).toBe("Glacons!");
+  });
+
+  it("opens on it again, as it was, once the panel is opened again", async () => {
+    drawerMovement.mockRejectedValueOnce(lost());
+    const first = show();
+    await takeOutTwenty(first.user);
+    await waitFor(() => expect(drawerMovement).toHaveBeenCalledTimes(1));
+    // Closed, or the till reloaded, with the answer still missing.
+    first.unmount();
+
+    drawerMovement.mockResolvedValue(answer(open, { kind: "out" }));
+    const { user } = show();
+
+    expect(await screen.findByText(t("drawer.outHelp"))).toBeDefined();
+    expect(screen.getByText(t("drawer.moveUnanswered"))).toBeDefined();
+    expect((screen.getByLabelText(t("drawer.reason")) as HTMLInputElement).value).toBe("Glaçons");
+    await user.click(takeOut(2000));
+
+    await waitFor(() => expect(drawerMovement).toHaveBeenCalledTimes(2));
+    expect(keyOf(1)).toBe(keyOf(0));
+  });
+
+  it("comes back as it was when the cashier steps back and starts it again", async () => {
+    drawerMovement.mockRejectedValueOnce(lost()).mockResolvedValue(answer(open, { kind: "out" }));
+    const { user } = show();
+    await takeOutTwenty(user);
+    await waitFor(() => expect(drawerMovement).toHaveBeenCalledTimes(1));
+
+    await user.click(button(t("drawer.back")));
+    await user.click(button(t("drawer.out")));
+
+    expect((screen.getByLabelText(t("drawer.reason")) as HTMLInputElement).value).toBe("Glaçons");
+    await user.click(takeOut(2000));
+    await waitFor(() => expect(drawerMovement).toHaveBeenCalledTimes(2));
+    expect(keyOf(1)).toBe(keyOf(0));
+  });
+
+  it("keeps its key through a server that turned the device away or asked for a moment", async () => {
+    // Neither is an answer about the movement: nothing was recorded, and
+    // nothing is lost by sending it again as the same one.
+    drawerMovement
+      .mockRejectedValueOnce(new ApiError(429, "Too many requests."))
+      .mockRejectedValueOnce(new ApiError(403, "Unknown device."))
+      .mockResolvedValue(answer(open, { kind: "out" }));
+    const { user } = show();
+    await takeOutTwenty(user);
+    await waitFor(() => expect(drawerMovement).toHaveBeenCalledTimes(1));
+    await user.click(takeOut(2000));
+    await waitFor(() => expect(drawerMovement).toHaveBeenCalledTimes(2));
+    await user.click(takeOut(2000));
+
+    await waitFor(() => expect(drawerMovement).toHaveBeenCalledTimes(3));
+    expect(new Set([keyOf(0), keyOf(1), keyOf(2)]).size).toBe(1);
+  });
+
+  it("is let go once the server has answered for it", async () => {
+    drawerMovement.mockRejectedValueOnce(lost()).mockResolvedValue(answer(open, { kind: "out" }));
+    const first = show();
+    await takeOutTwenty(first.user);
+    await waitFor(() => expect(drawerMovement).toHaveBeenCalledTimes(1));
+    await first.user.click(takeOut(2000));
+    expect(await screen.findByText(t("drawer.float"))).toBeDefined();
+    first.unmount();
+
+    // Opened again: the overview, and the next movement is a new one.
+    const { user } = show();
+    expect(await screen.findByText(t("drawer.float"))).toBeDefined();
+    await takeOutTwenty(user);
+
+    await waitFor(() => expect(drawerMovement).toHaveBeenCalledTimes(3));
+    expect(keyOf(2)).not.toBe(keyOf(0));
+  });
+
+  it("is let go when the server refuses it, and the next try is a new one", async () => {
+    drawerMovement
+      .mockRejectedValueOnce(new ApiError(400, "Amount too large.", { amount: ["Amount too large."] }))
+      .mockResolvedValue(answer(open, { kind: "out" }));
+    const { user } = show();
+    await takeOutTwenty(user);
+
+    expect(await screen.findByText("Amount too large.")).toBeDefined();
+    expect(screen.queryByText(t("drawer.moveUnanswered"))).toBeNull();
+    await user.click(takeOut(2000));
+
+    await waitFor(() => expect(drawerMovement).toHaveBeenCalledTimes(2));
+    expect(keyOf(1)).not.toBe(keyOf(0));
+  });
+
+  it("does not lend its key to a movement the other way", async () => {
+    drawerMovement.mockRejectedValueOnce(lost()).mockResolvedValue(answer(open, { kind: "in" }));
+    const { user } = show();
+    await takeOutTwenty(user);
+    await waitFor(() => expect(drawerMovement).toHaveBeenCalledTimes(1));
+    await user.click(button(t("drawer.back")));
+
+    await user.click(button(t("drawer.in")));
+    expect((screen.getByLabelText(t("drawer.reason")) as HTMLInputElement).value).toBe("");
+    await user.type(screen.getByLabelText(t("drawer.reason")), "Monnaie");
+    await user.click(button("5"));
+    await user.click(button("00"));
+    await user.click(button(t("drawer.putIn", { amount: formatMoney(500, "EUR") })));
+
+    await waitFor(() => expect(drawerMovement).toHaveBeenCalledTimes(2));
+    expect(keyOf(1)).not.toBe(keyOf(0));
+  });
+
+  it("is not picked up on another event, nor after half an hour", async () => {
+    savePendingMovement({
+      serial: "TILL1", event: "other-night", kind: "out", amount: "20.00", reason: "Glaçons",
+      key: "k-other", at: new Date().toISOString(),
+    });
+    const { unmount } = show();
+    expect(await screen.findByText(t("drawer.float"))).toBeDefined();
+    unmount();
+
+    savePendingMovement({
+      serial: "TILL1", event: "festival", kind: "out", amount: "20.00", reason: "Glaçons",
+      key: "k-old", at: new Date(Date.now() - 31 * 60_000).toISOString(),
+    });
+    show();
+    expect(await screen.findByText(t("drawer.float"))).toBeDefined();
+    expect(screen.queryByText(t("drawer.moveUnanswered"))).toBeNull();
+  });
+});
+
+describe("cash sales still waiting on this device", () => {
+  /**
+   * The expected amount is the server's, and the server has not had these.
+   * The notes are in the drawer all the same, so a count made now comes out
+   * over by what they come to — unless somebody says so first.
+   */
+  function queued(id: string, over: Partial<QueuedSale> = {}): QueuedSale {
+    return {
+      kind: "sale", id, at: recently(), event: "festival",
+      positions: [{ item: 10, variation: null, count: 1, price: "4.50" }],
+      chargedTotal: "4.50", paymentType: "cash", cashGiven: "5.00", cashChange: "0.50",
+      cashier: "Ana", admits: false, label: "1× Bière", ...over,
+    };
+  }
+
+  beforeEach(() => {
+    drawer.mockResolvedValue(open);
+  });
+
+  it("are counted beside what the drawer should hold", async () => {
+    saveQueue([
+      queued("a"),
+      queued("b", { chargedTotal: "3.00" }),
+      // Neither is in this drawer: a card, and another event's sale.
+      queued("c", { paymentType: "card", cashGiven: null, cashChange: null }),
+      queued("d", { event: "other-night" }),
+    ]);
+    show();
+
+    expect(
+      await screen.findByText(tn("drawer.queued", 2, { amount: formatMoney(750, "EUR") })),
+    ).toBeDefined();
+  });
+
+  it("are said again on the count, before the notes are counted", async () => {
+    saveQueue([queued("a")]);
+    const { user } = show();
+    await user.click(await screen.findByRole("button", { name: t("drawer.countAction") }));
+
+    expect(screen.getByText(t("drawer.countHelp"))).toBeDefined();
+    expect(
+      screen.getByText(tn("drawer.queued", 1, { amount: formatMoney(450, "EUR") })),
+    ).toBeDefined();
+  });
+
+  it("go unmentioned when there are none", async () => {
+    show();
+
+    expect(await screen.findByText(t("drawer.float"))).toBeDefined();
+    expect(document.querySelector(".drawer-warn")).toBeNull();
   });
 });
 
