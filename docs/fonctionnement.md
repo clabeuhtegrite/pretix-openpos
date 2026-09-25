@@ -916,6 +916,44 @@ serveur vaut donc avoir + espèces reçues, si bien que le rendu calculé par le
 serveur est exactement celui que l'opérateur compte, et que le journal se lit
 comme ce qui s'est passé : un avoir imputé sur une vente neuve.
 
+**Cet écran ne se perd pas.** C'est le seul qui dise combien rendre. Un toucher
+à côté du panneau ne le ferme pas — sur un iPad en paysage, les bords assombris
+sont larges —, ni pendant qu'une annulation est en route, dont ce serait la
+seule chance de voir la réponse. Fermé quand même (geste retour, iOS qui
+recharge l'app), il revient à la prochaine ouverture de l'historique, jusqu'à
+ce que l'opérateur ait choisi l'une des deux issues, et au plus une demi-heure :
+au-delà, le client est parti, et l'historique reste là pour retrouver la vente.
+
+### Une annulation dont la réponse s'est perdue
+
+Une annulation porte une clé d'idempotence, comme une vente : si la réponse se
+perd après que le serveur a annulé, la redemande doit être reconnue comme la
+même annulation — et rendre son montant, son avoir et la correction — plutôt
+que comme une seconde, que le serveur refuserait. La clé est frappée au premier
+appui, **gardée sur l'appareil** (par caisse et par événement) et oubliée
+seulement quand le serveur a répondu, oui ou non. Réseau coupé, erreur 5xx,
+« trop de demandes » (429) : elle reste, et l'appui suivant renvoie la même,
+panneau refermé et app rechargée entre-temps compris. Elle vivait auparavant
+dans le panneau, qui l'emportait en se fermant.
+
+Si l'historique relu montre ensuite la vente « annulée » alors que la réponse
+n'est jamais arrivée, le détail le dit (« Cette caisse a envoyé l'annulation
+sans jamais recevoir la réponse ») et **Afficher l'annulation** la redemande
+sous la même clé : le serveur renvoie l'annulation faite, rien n'est annulé
+deux fois.
+
+Un serveur à jour répond d'ailleurs à une vente déjà annulée par l'annulation
+qui existe plutôt que par un refus :
+
+- **« Commande déjà annulée »**, avec le montant à rendre et les deux issues :
+  depuis cette caisse, on n'arrive là que par une réponse perdue, donc un
+  client pas encore remboursé ;
+- **« Annulée depuis le back-office pretix »** quand c'est le back-office qui
+  l'a fait : son remboursement se règle dans pretix, et rien n'est sorti ni ne
+  sort du tiroir de cette caisse pour elle (*Une vente annulée depuis pretix*,
+  plus bas). Pas de « Rendre 12,00 € » donc, seulement **Terminer** — et
+  **Corriger** remet les articles au panier sans avoir, à encaisser en entier.
+
 ### Ce que la caisse ne fait pas à votre place
 
 - **L'argent physique, tant qu'aucun lecteur n'est en jeu.** Espèces :

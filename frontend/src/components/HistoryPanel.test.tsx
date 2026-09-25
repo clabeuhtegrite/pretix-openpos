@@ -63,7 +63,7 @@ const cancelled: CancelResult = {
 function show(props: Partial<Parameters<typeof HistoryPanel>[0]> = {}) {
   const onReuse = vi.fn();
   const onClose = vi.fn();
-  const { container } = render(
+  const { container, unmount } = render(
     <HistoryPanel
       pairing={{
         token: "tok", organizer: "demo", event: "festival",
@@ -76,7 +76,7 @@ function show(props: Partial<Parameters<typeof HistoryPanel>[0]> = {}) {
       {...props}
     />,
   );
-  return { user: userEvent.setup(), container, onReuse, onClose };
+  return { user: userEvent.setup(), container, unmount, onReuse, onClose };
 }
 
 /** Open a journal entry's detail. */
@@ -310,12 +310,66 @@ describe("cancelling", () => {
     await open(user);
 
     await user.click(screen.getByRole("button", { name: t("history.cancel") }));
-    await screen.findByText("network");
+    // In words, not the transport's "network" in English on a French till.
+    await screen.findByText(t("error.offline"));
     await user.click(screen.getByRole("button", { name: t("history.cancel") }));
 
     await waitFor(() => expect(cancelSale).toHaveBeenCalledTimes(2));
     const [[, first], [, second]] = cancelSale.mock.calls;
     expect(second.idempotency_key).toBe(first.idempotency_key);
+  });
+
+  it("carries the same key after a server fault, and says what it was", async () => {
+    // A 502 is a proxy standing in for a pretix that may well have committed
+    // the cancellation before falling over. It used to read "ApiError: HTTP
+    // 502" and spend the key.
+    cancelSale.mockRejectedValueOnce(new ApiError(502, "HTTP 502"));
+    const { user } = show();
+    await open(user);
+
+    await user.click(screen.getByRole("button", { name: t("history.cancel") }));
+    await screen.findByText(t("error.server", { status: 502 }));
+    await user.click(screen.getByRole("button", { name: t("history.cancel") }));
+
+    await waitFor(() => expect(cancelSale).toHaveBeenCalledTimes(2));
+    const [[, first], [, second]] = cancelSale.mock.calls;
+    expect(second.idempotency_key).toBe(first.idempotency_key);
+  });
+
+  it("carries the same key when the server asked it to slow down", async () => {
+    // A 429 is turned away before anything is looked at, so nothing was
+    // spent: the next press is the same cancellation, not a second one.
+    cancelSale.mockRejectedValueOnce(new ApiError(429, "HTTP 429"));
+    const { user } = show();
+    await open(user);
+
+    await user.click(screen.getByRole("button", { name: t("history.cancel") }));
+    await screen.findByText(t("error.tooMany"));
+    await user.click(screen.getByRole("button", { name: t("history.cancel") }));
+
+    await waitFor(() => expect(cancelSale).toHaveBeenCalledTimes(2));
+    const [[, first], [, second]] = cancelSale.mock.calls;
+    expect(second.idempotency_key).toBe(first.idempotency_key);
+  });
+
+  it("carries the same key when the panel was closed in between", async () => {
+    // The key used to live in the panel: closed by a tap beside it, by the
+    // back gesture, by iOS reloading the app, it went with it — and the retry
+    // after a timeout was a new cancellation of a sale already reversed.
+    cancelSale.mockRejectedValueOnce(new ApiError(0, "network"));
+    const first = show();
+    await open(first.user);
+    await first.user.click(screen.getByRole("button", { name: t("history.cancel") }));
+    await screen.findByText(t("error.offline"));
+    first.unmount();
+
+    const second = show();
+    await open(second.user);
+    await second.user.click(screen.getByRole("button", { name: t("history.cancel") }));
+
+    await waitFor(() => expect(cancelSale).toHaveBeenCalledTimes(2));
+    const [[, before], [, after]] = cancelSale.mock.calls;
+    expect(after.idempotency_key).toBe(before.idempotency_key);
   });
 
   it("mints a new key once the server has answered", async () => {
@@ -369,6 +423,75 @@ describe("cancelling", () => {
 
     await screen.findByText(t("history.cancelled"));
     expect(screen.queryByText(/DEMO-2026/)).toBeNull();
+  });
+});
+
+describe("a cancellation whose answer never came", () => {
+  /** A first attempt that went through on the server, its answer lost on the way back. */
+  async function lose() {
+    cancelSale.mockRejectedValueOnce(new ApiError(0, "network"));
+    const first = show();
+    await open(first.user);
+    await first.user.click(screen.getByRole("button", { name: t("history.cancel") }));
+    await screen.findByText(t("error.offline"));
+    first.unmount();
+    // Read again, the journal now says what the server did.
+    history.mockResolvedValue({
+      device: "TILL1", results: [saleLine({ cancelled: true, can_cancel: false })], truncated: false,
+    });
+    return cancelSale.mock.calls[0][1].idempotency_key as string;
+  }
+
+  it("offers to ask again for it, under the same key", async () => {
+    // The sale reads "cancelled" and has no cancel button any more: without
+    // this, the amount to hand back and the correction were out of reach for
+    // good, although this very till had asked for them.
+    const key = await lose();
+    cancelSale.mockResolvedValueOnce({ ...cancelled, replayed: true });
+    const { user } = show();
+    await open(user);
+
+    expect(screen.getByText(t("history.unanswered"))).toBeDefined();
+    await user.click(screen.getByRole("button", { name: t("history.resume") }));
+
+    await screen.findByText(t("history.cancelled"));
+    expect(cancelSale).toHaveBeenCalledTimes(2);
+    expect(cancelSale.mock.calls[1][1].idempotency_key).toBe(key);
+    expect(
+      screen.getByRole("button", {
+        name: t("history.refundCashAndFinish", { total: formatMoney(1200, "EUR") }),
+      }),
+    ).toBeDefined();
+  });
+
+  it("shows the question under way, and takes no second press", async () => {
+    await lose();
+    let answer: (value: CancelResult) => void = () => {};
+    cancelSale.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+    const { user } = show();
+    await open(user);
+
+    await user.click(screen.getByRole("button", { name: t("history.resume") }));
+
+    const asking = screen.getByRole("button", { name: t("history.loading") });
+    expect(asking).toHaveProperty("disabled", true);
+    expect(asking.getAttribute("aria-busy")).toBe("true");
+    answer({ ...cancelled, replayed: true });
+    await screen.findByText(t("history.cancelled"));
+  });
+
+  it("offers nothing of the kind once the answer has come", async () => {
+    // Cancelled from here and answered, or cancelled from anywhere else: the
+    // journal says it is, and there is nothing this till is still owed.
+    history.mockResolvedValue({
+      device: "TILL1", results: [saleLine({ cancelled: true, can_cancel: false })], truncated: false,
+    });
+    const { user } = show();
+    await open(user);
+
+    expect(screen.getByText(t("history.alreadyCancelled"))).toBeDefined();
+    expect(screen.queryByText(t("history.unanswered"))).toBeNull();
+    expect(screen.queryByRole("button", { name: t("history.resume") })).toBeNull();
   });
 });
 
@@ -504,6 +627,103 @@ describe("after a cancellation", () => {
     await waitFor(() => expect(history).toHaveBeenCalled());
   });
 
+  it("shows the answer again when the panel is reopened before anyone acted on it", async () => {
+    // It is the one screen that says how much to hand back. The back gesture,
+    // or iOS reloading the app, used to take it away for good.
+    const first = show();
+    await cancel(first.user);
+    first.unmount();
+
+    show();
+
+    expect(screen.getByText(t("history.cancelled"))).toBeDefined();
+    expect(
+      screen.getByRole("button", {
+        name: t("history.refundCashAndFinish", { total: formatMoney(1200, "EUR") }),
+      }),
+    ).toBeDefined();
+  });
+
+  it("lets it go once the money has been handed back", async () => {
+    const first = show();
+    await cancel(first.user);
+    await first.user.click(
+      screen.getByRole("button", {
+        name: t("history.refundCashAndFinish", { total: formatMoney(1200, "EUR") }),
+      }),
+    );
+    first.unmount();
+
+    show();
+
+    expect(await screen.findByRole("button", { name: /POS01/ })).toBeDefined();
+    expect(screen.queryByText(t("history.cancelled"))).toBeNull();
+  });
+
+  it("lets it go once the order is being corrected", async () => {
+    const first = show();
+    await cancel(first.user);
+    await first.user.click(screen.getByRole("button", { name: t("history.correct") }));
+    first.unmount();
+
+    show();
+
+    expect(await screen.findByRole("button", { name: /POS01/ })).toBeDefined();
+    expect(screen.queryByText(t("history.cancelled"))).toBeNull();
+  });
+
+  describe("of a sale that had been cancelled before", () => {
+    it("says so, and still what to hand back", async () => {
+      // Cancelled from this till under a key it has since lost — the answer
+      // never reached the operator, so the money has not been handed back.
+      // The server now answers with that cancellation rather than a refusal.
+      cancelSale.mockResolvedValue({ ...cancelled, replayed: true, already_cancelled: true });
+      const { user, onReuse } = show();
+      await open(user);
+      await user.click(screen.getByRole("button", { name: t("history.cancel") }));
+
+      expect(await screen.findByText(t("history.alreadyCancelledTitle"))).toBeDefined();
+      expect(screen.queryByText(t("history.cancelled"))).toBeNull();
+      expect(
+        screen.getByRole("button", {
+          name: t("history.refundCashAndFinish", { total: formatMoney(1200, "EUR") }),
+        }),
+      ).toBeDefined();
+      await user.click(screen.getByRole("button", { name: t("history.correct") }));
+      expect(onReuse).toHaveBeenCalledWith(
+        cancelled.sale?.positions,
+        { amountCents: 1200, order: "POS01" },
+      );
+    });
+
+    it("says the back office did it, and asks nothing of this drawer", async () => {
+      // Nothing left this till's drawer for that cancellation and its refund
+      // is pretix' business: "give 12 € back" here would pay the customer a
+      // second time, from a drawer that is then short at the count.
+      cancelSale.mockResolvedValue({
+        ...cancelled, replayed: true, already_cancelled: true, by_back_office: true,
+      });
+      const { user, onReuse } = show();
+      await open(user);
+      await user.click(screen.getByRole("button", { name: t("history.cancel") }));
+
+      expect(await screen.findByText(t("history.backOfficeTitle"))).toBeDefined();
+      expect(screen.getByText(t("history.backOfficeRefund"))).toBeDefined();
+      expect(screen.queryByText(t("history.alreadyCancelledTitle"))).toBeNull();
+      expect(screen.getByRole("button", { name: t("history.finish") })).toBeDefined();
+      expect(
+        screen.queryByRole("button", {
+          name: t("history.refundCashAndFinish", { total: formatMoney(1200, "EUR") }),
+        }),
+      ).toBeNull();
+      // "Correcting settles the difference" is not true without a credit.
+      expect(screen.queryByText(t("history.correctHelp"))).toBeNull();
+
+      await user.click(screen.getByRole("button", { name: t("history.correct") }));
+      expect(onReuse).toHaveBeenCalledWith(cancelled.sale?.positions, null);
+    });
+  });
+
   it("offers no correction for a sale that had no lines to reuse", async () => {
     cancelSale.mockResolvedValue({ ...cancelled, sale: null });
     const { user } = show();
@@ -530,6 +750,37 @@ describe("getting back to the till", () => {
     await user.click(container.querySelector(".overlay") as HTMLElement);
 
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("stays open on a tap outside while it says what to hand back", async () => {
+    // On an iPad in landscape the dimmed sides are wide, and a stray touch
+    // there used to drop the amount and the correction together.
+    const { user, onClose, container } = show();
+    await open(user);
+    await user.click(screen.getByRole("button", { name: t("history.cancel") }));
+    await screen.findByText(t("history.cancelled"));
+
+    await user.click(container.querySelector(".overlay") as HTMLElement);
+
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByText(t("history.cancelled"))).toBeDefined();
+  });
+
+  it("stays open on a tap outside while a cancellation is on its way", async () => {
+    // Closing then was the one way to never see its answer.
+    let release: (value: CancelResult) => void = () => {};
+    cancelSale.mockImplementation(() => new Promise((resolve) => {
+      release = resolve;
+    }));
+    const { user, onClose, container } = show();
+    await open(user);
+    await user.click(screen.getByRole("button", { name: t("history.cancel") }));
+
+    await user.click(container.querySelector(".overlay") as HTMLElement);
+
+    expect(onClose).not.toHaveBeenCalled();
+    release(cancelled);
+    expect(await screen.findByText(t("history.cancelled"))).toBeDefined();
   });
 
   it("offers no close button while an entry is open", async () => {

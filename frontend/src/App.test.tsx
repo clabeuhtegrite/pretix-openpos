@@ -62,6 +62,7 @@ vi.mock("./components/QrScanner", () => ({
 
 import App from "./App";
 import { ApiError, deviceDescription } from "./api";
+import { cancellationKeys, loadCancellationResult, saveCancellationResult } from "./cancellation";
 import { markReachable, markUnreachable } from "./connectivity";
 import { t } from "./i18n";
 import { formatMoney } from "./money";
@@ -1494,6 +1495,30 @@ describe("the settings", () => {
 
     expect(screen.getByText(t("pairing.title"))).toBeDefined();
     expect(loadPairing()).toBeNull();
+    confirmed.mockRestore();
+  });
+
+  it("forgets the cancellations it was still waiting on when it is unpaired", async () => {
+    // Their keys and the answer left on screen are this pairing's: the next
+    // one is a new till, whose sale #12 is another sale.
+    cancellationKeys("TILL1:festival").for(12);
+    saveCancellationResult("TILL1:festival", {
+      cancellation: {
+        seq: 13, kind: "cancellation", datetime: "2026-08-16T22:02:00.000Z", order: "POS01",
+        total: "-12.00", payment_type: "cash", cashier: "", testmode: false, positions: [],
+        reason: "", cancels_seq: 12, cancelled: false, can_cancel: false,
+      },
+      sale: null, replayed: false, credit_note: null, refunded: true,
+    });
+    const confirmed = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const { user } = show();
+    await ready();
+
+    await user.click(screen.getByRole("button", { name: "settings" }));
+    await user.click(await screen.findByRole("button", { name: new RegExp(t("settings.unpair")) }));
+
+    expect(cancellationKeys("TILL1:festival").pending(12)).toBe(false);
+    expect(loadCancellationResult("TILL1:festival")).toBeNull();
     confirmed.mockRestore();
   });
 

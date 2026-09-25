@@ -502,6 +502,19 @@ export interface CancelResult {
    * older than 0.24.0.
    */
   card_refund?: "none" | "done" | "already" | "pending" | "failed";
+  /**
+   * The sale had been cancelled before this request, and this is that earlier
+   * cancellation handed back — sent by a server that answers a repeated
+   * cancellation with what it did rather than with a refusal. Absent from an
+   * older one, which answers 400.
+   */
+  already_cancelled?: boolean;
+  /**
+   * ...and it was pretix' back office that cancelled it, not a till. Its
+   * journal line is on no till, nothing left this one's drawer for it, and
+   * the refund is pretix' business.
+   */
+  by_back_office?: boolean;
 }
 
 /** One ticket of the guest list a till carries for a network dropout. */

@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api, ApiError, isRetryable } from "../api";
-import { cancellationKeys } from "../cancellation";
+import {
+  cancellationKeys, clearCancellationResult, loadCancellationResult, saveCancellationResult,
+} from "../cancellation";
+import { describeError } from "../errors";
 import { locale, t } from "../i18n";
 import { formatMoney, toCents } from "../money";
 import type { CancelResult, JournalLine, JournalPosition, Pairing } from "../types";
@@ -21,17 +24,13 @@ interface Props {
   currency: string;
   cashier: string;
   /**
-   * Put the lines of a cancelled sale back in the basket, ready to be corrected.
-   *
-   * The credited amount travels with them: the corrected order is settled
-   * against it rather than by handing the whole sale back across the counter.
-   */
-  /**
    * Put a cancelled sale's lines back in the basket to be corrected.
    *
    * `credit` is the money the till is still holding for the customer, which
-   * the corrected sale is settled against — and `null` when it is holding
-   * none, because a card reader has already sent it back to their card.
+   * the corrected sale is settled against rather than by handing the whole
+   * sale back across the counter — and `null` when it is holding none: a card
+   * reader has already sent it back to their card, or the sale was cancelled
+   * in pretix' back office, whose refund never goes through this drawer.
    */
   onReuse: (
     positions: JournalPosition[],
@@ -53,7 +52,21 @@ function lineLabel(position: JournalPosition): string {
     : position.item_name;
 }
 
+/**
+ * Whether the server may never have heard of a request that failed.
+ *
+ * A transport failure or a fault: we cannot know, and the next press has to
+ * carry the same key to find out. A 429 too — the server turned the request
+ * away before looking at it, so nothing was spent. Anything else is the
+ * server's answer, and final.
+ */
+function unanswered(error: unknown): boolean {
+  return isRetryable(error) || (error instanceof ApiError && error.status === 429);
+}
+
 export default function HistoryPanel({ pairing, currency, cashier, onReuse, onClose }: Props) {
+  /** This till on this event: what the keys and the kept answer belong to. */
+  const scope = `${pairing.serial}:${pairing.event}`;
   const [lines, setLines] = useState<JournalLine[] | null>(null);
   const [truncated, setTruncated] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -62,10 +75,16 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
   const [openSeq, setOpenSeq] = useState<number | null>(null);
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState<CancelResult | null>(null);
-  // One idempotency key per sale, kept across retries — see cancellation.ts for
-  // what goes wrong when it is minted per press instead.
-  const keys = useRef(cancellationKeys()).current;
+  /**
+   * The answer to a cancellation, until the operator has acted on it — and
+   * brought back when the panel is reopened before they had (see
+   * saveCancellationResult).
+   */
+  const [done, setDone] = useState<CancelResult | null>(() => loadCancellationResult(scope));
+  // One idempotency key per sale, kept across retries and on the device — see
+  // cancellation.ts for what goes wrong when it is minted per press, or kept
+  // only as long as the panel.
+  const keys = useRef(cancellationKeys(scope)).current;
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -75,7 +94,7 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
       setTruncated(data.truncated);
       setError(null);
     } catch (e) {
-      setError(e instanceof ApiError && e.isNetwork ? t("error.offline") : String(e));
+      setError(describeError(e));
     } finally {
       setLoading(false);
     }
@@ -103,22 +122,43 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
         reason: reason.trim(),
       });
       keys.settle(line.seq);
+      // Kept before it is shown: the next thing that happens may be a tap
+      // beside the panel or iOS reloading the app, and this is the only
+      // screen that says how much to hand back.
+      saveCancellationResult(scope, result);
       setDone(result);
       setReason("");
       await load();
     } catch (e) {
-      // A refusal is final, so the key has been spent; a network failure or a
-      // server fault means we still do not know, and the next press has to
-      // carry the same key to find out.
-      if (!isRetryable(e)) keys.settle(line.seq);
-      setError(e instanceof ApiError ? e.message : String(e));
+      // A refusal is final, so the key has been spent; a network failure, a
+      // server fault or a 429 means we still do not know, and the next press
+      // has to carry the same key to find out.
+      if (!unanswered(e)) keys.settle(line.seq);
+      setError(describeError(e));
     } finally {
       setBusy(false);
     }
   }
 
+  /** One of the two ways out has been taken: the answer is no longer owed. */
+  function acknowledge() {
+    clearCancellationResult(scope);
+    setDone(null);
+  }
+
+  /**
+   * A tap beside the panel closes it — except over an answer that says how
+   * much to hand back, or while a cancellation is on its way. Both used to be
+   * lost to a stray touch: the amount, the correction, and with the in-flight
+   * one, the only chance to see its answer.
+   */
+  function onBackdrop() {
+    if (done || busy) return;
+    onClose();
+  }
+
   return (
-    <div className="overlay overlay-top" onClick={onClose}>
+    <div className="overlay overlay-top" onClick={onBackdrop}>
       <div className="panel history-panel" onClick={(e) => e.stopPropagation()}>
         <h2>{t("history.title")}</h2>
 
@@ -137,9 +177,23 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
             const sentBack =
               done.card_refund === "done" || done.card_refund === "already" || waiting;
             const stuck = done.card_refund === "failed";
+            // Cancelled in pretix' back office: its journal line is on no till
+            // and nothing left this drawer for it, so this till owes nothing and
+            // holds nothing — whoever cancelled it there refunds it there. Told
+            // "give 12 € back", an operator would pay the customer a second
+            // time out of a drawer that never took the money back. Nothing in
+            // the answer says otherwise, so nothing here claims it.
+            const backOffice = done.by_back_office === true;
+            const nothingDue = sentBack || backOffice;
             return (
               <div className="history-done">
-                <div className="history-done-headline">{t("history.cancelled")}</div>
+                <div className="history-done-headline">
+                  {backOffice
+                    ? t("history.backOfficeTitle")
+                    : done.already_cancelled
+                      ? t("history.alreadyCancelledTitle")
+                      : t("history.cancelled")}
+                </div>
                 <div className="history-done-meta">
                   {t("history.cancelledMeta", {
                     order: done.sale?.order ?? "",
@@ -155,6 +209,9 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
                   <div className="history-done-meta">
                     {t(waiting ? "history.refundPending" : "history.refundedToCard")}
                   </div>
+                )}
+                {backOffice && (
+                  <div className="history-done-meta">{t("history.backOfficeRefund")}</div>
                 )}
                 {/* Loud, and not a line of small print: a cancellation that
                     looks complete while the money is still on the customer's
@@ -175,8 +232,9 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
                       onClick={() => {
                         onReuse(
                           done.sale!.positions,
-                          sentBack ? null : { amountCents: amount, order: done.sale!.order },
+                          nothingDue ? null : { amountCents: amount, order: done.sale!.order },
                         );
+                        acknowledge();
                         onClose();
                       }}
                     >
@@ -186,19 +244,19 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
                   <button
                     className="btn"
                     onClick={() => {
-                      setDone(null);
+                      acknowledge();
                       setOpenSeq(null);
                       void load();
                     }}
                   >
-                    {sentBack
+                    {nothingDue
                       ? t("history.finish")
                       : t(card ? "history.refundCardAndFinish" : "history.refundCashAndFinish", {
                           total: formatMoney(amount, currency),
                         })}
                   </button>
                 </div>
-                <div className="attendance-note">{t("history.correctHelp")}</div>
+                {!backOffice && <div className="attendance-note">{t("history.correctHelp")}</div>}
               </div>
             );
           })()
@@ -267,9 +325,29 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
                 </button>
               </>
             ) : (
-              <div className="attendance-note">
-                {selected.cancelled ? t("history.alreadyCancelled") : t("history.notCancellable")}
-              </div>
+              <>
+                <div className="attendance-note">
+                  {selected.cancelled ? t("history.alreadyCancelled") : t("history.notCancellable")}
+                </div>
+                {/* Cancelled by this till, whose answer never came back: the
+                    key is still on the device, and sending it again hands back
+                    that very cancellation — amount, credit note, correction —
+                    rather than cancelling anything a second time. */}
+                {selected.cancelled && keys.pending(selected.seq) && (
+                  <>
+                    <div className="attendance-note">{t("history.unanswered")}</div>
+                    <button
+                      className="btn primary"
+                      style={{ marginTop: 12 }}
+                      disabled={busy}
+                      aria-busy={busy || undefined}
+                      onClick={() => void cancel(selected)}
+                    >
+                      {busy ? t("history.loading") : t("history.resume")}
+                    </button>
+                  </>
+                )}
+              </>
             )}
           </>
         ) : (

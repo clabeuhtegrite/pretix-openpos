@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api, ApiError, errorCode, type PositionPayload } from "./api";
 import { basketFromJournal, customKey, refundKey, repriceCart } from "./basket";
+import { clearCancellations } from "./cancellation";
 import CheckinScreen from "./components/CheckinScreen";
 import CustomSalePanel from "./components/CustomSalePanel";
 import DoneScreen from "./components/DoneScreen";
@@ -584,6 +585,10 @@ export default function App() {
     clearBasket();
     // A device handed back is not one that keeps the event's guest list.
     forgetDoor();
+    // Nor the keys of cancellations it was waiting on, nor an answer still on
+    // its screen: they are this pairing's, and the next one is a new till
+    // whose sale #12 is another sale.
+    clearCancellations();
     setPairing(null);
     setLoadError(null);
     setConfig(null);
