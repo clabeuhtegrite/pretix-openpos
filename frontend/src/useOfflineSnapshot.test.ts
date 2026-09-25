@@ -8,7 +8,8 @@ vi.mock("./api", async (importOriginal) => {
   return { ...actual, api: { ...actual.api, offlineSnapshot } };
 });
 
-import { loadSnapshot, saveSnapshot } from "./storage";
+import { ApiError } from "./api";
+import { loadSnapshot, loadSnapshotPull, saveSnapshot, saveSnapshotPull } from "./storage";
 import type { OfflineSnapshot, Pairing } from "./types";
 import { SNAPSHOT_MIN_GAP_MS, SNAPSHOT_REFRESH_MS, useOfflineSnapshot } from "./useOfflineSnapshot";
 
@@ -152,6 +153,117 @@ describe("the guest list carried for a dropout", () => {
 
     await waitFor(() => expect(result.current?.list.id).toBe(8));
     expect(loadSnapshot()?.list.id).toBe(8);
+  });
+
+  it("is not pulled again by the next screen within the gap", async () => {
+    // A door stepping out to the grid to sell a ticket and straight back: the
+    // app's pull and the door screen's are the same list, and each used to
+    // pull the whole of it on arrival.
+    const door = renderHook(() => useOfflineSnapshot(pairing, 7, true));
+    await waitFor(() => expect(offlineSnapshot).toHaveBeenCalledOnce());
+    door.unmount();
+
+    for (let i = 0; i < 3; i++) {
+      renderHook(() => useOfflineSnapshot(pairing, 7, true)).unmount();
+      renderHook(() => useOfflineSnapshot(pairing, 7, true)).unmount();
+    }
+
+    expect(offlineSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it("holds the gap across a relaunch", () => {
+    // iOS reloads an app it has kept in the background; a pull made seconds
+    // before is still the list.
+    saveSnapshotPull({ event: "festival", list: 7, at: Date.now() - 10_000 });
+
+    renderHook(() => useOfflineSnapshot(pairing, 7, true));
+
+    expect(offlineSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("times the refresh from the last pull, whichever screen made it", async () => {
+    // Otherwise a door changing screen more often than every five minutes
+    // would only ever pull on arrival.
+    saveSnapshotPull({ event: "festival", list: 7, at: Date.now() - 40_000 });
+    renderHook(() => useOfflineSnapshot(pairing, 7, true));
+    expect(offlineSnapshot).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SNAPSHOT_REFRESH_MS - 41_000);
+    });
+    expect(offlineSnapshot).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1_000);
+    });
+
+    expect(offlineSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it("does not count a pull for another list, or another event", async () => {
+    saveSnapshotPull({ event: "festival", list: 8, at: Date.now() });
+    const first = renderHook(() => useOfflineSnapshot(pairing, 7, true));
+    await waitFor(() => expect(offlineSnapshot).toHaveBeenCalledOnce());
+    first.unmount();
+
+    saveSnapshotPull({ event: "gala", list: 7, at: Date.now() });
+    renderHook(() => useOfflineSnapshot(pairing, 7, true));
+
+    await waitFor(() => expect(offlineSnapshot).toHaveBeenCalledTimes(2));
+  });
+
+  it("is not put off for an hour by a clock set back", async () => {
+    saveSnapshotPull({ event: "festival", list: 7, at: Date.now() + 3_600_000 });
+    renderHook(() => useOfflineSnapshot(pairing, 7, true));
+    await waitFor(() => expect(offlineSnapshot).toHaveBeenCalledOnce());
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(SNAPSHOT_REFRESH_MS);
+    });
+
+    expect(offlineSnapshot).toHaveBeenCalledTimes(2);
+  });
+
+  it("is dropped the moment the server says this device is not a door", async () => {
+    // Every guest's name and ticket secret, on a device that has no business
+    // with the door any more.
+    saveSnapshot(guestList(7));
+    offlineSnapshot.mockRejectedValue(
+      new ApiError(403, "This device is not a door.", { code: "door_role_required" }),
+    );
+
+    const { result } = renderHook(() => useOfflineSnapshot(pairing, 7, true));
+
+    await waitFor(() => expect(result.current).toBeNull());
+    expect(loadSnapshot()).toBeNull();
+    expect(loadSnapshotPull()).toBeNull();
+  });
+
+  it("is kept for any other refusal", async () => {
+    saveSnapshot(guestList(7));
+    offlineSnapshot.mockRejectedValue(new ApiError(403, "Device revoked."));
+
+    const { result } = renderHook(() => useOfflineSnapshot(pairing, 7, true));
+    await waitFor(() => expect(offlineSnapshot).toHaveBeenCalled());
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    expect(result.current?.list.id).toBe(7);
+    expect(loadSnapshot()?.list.id).toBe(7);
+  });
+
+  it("does not drop a list on a refusal that arrives after it was stood down", async () => {
+    saveSnapshot(guestList(7));
+    let refuse!: (error: unknown) => void;
+    offlineSnapshot.mockReturnValue(new Promise((_, reject) => { refuse = reject; }));
+    const { unmount } = renderHook(() => useOfflineSnapshot(pairing, 7, true));
+    unmount();
+
+    await act(async () => {
+      refuse(new ApiError(403, "no", { code: "door_role_required" }));
+    });
+
+    expect(loadSnapshot()?.list.id).toBe(7);
   });
 
   it("drops an answer that arrives after it was stood down", async () => {

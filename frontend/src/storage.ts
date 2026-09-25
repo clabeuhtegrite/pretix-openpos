@@ -129,8 +129,50 @@ export function saveSnapshot(snapshot: OfflineSnapshot): void {
   }
 }
 
+const SNAPSHOT_PULL_KEY = "openpos.snapshotPull.v1";
+
+/**
+ * Forget the guest list, and when it was last asked for.
+ *
+ * Every name and every ticket secret of an event is not something a device
+ * keeps once it has no business with that event's door: unpaired, moved to
+ * another event, made a bar till, or told by the server that it is not a door.
+ */
 export function clearSnapshot(): void {
-  localStorage.removeItem(SNAPSHOT_KEY);
+  try {
+    localStorage.removeItem(SNAPSHOT_KEY);
+    localStorage.removeItem(SNAPSHOT_PULL_KEY);
+  } catch {
+    // Storage refused even this; nothing more can be done about it here.
+  }
+}
+
+/** When a pull of the guest list last set off, for which event and list. */
+export interface SnapshotPull {
+  event: string;
+  list: number;
+  at: number;
+}
+
+/**
+ * The last pull of the guest list, whoever made it.
+ *
+ * On disk rather than in the hook that pulls, because two screens pull —
+ * the app while the door is closed, the door while it is open — and a reload
+ * starts both from nothing: kept in each, a door stepping out to the grid and
+ * back pulled the whole list at every round trip.
+ */
+export function loadSnapshotPull(): SnapshotPull | null {
+  const saved = readJson<SnapshotPull | null>(SNAPSHOT_PULL_KEY, null);
+  return typeof saved?.at === "number" && typeof saved.list === "number" ? saved : null;
+}
+
+export function saveSnapshotPull(pull: SnapshotPull): void {
+  try {
+    localStorage.setItem(SNAPSHOT_PULL_KEY, JSON.stringify(pull));
+  } catch {
+    // The next screen pulls a little early; the list itself is unaffected.
+  }
 }
 
 export function loadPairing(): Pairing | null {

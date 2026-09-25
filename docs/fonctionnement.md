@@ -1063,7 +1063,7 @@ aller vérifier.
 |---|---|
 | Vendre | Oui, au tarif embarqué ; la vente part en file d'attente |
 | Rendre la monnaie | Oui, calculé localement |
-| Scanner un billet | Oui, contre la **liste embarquée** (`openpos/offline/`), chargée dès l'appairage pour la liste de la porte — pas seulement à l'ouverture du scan — et rafraîchie toutes les 5 min tant qu'il y a du réseau |
+| Scanner un billet | Oui, contre la **liste embarquée** (`openpos/offline/`), chargée dès l'appairage pour la liste de la porte — pas seulement à l'ouverture du scan — et rafraîchie toutes les 5 min tant qu'il y a du réseau. **Seulement sur un appareil qui a la porte** (rôle porte, ou sans rôle) : une caisse de bar ne la charge jamais, et efface celle qu'elle avait |
 | Redémarrer la caisse | Oui : catalogue et configuration du dernier chargement sont conservés par événement |
 | Historique, annulation, effectif | Non — ils demandent le serveur, et l'écran le dit |
 
@@ -1117,7 +1117,19 @@ tant que quelque chose attend. Une requête qui échoue aussitôt suivie d'une q
 passe ne se voit pas comme un retour du réseau : vérifié contre un vrai pretix,
 des scans restaient ainsi sur le téléphone, réseau revenu, jusqu'à la
 réouverture de l'app. Pour la même raison, la liste embarquée n'est pas
-rechargée plus d'une fois par minute sur un réseau qui va et vient.
+rechargée plus d'une fois par minute sur un réseau qui va et vient — ni à
+chaque aller-retour entre le scanner et la grille : l'heure du dernier
+chargement est gardée sur l'appareil, et le rafraîchissement des 5 min se
+compte depuis lui, quel que soit l'écran qui l'a fait. Un téléphone de porte
+qui vendait un billet et revenait au scan rechargeait toute la liste à chaque
+fois.
+
+**Qui garde la liste, et quand elle s'efface.** La liste embarquée, c'est le
+nom et le secret de chaque billet de l'événement. Elle n'est chargée que par un
+appareil qui a la porte, et elle est effacée dès qu'il ne l'a plus : au
+désappairage, au changement d'événement, quand le back-office lui donne le rôle
+caisse, et quand le serveur répond à sa demande `403` avec le code
+`door_role_required` (l'appareil n'est pas une porte).
 
 Une vente qui appartient à **un autre événement** — la caisse a changé
 d'événement avec une file non vide — n'est ni envoyée ici ni bloquante : elle est

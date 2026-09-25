@@ -3,8 +3,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   BASKET_KEEPS_FOR_MS, clearBasket, clearPairing, clearSnapshot, enqueue, loadBasket,
   loadCached, loadCashier, loadDoorScans, loadFailures, loadPairing, loadQueue, loadSnapshot,
-  loadUpdateAttempt, requestPersistence, saveBasket, saveCached, saveCashier, saveDoorScans,
-  saveFailures, savePairing, saveQueue, saveSnapshot, saveUpdateAttempt,
+  loadSnapshotPull, loadUpdateAttempt, requestPersistence, saveBasket, saveCached, saveCashier,
+  saveDoorScans, saveFailures, savePairing, saveQueue, saveSnapshot, saveSnapshotPull,
+  saveUpdateAttempt,
 } from "./storage";
 import { fillStorage } from "./test/setup";
 import type {
@@ -208,12 +209,44 @@ describe("the offline guest list", () => {
     expect(loadSnapshot()).toBeNull();
   });
 
-  it("goes away when the till is told to forget it", () => {
+  it("goes away when the till is told to forget it, with the time it was pulled", () => {
     saveSnapshot(snapshot);
+    saveSnapshotPull({ event: "festival", list: 7, at: 1 });
 
     clearSnapshot();
 
     expect(loadSnapshot()).toBeNull();
+    expect(loadSnapshotPull()).toBeNull();
+  });
+
+  it("does not let a storage that refuses even that stop the till", () => {
+    const removeItem = vi.spyOn(localStorage, "removeItem").mockImplementation(() => {
+      throw new Error("SecurityError");
+    });
+
+    expect(() => clearSnapshot()).not.toThrow();
+    removeItem.mockRestore();
+  });
+});
+
+describe("when the guest list was last pulled", () => {
+  it("survives a reload", () => {
+    saveSnapshotPull({ event: "festival", list: 7, at: 1234 });
+
+    expect(loadSnapshotPull()).toEqual({ event: "festival", list: 7, at: 1234 });
+  });
+
+  it("is nothing rather than garbage when what is on disk is not one", () => {
+    localStorage.setItem("openpos.snapshotPull.v1", JSON.stringify({ event: "festival" }));
+
+    expect(loadSnapshotPull()).toBeNull();
+  });
+
+  it("is simply not kept when storage is full", () => {
+    fillStorage();
+
+    expect(() => saveSnapshotPull({ event: "festival", list: 7, at: 1 })).not.toThrow();
+    expect(loadSnapshotPull()).toBeNull();
   });
 });
 

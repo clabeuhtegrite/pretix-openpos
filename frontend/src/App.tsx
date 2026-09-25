@@ -21,9 +21,9 @@ import { fromCents, toCents } from "./money";
 import { newNonce } from "./nonce";
 import { keepSoundReady, play, setSoundEnabled, soundEnabled } from "./sound";
 import {
-  clearBasket, clearPairing, enqueue, loadBasket, loadCached, loadCashier, loadFailures,
-  loadPairing, loadQueue, loadUpdateAttempt, queueRevocation, requestPersistence, saveBasket,
-  saveCached, saveCashier, savePairing, saveUpdateAttempt,
+  clearBasket, clearPairing, clearSnapshot, enqueue, loadBasket, loadCached, loadCashier,
+  loadFailures, loadPairing, loadQueue, loadUpdateAttempt, queueRevocation, requestPersistence,
+  saveBasket, saveCached, saveCashier, savePairing, saveUpdateAttempt,
 } from "./storage";
 import { useConnectivity } from "./connectivity";
 import { drainQueue } from "./sync";
@@ -282,8 +282,18 @@ export default function App() {
   // The guest list for a dropout, fetched from the moment the till is paired
   // rather than the first time somebody opens the scanner. The door screen
   // fetches for the list on screen while it is open, and this stands down for
-  // that time, so the two never run side by side.
-  useOfflineSnapshot(pairing, doorList, online && !checkinOpen);
+  // that time, so the two never run side by side. Only on a device that can
+  // open the door at all: a bar till used to download every guest's name and
+  // ticket secret every five minutes, for a door it has no button for.
+  useOfflineSnapshot(pairing, doorList, online && !checkinOpen && doorReachable);
+
+  // ...and a device that has stopped being a door forgets what it carried for
+  // one. Keyed on the role rather than on every config: the refresh brings a
+  // new config every minute, and the answer only matters when it changes.
+  const roleKnown = config !== null;
+  useEffect(() => {
+    if (roleKnown && !doorReachable) clearSnapshot();
+  }, [roleKnown, doorReachable]);
 
   // A ref, not the state above: the automatic drain and a tap on "send now" can
   // land in the same tick, and a state flag would not have flipped yet. The
@@ -540,6 +550,8 @@ export default function App() {
     if (credit && !window.confirm(t("settings.eventCredit", { order: credit.order }))) return;
     const next = { ...pairing, event: slug };
     savePairing(next);
+    // The guest list is the event being left's: nothing to scan against here.
+    clearSnapshot();
     setCart([]);
     setCredit(null);
     setDoorListId(null);
@@ -558,6 +570,8 @@ export default function App() {
     if (pairing) queueRevocation(pairing.token);
     clearPairing();
     clearBasket();
+    // A device handed back is not one that keeps the event's guest list.
+    clearSnapshot();
     setPairing(null);
     setLoadError(null);
     setConfig(null);
