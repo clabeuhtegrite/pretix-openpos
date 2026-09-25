@@ -126,7 +126,7 @@ const catalog: Catalog = {
 
 function sold(overrides: Partial<SaleResult> = {}): SaleResult {
   return {
-    order: { code: "POS01", total: "3.00", url: null },
+    order: { code: "POS01", total: "3.00" },
     journal_seq: 1,
     payment_type: "cash",
     cash_given: null,
@@ -878,7 +878,7 @@ describe("the two buttons that are not products", () => {
     apiMock.config.mockResolvedValue(withExtras());
     apiMock.checkout.mockResolvedValue(
       sold({
-        order: { code: "", total: "0.00", url: null },
+        order: { code: "", total: "0.00" },
         deposit_refund: "2.00",
         net_total: "-2.00",
       }),

@@ -17,7 +17,7 @@ import DoneScreen from "./DoneScreen";
 
 function sale(overrides: Partial<SaleResult> = {}): SaleResult {
   return {
-    order: { code: "POS01", total: "10.00", url: null },
+    order: { code: "POS01", total: "10.00" },
     journal_seq: 12,
     payment_type: "cash",
     cash_given: null,
@@ -73,7 +73,7 @@ describe("what it says", () => {
   it("says a queued sale is queued instead of showing an order code", () => {
     // There is no order yet. Printing one would be a lie the cashier could
     // read out to a customer.
-    show({ offline: true, order: { code: "", total: "10.00", url: null } });
+    show({ offline: true, order: { code: "", total: "10.00" } });
 
     expect(screen.queryByText(/POS01/)).toBeNull();
     expect(screen.getByText(/kept on this till/)).toBeDefined();
@@ -182,7 +182,7 @@ describe("moving on by hand", () => {
 describe("a deposit handed back", () => {
   it("names the amount to count out when nothing was sold", () => {
     show({
-      order: { code: "", total: "0.00", url: null },
+      order: { code: "", total: "0.00" },
       deposit_refund: "3.00",
       net_total: "-3.00",
       checked_in: 0,
@@ -194,7 +194,7 @@ describe("a deposit handed back", () => {
 
   it("says a deposit was returned rather than that a sale was recorded", () => {
     show({
-      order: { code: "", total: "0.00", url: null },
+      order: { code: "", total: "0.00" },
       deposit_refund: "3.00",
       net_total: "-3.00",
       checked_in: 0,
@@ -207,7 +207,7 @@ describe("a deposit handed back", () => {
   it("waits for the operator, because money is still owed", () => {
     vi.useFakeTimers();
     const { onDismiss } = show({
-      order: { code: "", total: "0.00", url: null },
+      order: { code: "", total: "0.00" },
       deposit_refund: "3.00",
       net_total: "-3.00",
       checked_in: 0,
@@ -224,7 +224,7 @@ describe("a deposit handed back", () => {
     // Headline, amount, and a line repeating both is noise on the one screen
     // whose job is to be read at a glance.
     show({
-      order: { code: "", total: "0.00", url: null },
+      order: { code: "", total: "0.00" },
       deposit_refund: "3.00",
       net_total: "-3.00",
       checked_in: 0,
@@ -239,7 +239,7 @@ describe("a deposit handed back", () => {
     // The figures above are already net of it, and nothing else on the screen
     // would say it happened.
     show({
-      order: { code: "POS01", total: "12.00", url: null },
+      order: { code: "POS01", total: "12.00" },
       deposit_refund: "3.00",
       net_total: "9.00",
     });

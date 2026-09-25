@@ -309,7 +309,7 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     if (q.get("checkout") === "fail")
       return json({ detail: "harness : le serveur refuse d’enregistrer cette vente." }, 400);
     return json({
-      order: { code: "POS4L", total: "12.50", url: null },
+      order: { code: "POS4L", total: "12.50" },
       journal_seq: 42,
       payment_type: "cash",
       cash_given: "20.00",

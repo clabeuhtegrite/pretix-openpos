@@ -228,6 +228,8 @@ export const MESSAGES = {
     "offline.contested": "{name} was let in offline, but the ticket was refused on sending: {reason}.",
     "offline.refused": "Refused by the server",
     "offline.dismissRefused": "I have dealt with these",
+    "offline.storageFull":
+      "This device’s storage is full: it can no longer keep sales made with no network. Do not take money while offline, and tell whoever looks after the tills.",
     "offline.saleQueued": "{total} · kept on this till until the network is back",
     "offline.queueFailed": "This till could not store the sale. Do not take the money.",
     "offline.scanning": "Offline — checking against {n} tickets held on this till",
@@ -634,6 +636,8 @@ export const MESSAGES = {
     "offline.contested": "{name} est entré hors ligne, mais le billet a été refusé à l’envoi : {reason}.",
     "offline.refused": "Refusé par le serveur",
     "offline.dismissRefused": "J’ai traité ces cas",
+    "offline.storageFull":
+      "La mémoire de cet appareil est pleine\u00a0: il ne peut plus garder de ventes faites hors ligne. N’encaissez pas hors ligne, et prévenez la personne qui s’occupe des caisses.",
     "offline.saleQueued": "{total} · conservée sur cette caisse jusqu’au retour du réseau",
     "offline.queueFailed": "La caisse n’a pas pu enregistrer la vente. N’encaissez pas.",
     "offline.scanning": "Hors ligne — vérification sur les {n} billets embarqués",

@@ -735,7 +735,7 @@ export default function App() {
     // Shaped like a server answer so every screen downstream stays unchanged;
     // what it does not have is an order code, because no order exists yet.
     return {
-      order: { code: "", total: fromCents(Math.max(soldCents, 0)), url: null },
+      order: { code: "", total: fromCents(Math.max(soldCents, 0)) },
       journal_seq: 0,
       payment_type: paymentType,
       cash_given: cashGiven,
