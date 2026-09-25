@@ -79,10 +79,20 @@ def openpos_sumup_reconcile(sender, **kwargs):
     minute and every hour. This asks SumUp at most every five minutes of it.
     See :mod:`.reconcile` for what is compared, and why nothing it does can
     send money twice; the Sales page says when it last did.
-    """
-    from .reconcile import reconcile_all
 
-    reconcile_all()
+    A failure is logged here, with the marker an alert looks for, and then
+    raised again, so that what surrounds the task still sees it for what it
+    is: ``minimum_interval`` records the run as an error rather than a
+    success, and pretix' ``runperiodic`` prints its own line for it — before
+    carrying on and exiting 0, which is why the marker is needed at all.
+    """
+    from .reconcile import describe, log_failure, reconcile_all
+
+    try:
+        reconcile_all()
+    except Exception as exc:
+        log_failure("reconcile", describe(exc), exc_info=True)
+        raise
 
 
 @receiver(nav_event, dispatch_uid="openpos_nav_event")

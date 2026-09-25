@@ -960,7 +960,7 @@ class CompareWithSumUpView(EventPermissionRequiredMixin, View):
     permission = "event.orders:write"
 
     def post(self, request, *args, **kwargs):
-        from .reconcile import reconcile_organizer
+        from .reconcile import describe, log_failure, reconcile_organizer
         from .sumup import SumUpAccount
 
         account = SumUpAccount(request.organizer)
@@ -969,8 +969,15 @@ class CompareWithSumUpView(EventPermissionRequiredMixin, View):
         else:
             try:
                 done = reconcile_organizer(request.organizer, account, event=request.event)
-            except Exception:
-                logger.exception("Open POS could not compare %s with SumUp", request.event.slug)
+            except Exception as exc:
+                # The periodic task's own work, run early: when it crashes here
+                # it is broken there too, so it is said the same way, for the
+                # same alert — with its own step, since somebody was watching.
+                log_failure(
+                    "compare_now",
+                    f"event {request.organizer.slug}/{request.event.slug}: {describe(exc)}",
+                    exc_info=True,
+                )
                 done = {"crashed": True}
             if done.get("crashed") or done.get("error"):
                 messages.error(request, comparison_summary(done))

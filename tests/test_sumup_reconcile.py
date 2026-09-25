@@ -1069,3 +1069,181 @@ def test_compare_now_needs_sumup(backoffice, event):
 def test_compare_now_is_for_those_who_may_change_orders(reader, event, sumup):
     assert reader.post(compare_url(event)).status_code == 403
     assert sumup.calls == []
+
+
+# -- what the alert reads ---------------------------------------------------------
+#
+# pretix' runperiodic prints what a periodic task raises and exits 0, so a pass
+# that fails every five minutes shows nowhere but in the logs, while refunds a
+# customer is owed wait on it. Every failure of this work is one ERROR line
+# starting with the same words, which the alert on the cluster looks for; each
+# test below breaks one part of the work and reads the line it leaves.
+
+MARKER = "Open POS periodic task failed: "
+
+
+def failures(caplog):
+    """The marker lines logged, as (step, what it failed on, whether a traceback follows)."""
+    lines = []
+    for record in caplog.records:
+        message = record.getMessage()
+        if message.startswith(MARKER):
+            # What the alert keys on besides the words: the level, and a
+            # logger name that a pretix LOGGING config would print.
+            assert record.levelname == "ERROR"
+            assert record.name == "pretix_openpos.reconcile"
+            assert "\n" not in message
+            step, detail = message[len(MARKER):].split(": ", 1)
+            lines.append((step, detail, bool(record.exc_info)))
+    return lines
+
+
+def boom(*args, **kwargs):
+    raise RuntimeError("boom")
+
+
+@pytest.mark.django_db
+def test_the_periodic_task_failing_whole_is_logged_and_still_raised(monkeypatch, caplog):
+    from io import StringIO
+
+    from pretix_openpos.signals import openpos_sumup_reconcile
+
+    monkeypatch.setattr(reconcile, "reconcile_all", boom)
+    printed = StringIO()
+
+    call_command(
+        "runperiodic", tasks="pretix_openpos.signals.openpos_sumup_reconcile",
+        stdout=printed, stderr=StringIO(),
+    )
+
+    assert failures(caplog) == [("reconcile", "RuntimeError: boom", True)]
+    # Raised on, so that pretix still says it too, in its own words.
+    assert "ERROR pretix_openpos.signals.openpos_sumup_reconcile: boom" in printed.getvalue()
+    with pytest.raises(RuntimeError):
+        openpos_sumup_reconcile(sender=None)
+
+
+@pytest.mark.django_db
+def test_an_organizer_that_cannot_be_compared_is_logged_for_the_alert(
+    till, event, ticket, reader_till, sumup, monkeypatch, caplog
+):
+    card_sale(till, sumup, [{"item": ticket.pk, "count": 1}])
+    monkeypatch.setattr(reconcile, "reconcile_organizer", boom)
+
+    reconcile_all()
+
+    assert failures(caplog) == [("compare_organizer", "organizer asso: RuntimeError: boom", True)]
+
+
+@pytest.mark.django_db
+def test_a_history_sumup_will_not_give_is_logged_for_the_alert(
+    till, event, ticket, reader_till, sumup, caplog
+):
+    """A key revoked in SumUp's dashboard fails every pass from then on."""
+    card_sale(till, sumup, [{"item": ticket.pk, "count": 1}])
+    sumup.next_response = FakeResponse(401, {"message": "invalid token"})
+
+    reconcile_all()
+
+    [(step, detail, traceback)] = failures(caplog)
+    assert (step, traceback) == ("read_history", False)
+    assert detail.startswith("organizer asso: unauthorized: ")
+    assert "invalid token" in detail
+    assert "sup_sk_test" not in caplog.text
+
+
+@pytest.mark.django_db
+def test_a_payment_that_cannot_be_brought_in_is_logged_for_the_alert(
+    till, event, ticket, reader_till, sumup, monkeypatch, caplog
+):
+    card_sale(till, sumup, [{"item": ticket.pk, "count": 1}])
+    sumup.give_back("tx_1")
+    monkeypatch.setattr(reconcile, "absorb", boom)
+
+    reconcile_all()
+
+    assert failures(caplog) == [("absorb_transaction", "transaction tx_1: RuntimeError: boom", True)]
+
+
+@pytest.mark.django_db
+def test_an_order_left_uncancelled_is_logged_for_the_alert(
+    till, event, ticket, reader_till, sumup, monkeypatch, caplog
+):
+    """Until somebody acts, the tickets of an order given back in full still let in."""
+    from pretix.base.services import orders
+
+    def refuse(*args, **kwargs):
+        raise orders.OrderError("Nope.")
+
+    monkeypatch.setattr(orders, "cancel_order", refuse)
+    sale = card_sale(till, sumup, [{"item": ticket.pk, "count": 1}])
+    sumup.give_back("tx_1")
+
+    reconcile_all()
+
+    code = sale["order"]["code"]
+    assert failures(caplog) == [("cancel_order", f"order {code}: OrderError: Nope.", False)]
+
+
+@pytest.mark.django_db
+def test_a_refund_that_cannot_be_asked_again_is_logged_for_the_alert(
+    till, event, ticket, reader_till, sumup, monkeypatch, caplog
+):
+    _sale, order, _response = waiting_sale(till, sumup, event, ticket)
+    monkeypatch.setattr(reconcile, "_ask_again", boom)
+
+    reconcile_all()
+
+    refund = order.refunds.get()
+    assert failures(caplog) == [
+        ("ask_again_refund", f"refund {refund.full_id}: RuntimeError: boom", True)
+    ]
+
+
+@pytest.mark.django_db
+def test_a_refund_given_up_on_is_logged_for_the_alert(
+    till, event, ticket, reader_till, sumup, caplog
+):
+    """The end of the retries: money still owed, on an order page nobody opens."""
+    _sale, order, _response = waiting_sale(till, sumup, event, ticket)
+    refund = order.refunds.get()
+    refund.info_data = {
+        **refund.info_data, PENDING_SINCE: (now() - timedelta(days=4)).isoformat()
+    }
+    refund.save(update_fields=["info"])
+
+    reconcile_all()
+
+    assert failures(caplog) == [
+        ("refund_given_up", f"refund {refund.full_id}: SumUp answered: {NOT_YET}", False)
+    ]
+
+
+@pytest.mark.django_db
+def test_compare_now_crashing_is_logged_for_the_alert(
+    backoffice, till, event, ticket, reader_till, sumup, monkeypatch, caplog
+):
+    card_sale(till, sumup, [{"item": ticket.pk, "count": 1}])
+    monkeypatch.setattr(reconcile, "reconcile_organizer", boom)
+
+    backoffice.post(compare_url(event))
+
+    assert failures(caplog) == [
+        ("compare_now", f"event asso/{event.slug}: RuntimeError: boom", True)
+    ]
+
+
+@pytest.mark.django_db
+def test_a_pass_with_nothing_wrong_logs_no_failure(till, event, ticket, reader_till, sumup, caplog):
+    card_sale(till, sumup, [{"item": ticket.pk, "count": 1}])
+    sumup.give_back("tx_1")
+
+    reconcile_all()
+
+    assert failures(caplog) == []
+
+
+def test_a_failure_several_lines_long_stays_on_the_marker_s_line(caplog):
+    reconcile.log_failure("read_history", 'organizer asso: refused: {\n  "message": "no"\n}')
+
+    assert failures(caplog) == [("read_history", 'organizer asso: refused: { "message": "no" }', False)]
