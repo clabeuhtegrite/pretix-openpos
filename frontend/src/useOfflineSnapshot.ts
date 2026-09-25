@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 
-import { api } from "./api";
-import { loadSnapshot, saveSnapshot } from "./storage";
+import { api, errorCode } from "./api";
+import { clearSnapshot, loadSnapshot, loadSnapshotPull, saveSnapshot, saveSnapshotPull } from "./storage";
 import type { OfflineSnapshot, Pairing } from "./types";
 
 /**
@@ -22,6 +22,11 @@ export const SNAPSHOT_REFRESH_MS = 300_000;
  * pretix, its head count answering — that alternates as fast as the requests
  * go. Tried against a real pretix, a door phone pulled the whole guest list
  * fifty times in two seconds; on the night, each pull is every ticket sold.
+ *
+ * The same holds between screens: a door stepping out to the grid to sell a
+ * ticket and back is two screens taking turns, and each used to pull on
+ * arrival. The last pull is kept on the device (storage.ts), so the gap holds
+ * across both, and across a reload.
  */
 export const SNAPSHOT_MIN_GAP_MS = 60_000;
 
@@ -39,7 +44,16 @@ export const SNAPSHOT_MIN_GAP_MS = 60_000;
  * network — and a phone that lost the wifi before that moment had no guest
  * list at all, so its door stayed shut for the rest of the dropout. The door
  * screen runs it for the list actually on screen while it is open, and the app
- * stands down for that time, so the two never fetch side by side.
+ * stands down for that time, so the two never fetch side by side. The app
+ * only runs it on a device whose role includes the door: a bar till has no
+ * business carrying every guest's name and ticket secret.
+ *
+ * The refresh is timed from the last pull, whichever screen made it, rather
+ * than from the moment this one appeared — otherwise a door that changes
+ * screen more often than every five minutes would only ever pull on arrival.
+ *
+ * A server that answers `door_role_required` has taken the door away from this
+ * device: what it holds is dropped, not kept "in case".
  */
 export function useOfflineSnapshot(
   pairing: Pairing | null,
@@ -47,14 +61,21 @@ export function useOfflineSnapshot(
   active: boolean,
 ): OfflineSnapshot | null {
   const [snapshot, setSnapshot] = useState<OfflineSnapshot | null>(loadSnapshot);
-  /** When a pull for which list last set off, whatever came of it. */
-  const pulledRef = useRef<{ listId: number; at: number } | null>(null);
 
   useEffect(() => {
     if (!pairing || !listId || !active) return;
+    const event = pairing.event;
     let cancelled = false;
+    let timer = 0;
+
+    /** When this list was last asked for, by any screen, if it was. */
+    const lastPull = (): number | null => {
+      const last = loadSnapshotPull();
+      return last && last.event === event && last.list === listId ? last.at : null;
+    };
+
     const pull = () => {
-      pulledRef.current = { listId, at: Date.now() };
+      saveSnapshotPull({ event, list: listId, at: Date.now() });
       api
         .offlineSnapshot(pairing, listId)
         .then((data) => {
@@ -62,16 +83,35 @@ export function useOfflineSnapshot(
           saveSnapshot(data);
           setSnapshot(data);
         })
-        .catch(() => {
-          // A stale snapshot beats none; the previous one stays.
+        .catch((error: unknown) => {
+          if (cancelled) return;
+          if (errorCode(error) === "door_role_required") {
+            clearSnapshot();
+            setSnapshot(null);
+          }
+          // Anything else: a stale snapshot beats none, and the previous one
+          // stays.
         });
     };
-    const last = pulledRef.current;
-    if (!last || last.listId !== listId || Date.now() - last.at >= SNAPSHOT_MIN_GAP_MS) pull();
-    const timer = window.setInterval(pull, SNAPSHOT_REFRESH_MS);
+
+    const schedule = () => {
+      const since = Date.now() - (lastPull() ?? Date.now());
+      // Clamped both ways: a clock set back must not push the next pull an
+      // hour out, nor one set forward make it immediate forever.
+      const wait = Math.min(SNAPSHOT_REFRESH_MS, Math.max(0, SNAPSHOT_REFRESH_MS - since));
+      timer = window.setTimeout(() => {
+        pull();
+        schedule();
+      }, wait);
+    };
+
+    const last = lastPull();
+    const since = last === null ? Infinity : Date.now() - last;
+    if (since < 0 || since >= SNAPSHOT_MIN_GAP_MS) pull();
+    schedule();
     return () => {
       cancelled = true;
-      window.clearInterval(timer);
+      window.clearTimeout(timer);
     };
   }, [pairing, listId, active]);
 

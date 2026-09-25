@@ -1,13 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  BASKET_KEEPS_FOR_MS, ORPHAN_KEEPS_FOR_MS, PAYMENT_RESUMES_WITHIN_MS, addFailure, addOrphan,
-  clearBasket, clearPairing, clearPendingMovement, clearPendingPayment, clearSnapshot, dropOrphan,
-  enqueue, isResumable, loadBasket, loadCached, loadCashier, loadDoorScans, loadFailures,
-  loadLastSync, loadOrphans, loadPairing, loadPendingMovement, loadPendingPayment, loadQueue,
-  loadSnapshot, loadUpdateAttempt, requestPersistence, saveBasket, saveCached, saveCashier,
-  saveDoorScans, saveFailures, saveLastSync, savePairing, savePendingMovement,
-  savePendingPayment, saveQueue, saveSnapshot, saveUpdateAttempt, updateOrphan,
+  BASKET_KEEPS_FOR_MS, DOOR_RESUME_KEEPS_FOR_MS, ORPHAN_KEEPS_FOR_MS, PAYMENT_RESUMES_WITHIN_MS,
+  addFailure, addOrphan, clearAdmissions, clearBasket, clearDoorLists, clearDoorResume,
+  clearPairing, clearPendingMovement, clearPendingPayment, clearSnapshot, dropOrphan, enqueue,
+  isResumable, loadAdmissions, loadBasket, loadCached, loadCashier, loadDoorList, loadDoorResume,
+  loadDoorScans, loadFailures, loadLastSync, loadOrphans, loadPairing, loadPendingMovement,
+  loadPendingPayment, loadQueue, loadSnapshot, loadSnapshotPull, loadUpdateAttempt,
+  requestPersistence, saveAdmissions, saveBasket, saveCached, saveCashier, saveDoorList,
+  saveDoorResume, saveDoorScans, saveFailures, saveLastSync, savePairing, savePendingMovement,
+  savePendingPayment, saveQueue, saveSnapshot, saveSnapshotPull, saveUpdateAttempt, updateOrphan,
 } from "./storage";
 import { fillStorage } from "./test/setup";
 import type {
@@ -437,6 +439,88 @@ describe("the door's last count", () => {
   });
 });
 
+describe("the list the door scans on", () => {
+  it("survives a relaunch, per event", () => {
+    saveDoorList("festival", 8);
+
+    expect(loadDoorList("festival")).toBe(8);
+    expect(loadDoorList("gala")).toBeNull();
+  });
+
+  it("is ignored when it is not a list id", () => {
+    localStorage.setItem("openpos.doorList.v1.festival", JSON.stringify("8"));
+    expect(loadDoorList("festival")).toBeNull();
+
+    localStorage.setItem("openpos.doorList.v1.festival", "8.5");
+    expect(loadDoorList("festival")).toBeNull();
+  });
+
+  it("is forgotten for every event at once when the device is handed back", () => {
+    saveDoorList("festival", 8);
+    saveDoorList("gala", 3);
+    localStorage.setItem("openpos.pairing.v1", "kept");
+
+    clearDoorLists();
+
+    expect(loadDoorList("festival")).toBeNull();
+    expect(loadDoorList("gala")).toBeNull();
+    expect(localStorage.getItem("openpos.pairing.v1")).toBe("kept");
+  });
+
+  it("costs only the choice after a relaunch when it cannot be written or listed", () => {
+    const listed = vi.spyOn(localStorage, "key").mockImplementation(() => {
+      throw new Error("SecurityError");
+    });
+    saveDoorList("festival", 8);
+    expect(() => clearDoorLists()).not.toThrow();
+    listed.mockRestore();
+
+    fillStorage();
+    expect(() => saveDoorList("festival", 8)).not.toThrow();
+  });
+});
+
+describe("going back to the door after an update", () => {
+  it("is asked for by the reload, and holds for that reload only", () => {
+    saveDoorResume();
+    const at = Number(localStorage.getItem("openpos.resumeDoor.v1"));
+
+    expect(loadDoorResume(at + 5_000)).toBe(true);
+    // Somebody opening the app much later may well want the grid.
+    expect(loadDoorResume(at + DOOR_RESUME_KEEPS_FOR_MS + 1)).toBe(false);
+    // A clock put back a little by the reload is no reason to ignore it.
+    expect(loadDoorResume(at - 1_000)).toBe(true);
+
+    clearDoorResume();
+    expect(loadDoorResume(at)).toBe(false);
+  });
+
+  it("is nothing when never asked for, or unreadable", () => {
+    expect(loadDoorResume()).toBe(false);
+
+    localStorage.setItem("openpos.resumeDoor.v1", "soon");
+    expect(loadDoorResume()).toBe(false);
+  });
+
+  it("never stops the app starting", () => {
+    const read = vi.spyOn(localStorage, "getItem").mockImplementation(() => {
+      throw new Error("SecurityError");
+    });
+    expect(loadDoorResume()).toBe(false);
+    expect(loadUpdateAttempt()).toBeNull();
+    read.mockRestore();
+
+    const removed = vi.spyOn(localStorage, "removeItem").mockImplementation(() => {
+      throw new Error("SecurityError");
+    });
+    expect(() => clearDoorResume()).not.toThrow();
+    removed.mockRestore();
+
+    fillStorage();
+    expect(() => saveDoorResume()).not.toThrow();
+  });
+});
+
 describe("the offline guest list", () => {
   it("survives a reload", () => {
     saveSnapshot(snapshot);
@@ -453,12 +537,95 @@ describe("the offline guest list", () => {
     expect(loadSnapshot()).toBeNull();
   });
 
-  it("goes away when the till is told to forget it", () => {
+  it("goes away when the till is told to forget it, with the time it was pulled", () => {
     saveSnapshot(snapshot);
+    saveSnapshotPull({ event: "festival", list: 7, at: 1 });
 
     clearSnapshot();
 
     expect(loadSnapshot()).toBeNull();
+    expect(loadSnapshotPull()).toBeNull();
+  });
+
+  it("does not let a storage that refuses even that stop the till", () => {
+    const removeItem = vi.spyOn(localStorage, "removeItem").mockImplementation(() => {
+      throw new Error("SecurityError");
+    });
+
+    expect(() => clearSnapshot()).not.toThrow();
+    removeItem.mockRestore();
+  });
+});
+
+describe("who the door let in", () => {
+  it("survives a reload, per event", () => {
+    saveAdmissions("festival", { 7: { alice: 1 } });
+
+    expect(loadAdmissions("festival")).toEqual({ 7: { alice: 1 } });
+    expect(loadAdmissions("gala")).toEqual({});
+  });
+
+  it("leaves nothing on disk once there is nothing to remember", () => {
+    saveAdmissions("festival", { 7: { alice: 1 } });
+
+    saveAdmissions("festival", {});
+
+    expect(localStorage.getItem("openpos.admitted.v1.festival")).toBeNull();
+  });
+
+  it("reads as nothing when what is on disk is not a record", () => {
+    localStorage.setItem("openpos.admitted.v1.festival", JSON.stringify(["alice"]));
+
+    expect(loadAdmissions("festival")).toEqual({});
+  });
+
+  it("is forgotten for every event at once, and nothing else with it", () => {
+    saveAdmissions("festival", { 7: { alice: 1 } });
+    saveAdmissions("gala", { 21: { bob: 1 } });
+    saveSnapshot(snapshot);
+
+    clearAdmissions();
+
+    expect(loadAdmissions("festival")).toEqual({});
+    expect(loadAdmissions("gala")).toEqual({});
+    expect(loadSnapshot()).toEqual(snapshot);
+  });
+
+  it("does not stop the door when storage will not take it", () => {
+    fillStorage();
+
+    expect(() => saveAdmissions("festival", { 7: { alice: 1 } })).not.toThrow();
+  });
+
+  it("does not stop the till when storage cannot even be listed", () => {
+    const key = vi.spyOn(localStorage, "key").mockImplementation(() => {
+      throw new Error("SecurityError");
+    });
+    saveAdmissions("festival", { 7: { alice: 1 } });
+
+    expect(() => clearAdmissions()).not.toThrow();
+    key.mockRestore();
+  });
+});
+
+describe("when the guest list was last pulled", () => {
+  it("survives a reload", () => {
+    saveSnapshotPull({ event: "festival", list: 7, at: 1234 });
+
+    expect(loadSnapshotPull()).toEqual({ event: "festival", list: 7, at: 1234 });
+  });
+
+  it("is nothing rather than garbage when what is on disk is not one", () => {
+    localStorage.setItem("openpos.snapshotPull.v1", JSON.stringify({ event: "festival" }));
+
+    expect(loadSnapshotPull()).toBeNull();
+  });
+
+  it("is simply not kept when storage is full", () => {
+    fillStorage();
+
+    expect(() => saveSnapshotPull({ event: "festival", list: 7, at: 1 })).not.toThrow();
+    expect(loadSnapshotPull()).toBeNull();
   });
 });
 

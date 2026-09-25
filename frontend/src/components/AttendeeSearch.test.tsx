@@ -9,6 +9,7 @@ vi.mock("../api", async (importOriginal) => {
   return { ...actual, api: { ...actual.api, searchAttendees } };
 });
 
+import { ApiError } from "../api";
 import { t } from "../i18n";
 import type { AttendeeMatch, Pairing } from "../types";
 import AttendeeSearch from "./AttendeeSearch";
@@ -88,12 +89,37 @@ describe("searching", () => {
   });
 
   it("says nothing for a query too short to mean anything", async () => {
-    // One letter matches half the guest list and helps nobody.
+    // Two letters match half the guest list and help nobody — and the server
+    // refuses anything under three, so sending it would only put a refusal
+    // in front of the queue.
     const { search } = show();
 
     await search("m");
+    await search("a");
 
     expect(searchAttendees).not.toHaveBeenCalled();
+  });
+
+  it("counts letters, not the spaces between them, as the server does", async () => {
+    const { user, search } = show();
+    const field = screen.getByPlaceholderText(t("search.placeholder"));
+
+    await search("a   b");
+    expect(searchAttendees).not.toHaveBeenCalled();
+
+    await user.clear(field);
+    await search("l e a");
+    expect(searchAttendees).toHaveBeenCalledOnce();
+    expect(searchAttendees).toHaveBeenCalledWith(
+      pairing,
+      expect.objectContaining({ query: "l e a" }),
+    );
+  });
+
+  it("tells the operator how many letters it takes", () => {
+    show();
+
+    expect(screen.getByText(t("search.hint"))).toBeDefined();
   });
 
   it("ignores the spaces around a name", async () => {
@@ -167,12 +193,32 @@ describe("searching", () => {
   });
 
   it("says it is the network when the search will not go through", async () => {
-    searchAttendees.mockRejectedValue(new Error("boom"));
+    searchAttendees.mockRejectedValue(new ApiError(0, "network"));
     const { search } = show();
 
     await search("marie");
 
     expect(await screen.findByText(t("error.offline"))).toBeDefined();
+  });
+
+  it("says the server is in trouble, not that the wifi is gone, when it answers 502", async () => {
+    // "No connection" sent the operator looking for a network that was fine.
+    searchAttendees.mockRejectedValue(new ApiError(502, "HTTP 502"));
+    const { search } = show();
+
+    await search("marie");
+
+    expect(await screen.findByText(t("error.server", { status: 502 }))).toBeDefined();
+    expect(screen.queryByText(t("error.offline"))).toBeNull();
+  });
+
+  it("asks for a few seconds when the server says too many requests", async () => {
+    searchAttendees.mockRejectedValue(new ApiError(429, "Request was throttled."));
+    const { search } = show();
+
+    await search("marie");
+
+    expect(await screen.findByText(t("error.tooMany"))).toBeDefined();
   });
 
   it("says nothing at all when the request was merely abandoned", async () => {

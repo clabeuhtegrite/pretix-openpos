@@ -285,6 +285,49 @@ depuis `/static/` :
   garde le fichier en cache de bordure : après un déploiement qui touche `sw.js`,
   purger ce chemin.
 
+  Le worker garde la coquille et le bundle, rien d'autre — jamais l'API. La
+  caisse s'ouvre sur cette copie quand le réseau manque, quand le serveur répond
+  par une erreur 5xx (un proxy devant un pretix qui redémarre) et quand il ne
+  répond pas en **4 s** ; sinon, c'est la page du serveur qui s'affiche, et elle
+  est gardée pour la fois suivante. Une coquille n'est gardée qu'une fois tous
+  les fichiers qu'elle nomme en cache — script et feuille de style
+  obligatoirement, les icônes si possible —, et une page qui ne charge aucun
+  bundle (page de maintenance, portail d'authentification) n'est jamais gardée.
+  Les fichiers du bundle qu'elle ne nomme plus, ceux des versions précédentes,
+  sont effacés.
+
+**Une nouvelle version.** Chaque appareil compare la version du serveur à celle
+de son propre JavaScript à chaque relecture de la configuration — toutes les
+60 s au repos, et au retour au premier plan. Quand elles diffèrent, la barre
+« Nouvelle version — recharger » s'affiche entre deux clients ; à la porte, sur
+le scanner lui-même. Une porte ne lisait auparavant la version qu'à
+l'ouverture, et le scanner couvrait la barre : chaque téléphone de porte devait
+être fermé et rouvert à la main après une mise en production.
+
+Sans personne pour appuyer, l'appareil **se met à jour seul quand on le laisse
+tranquille** : à la porte, **20 s** sans billet présenté, sans verdict à
+l'écran ni panneau ouvert ; à la caisse, **une minute** panier vide, sans
+avoir, paiement, lecteur, panneau ouvert, envoi ou chargement en cours. Chaque
+toucher relance l'attente, et jamais sans réseau. Un appui sur la barre à la
+porte pendant qu'un billet est chez pretix attend son verdict : recharger sous
+ce billet ferait répondre « déjà utilisé » à l'essai suivant de l'invité.
+
+La mise à jour ne jette plus rien. Le service worker télécharge la nouvelle
+coquille et tous les fichiers qu'elle nomme, ne remplace l'ancienne qu'une fois
+tout en place, et la page ne se recharge qu'ensuite. Si le téléchargement
+échoue, rien ne change : la barre dit « La nouvelle version n'a pas pu être
+téléchargée — toucher pour réessayer », et l'appareil réessaie seul cinq
+minutes plus tard. La barre vidait auparavant tous les caches avant de
+recharger ; un wifi qui lâchait à ce moment laissait une caisse incapable de
+s'ouvrir, faute d'une copie de l'app.
+
+Le rechargement ne perd rien de ce qui compte : la file, le panier et son avoir,
+l'appairage, le rôle (relu, ou repris de la configuration gardée), la liste
+choisie à la porte (§5) et l'écran — un appareil qui fait les deux revient sur
+le scanner s'il y était. Une version pour laquelle l'appareil s'est déjà
+rechargé sans l'obtenir (un serveur qui annonce une version que le bundle servi
+ne porte pas) n'est plus proposée.
+
 ### 2.7 Un rôle par appareil
 
 La même app tourne au bar et à la porte, mais ce ne sont pas le même poste. Un
@@ -627,7 +670,8 @@ fois le compte SumUp renseigné sous *Open POS → Lecteurs de carte*. Voir le
 **Pourquoi ce filtre.** Ouverte dans un onglet, l'app affiche les instructions
 d'installation au lieu de la caisse : en mode installé on a le plein écran, pas
 de barre d'adresse, et le wake lock empêche l'écran de s'éteindre en plein
-service. Échappatoire volontaire : ouvrir une fois `/openpos/?browser=1` autorise
+service (sur iPhone et iPad, à partir d'iOS 18.4 seulement — voir §3.5 et la
+liste d'avant soirée, §7.0). Échappatoire volontaire : ouvrir une fois `/openpos/?browser=1` autorise
 définitivement l'usage en onglet sur cet appareil — être verrouillé hors de sa
 caisse le soir d'un événement est une panne pire qu'un bénévole dans un onglet.
 
@@ -651,7 +695,7 @@ proposent ni les mêmes API ni les mêmes gestes, et chaque écart est traité :
 | Détection du mode installé | `display-mode: standalone` | `navigator.standalone`, qu'Apple n'a jamais remplacé — les deux sont consultés |
 | Geste **retour** | Ferme le panneau ouvert, pas la caisse (chaque panneau empile une entrée d'historique) | N'existe pas |
 | Lecture des QR | jsQR, jamais `BarcodeDetector` | Idem — l'API est derrière un drapeau sur 17 et cassée depuis 18 |
-| Écran allumé | Wake Lock | Wake Lock depuis Safari 16.4 ; absent avant, on s'en passe sans rien dire. Le mode économie d'énergie le refuse — c'est un verrou de veille, pas un blocage du bouton latéral |
+| Écran allumé | Wake Lock | Wake Lock dans Safari depuis 16.4, mais **dans une app ouverte depuis l'écran d'accueil seulement depuis iOS/iPadOS 18.4** (bogue WebKit 254545) : avant, l'écran s'éteint au délai du verrouillage automatique quoi que l'app demande, et elle n'a aucun moyen de le savoir — d'où la ligne de la liste d'avant soirée (§7.0). Le mode économie d'énergie le refuse — c'est un verrou de veille, pas un blocage du bouton latéral |
 | Vibration au refus | Oui | Non — l'API n'existe pas sur iOS ; le verdict rouge reste la réponse |
 | Lampe au scan | Bouton 🔦 quand la caméra en a une | Aucune API : pas de bouton |
 | Encoche / barre de gestes | `env(safe-area-inset-*)` sur toutes les couches plein écran | Idem, `viewport-fit=cover` dans le shell |
@@ -839,10 +883,29 @@ indulgent sur SQLite et impitoyable sur PostgreSQL — d'où
 Bouton *Contrôle* de la barre supérieure, visible dès que l'événement a au moins
 une liste. C'est [CheckinScreen.tsx](../frontend/src/components/CheckinScreen.tsx).
 
+- **La liste scannée** : un événement qui en a plusieurs montre un sélecteur,
+  et la liste choisie est **gardée sur l'appareil, par événement**. Elle
+  survit donc à une relance — iOS qui recharge l'app en arrière-plan, une mise
+  à jour — là où la porte revenait avant sur la liste par défaut sans que
+  personne ne s'en aperçoive. Supprimée entre-temps dans pretix, la porte
+  reprend la liste de l'événement, scanner ouvert compris : la configuration y
+  est relue chaque minute.
 - **Scan continu** par la caméra arrière, décodage **jsQR** en JavaScript à
   ~8 images/s sur une image réduite à 640 px de côté. Pas de `BarcodeDetector` :
   sur iOS, l'API Shape Detection est derrière un drapeau dans les Réglages sur
   17 et cassée depuis 18 — une caisse sur iPhone ne scannerait jamais rien.
+  Seule la partie de l'image **visible à l'écran** est décodée : l'aperçu remplit
+  la zone en coupant ce qui dépasse, et sur un téléphone tenu droit ce sont les
+  deux bandes de gauche et de droite de chaque image, qu'on décodait pour rien.
+  Ce qu'on voit est ce qui se lit, avec la même finesse qu'avant et moins de
+  travail par image. Fermer le scanner arrête la caméra **et** la boucle de
+  décodage, même fermé pendant que l'image démarrait.
+- **Caméra indisponible** (une autre app la tient, autorisation refusée) : le
+  cadre rouge le dit, rappelle que la **recherche par nom** en bas de l'écran
+  permet de faire entrer sans caméra, et propose **Réessayer la caméra**. La
+  caméra est aussi redemandée quand l'app revient à l'écran ; dès qu'elle est
+  là, le message disparaît et le viseur revient — il restait affiché par-dessus
+  une caméra revenue jusqu'à ce qu'on ferme et rouvre le scanner.
 - **Verdict lisible à bout de bras** : vert 4 s, rouge 8 s, et un appui sur le
   verdict le referme aussitôt — le délai ne protège que l'opérateur qui n'a pas
   encore levé les yeux, il ne retient jamais une file qui avance. Un même code
@@ -883,8 +946,9 @@ une liste. C'est [CheckinScreen.tsx](../frontend/src/components/CheckinScreen.ts
 - **Recherche par nom** (`checkinrpc/search`) quand un code ne passe pas : nom
   partiel, e-mail ou code de commande dans un seul champ. **Trois caractères au
   moins**, espaces non comptés : le serveur refuse en 403 une recherche plus
-  courte, qui aurait rendu toute la liste des invités d'un coup (§2.3). La
-  porte n'a jamais eu besoin que de retrouver un porteur.
+  courte, qui ramènerait une bonne part de la liste des invités, secret de
+  chaque billet compris (§2.3) ; la caisse n'envoie donc jamais moins. La porte
+  n'a jamais eu besoin que de retrouver un porteur.
 - **QR uniquement.** jsQR ne lit ni Code128 ni PDF417 ; un billet imprimé avec un
   code-barres non-QR doit passer par un lecteur douchette en mode clavier.
 
@@ -1055,6 +1119,50 @@ serveur vaut donc avoir + espèces reçues, si bien que le rendu calculé par le
 serveur est exactement celui que l'opérateur compte, et que le journal se lit
 comme ce qui s'est passé : un avoir imputé sur une vente neuve.
 
+**Cet écran ne se perd pas.** C'est le seul qui dise combien rendre. Un toucher
+à côté du panneau ne le ferme pas — sur un iPad en paysage, les bords assombris
+sont larges —, ni pendant qu'une annulation est en route, dont ce serait la
+seule chance de voir la réponse. Fermé quand même (geste retour, iOS qui
+recharge l'app), il revient à la prochaine ouverture de l'historique, jusqu'à
+ce que l'opérateur ait choisi l'une des deux issues, et au plus une demi-heure :
+au-delà, le client est parti, et l'historique reste là pour retrouver la vente.
+
+### Une annulation dont la réponse s'est perdue
+
+Une annulation porte une clé d'idempotence, comme une vente : si la réponse se
+perd après que le serveur a annulé, la redemande doit être reconnue comme la
+même annulation — et rendre son montant, son avoir et la correction — plutôt
+que comme une seconde, que le serveur refuserait. La clé est frappée au premier
+appui, **gardée sur l'appareil** (par caisse et par événement) et oubliée
+seulement quand le serveur a répondu, oui ou non. Réseau coupé, erreur 5xx,
+proxy qui abandonne la requête (408), « trop de demandes » (429) : elle reste,
+et l'appui suivant renvoie la même,
+panneau refermé et app rechargée entre-temps compris. Elle vivait auparavant
+dans le panneau, qui l'emportait en se fermant.
+
+Si l'historique relu montre ensuite la vente « annulée » alors que la réponse
+n'est jamais arrivée, le détail le dit (« Cette caisse a envoyé l'annulation
+sans jamais recevoir la réponse ») et **Afficher l'annulation** la redemande
+sous la même clé : le serveur renvoie l'annulation faite, rien n'est annulé
+deux fois.
+
+Un serveur à jour répond d'ailleurs à une vente déjà annulée par l'annulation
+qui existe plutôt que par un refus :
+
+- **« Commande déjà annulée »**, avec le montant à rendre et les deux issues :
+  depuis cette caisse, on n'arrive là que par une réponse perdue, donc un
+  client pas encore remboursé. Pour que ce soit vrai, la réponse d'une
+  annulation marque aussitôt la vente « annulée » dans la liste, sans attendre
+  sa relecture : relue sur le même réseau qui venait de faire traîner
+  l'annulation, elle échouait, et la liste restée telle quelle proposait
+  encore *Annuler cette commande* sur une vente dont l'argent venait d'être
+  rendu — un second appui revenait « déjà annulée », montant à rendre compris ;
+- **« Annulée depuis le back-office pretix »** quand c'est le back-office qui
+  l'a fait : son remboursement se règle dans pretix, et rien n'est sorti ni ne
+  sort du tiroir de cette caisse pour elle (*Une vente annulée depuis pretix*,
+  plus bas). Pas de « Rendre 12,00 € » donc, seulement **Terminer** — et
+  **Corriger** remet les articles au panier sans avoir, à encaisser en entier.
+
 ### Ce que la caisse ne fait pas à votre place
 
 - **L'argent physique, tant qu'aucun lecteur n'est en jeu.** Espèces :
@@ -1224,12 +1332,13 @@ aller vérifier.
 | Vendre | Oui, au tarif embarqué ; la vente part en file d'attente |
 | Rendre la monnaie | Oui, calculé localement |
 | Encaisser sur le lecteur de carte | Non : le lecteur est piloté par le serveur (§5quinquies). Choisir *Carte* ne pose rien sur le lecteur, le panneau le dit et *Espèces* reste à un geste ; au retour du réseau, *Réessayer* pose le panier |
-| Scanner un billet | Oui, contre la **liste embarquée** (`openpos/offline/`), chargée dès l'appairage pour la liste de la porte — pas seulement à l'ouverture du scan — et rafraîchie toutes les 5 min tant qu'il y a du réseau. Seul un appareil qui garde la porte la reçoit : une *Caisse* non (§2.7) |
-| Redémarrer la caisse | Oui : catalogue et configuration du dernier chargement sont conservés par événement |
+| Scanner un billet | Oui, contre la **liste embarquée** (`openpos/offline/`), chargée dès l'appairage pour la liste de la porte — pas seulement à l'ouverture du scan — et rafraîchie toutes les 5 min tant qu'il y a du réseau. **Seulement sur un appareil qui a la porte** (rôle porte, ou sans rôle) : une *Caisse* ne la charge jamais, et efface celle qu'elle avait (§2.7) |
+| Redémarrer la caisse | Oui : catalogue et configuration du dernier chargement sont conservés par événement, et l'app elle-même vient de la copie gardée par le service worker — sans réseau, mais aussi quand le serveur répond par une erreur 5xx ou pas du tout en 4 s (§2.6). Une caisse rouverte pendant une panne du serveur affichait auparavant la page d'erreur du proxy, et ne pouvait plus vendre |
 | Historique, annulation, effectif | Non — ils demandent le serveur, et l'écran le dit |
 
 Un scan tenté en ligne qui n'aboutit pas — réseau coupé pendant le scan, pretix
-qui redémarre, pas de réponse en 8 s — est répondu de la même façon, contre la
+qui redémarre, pas de réponse en 8 s, un proxy qui abandonne la requête (408),
+un serveur qui demande de ralentir (429) — est répondu de la même façon, contre la
 liste embarquée, et gardé sous le `nonce` avec lequel il était parti : si la
 requête était bien arrivée, pretix reconnaît le rejeu au lieu de compter la
 personne deux fois. Il finissait sur un message d'erreur au bout de 30 s, sans
@@ -1288,10 +1397,21 @@ tant que quelque chose attend. Une requête qui échoue aussitôt suivie d'une q
 passe ne se voit pas comme un retour du réseau : vérifié contre un vrai pretix,
 des scans restaient ainsi sur le téléphone, réseau revenu, jusqu'à la
 réouverture de l'app. Pour la même raison, la liste embarquée n'est pas
-rechargée plus d'une fois par minute sur un réseau qui va et vient. Un 429
-dit combien attendre (`Retry-After`) : les reprises automatiques attendent ce
-temps-là, un quart de minute s'il n'a rien dit ; *Envoyer maintenant* part
-quand même, puisque c'est quelqu'un qui le demande.
+rechargée plus d'une fois par minute sur un réseau qui va et vient — ni à
+chaque aller-retour entre le scanner et la grille : l'heure du dernier
+chargement est gardée sur l'appareil, et le rafraîchissement des 5 min se
+compte depuis lui, quel que soit l'écran qui l'a fait. Un téléphone de porte
+qui vendait un billet et revenait au scan rechargeait toute la liste à chaque
+fois. Un 429 dit combien attendre (`Retry-After`) : les reprises automatiques
+attendent ce temps-là, un quart de minute s'il n'a rien dit ; *Envoyer
+maintenant* part quand même, puisque c'est quelqu'un qui le demande.
+
+**Qui garde la liste, et quand elle s'efface.** La liste embarquée, c'est le
+nom et le secret de chaque billet de l'événement. Elle n'est chargée que par un
+appareil qui a la porte, et elle est effacée dès qu'il ne l'a plus : au
+désappairage, au changement d'événement, quand le back-office lui donne le rôle
+caisse, et quand le serveur répond à sa demande `403` avec le code
+`door_role_required` (l'appareil n'est pas une porte).
 
 Chaque vente rejouée porte, à côté de son heure d'origine (`recorded_at`),
 l'heure de l'appareil au moment où elle part (`sent_at`). Les deux viennent de
@@ -1388,11 +1508,24 @@ Un survendu reste un survendu : c'est un fait à réconcilier après la soirée,
   et depuis quand, et le back-office l'affiche là où l'on compte l'argent
   (§5septies).
 - **Le scan hors ligne ne voit que sa liste embarquée.** Un billet vendu en ligne
-  pendant la coupure y est absent : il sera refusé à la porte. Un billet déjà
-  scanné à une autre porte pendant la coupure sera accepté ici, et enregistré par
-  pretix comme un passage forcé. Et la liste embarquée ne répond **que pour sa
-  propre porte** : changer de liste pendant la coupure affiche « pas de liste
-  embarquée » plutôt que de faire entrer les invités de l'autre porte.
+  pendant la coupure y est absent : il sera refusé à la porte. Le bandeau hors
+  ligne dit donc de quand date la liste — « vérification sur les 412 billets de
+  la liste de 21:14 », avec le jour si ce n'est pas aujourd'hui — pour qu'on
+  sache que c'est la liste qui ne connaît pas un billet acheté à 21:40, pas le
+  billet qui est faux. Un billet déjà scanné à une autre porte pendant la
+  coupure sera accepté ici, et enregistré par pretix comme un passage forcé. Et
+  la liste embarquée ne répond **que pour sa propre porte** : changer de liste
+  pendant la coupure affiche « pas de liste embarquée » plutôt que de faire
+  entrer les invités de l'autre porte.
+- **Mais cette porte-ci ne fait pas entrer deux fois le même billet.** Tout
+  billet qu'elle a fait entrer — en ligne, ou hors ligne sur sa liste — est noté
+  sur l'appareil, et refusé « déjà scanné » s'il se représente pendant une
+  coupure, tant que la liste embarquée ne le connaît pas encore comme utilisé.
+  Avant, seule la file d'attente en gardait la trace : une fois la file envoyée,
+  une nouvelle coupure et l'écran rouvert, le même billet repassait au vert ; et
+  un billet scanné en ligne n'était noté nulle part. La note s'efface dès que la
+  liste embarquée marque le billet utilisé, au bout de 36 h sinon, et avec la
+  liste (désappairage, changement d'événement, rôle caisse).
 - **Pas de moteur de règles hors ligne.** Les règles de check-in de pretix
   (horaires, quotas d'entrée) ne s'appliquent pas à un scan hors ligne : la
   personne est entrée sur la réponse du téléphone, et la reprise l'enregistre
@@ -2111,6 +2244,21 @@ Sur un iPhone antérieur à iOS 17, le son se tait quand le téléphone est en
 silencieux ; il n'y a pas de contournement propre, et le seul remède est de
 sortir le téléphone du silencieux.
 
+**Quand le son se réveille :** aucun navigateur ne laisse une page démarrer le
+son sans un geste de l'utilisateur, et un refus à la porte arrive sur une image
+de la caméra, pas sur un appui. L'app redemande donc le son **à chaque appui**,
+où qu'il tombe, tant qu'il ne tourne pas — et pas seulement au premier : sur un
+écran tactile, c'est le doigt qui se relève qui compte comme geste, pas celui
+qui se pose, et l'ancienne version, qui n'essayait qu'une fois au premier
+contact, pouvait rester muette toute la soirée. Un iPhone reprend aussi le son
+après un appel, Siri ou un passage en arrière-plan (état « interrompu ») : l'app
+le redemande dès qu'elle revient à l'écran, puis au premier appui ; si l'iPhone
+ne le rend toujours pas, l'appui suivant repart sur un son neuf. Un son qui
+n'a pas pu sortir tout de suite est joué s'il revient dans la demi-seconde, et
+abandonné sinon — plutôt que de ressortir, au prochain appui, tous les refus
+d'une demi-heure d'un coup. En pratique : **si la porte est muette, un appui
+n'importe où sur l'écran la rallume.**
+
 ### Ce qui attend le serveur
 
 Un appui que le serveur doit confirmer se voit tout de suite, et se voit tant
@@ -2424,9 +2572,11 @@ le panneau de paiement reste ouvert avec le nouveau montant.
 
 Le catalogue se rafraîchit d'ailleurs tout seul **toutes les 60 s et au retour au
 premier plan** — mais uniquement quand la caisse est au repos (panier vide, pas de
-paiement en cours, pas d'écran de fin ni de scan). Recharger les prix sous un
+paiement en cours, pas d'écran de fin). Recharger les prix sous un
 panier qu'on est en train de lire à un client, c'est exactement comme ça qu'on
-annonce un montant et qu'on en encaisse un autre.
+annonce un montant et qu'on en encaisse un autre. Scanner ouvert, seule la
+configuration est relue — la version du serveur et les listes de la porte (§2.6,
+*Une nouvelle version*) — et la grille, invisible dessous, l'est en y revenant.
 
 ### 6.2bis Les séries : la caisse vend la date du soir
 
@@ -2577,13 +2727,21 @@ ligne est là parce que son absence coûte cher une fois la porte ouverte.
    onglet. L'app refuse de vendre dans un onglet ; c'est délibéré, une barre
    d'adresse au-dessus du panier et un geste de rafraîchissement en travers,
    c'est une vente perdue.
-3. Le **nom du caissier** est renseigné dans les réglages de chaque tablette. Il
+3. Chaque iPhone et chaque iPad est en **iOS / iPadOS 18.4 ou plus récent**
+   (*Réglages → Général → Informations*). Avant 18.4, une app ouverte depuis
+   l'écran d'accueil ne sait pas garder l'écran allumé (bogue WebKit 254545) :
+   il s'éteint au bout du délai de verrouillage automatique, en pleine file, et
+   la caméra de la porte s'arrête avec lui — sans que l'app puisse s'en rendre
+   compte. Un appareil qui ne peut pas être mis à jour : *Réglages → Luminosité
+   et affichage → Verrouillage automatique* sur **Jamais** pour la soirée, et
+   branché si possible.
+4. Le **nom du caissier** est renseigné dans les réglages de chaque tablette. Il
    part avec chaque vente et c'est ce qui rend la recette ventilable en fin de
    soirée.
-4. Le **rôle** de chaque appareil est le bon dans *Open POS → Appareils de
+5. Le **rôle** de chaque appareil est le bon dans *Open POS → Appareils de
    caisse* : caisse pour le bar, porte pour l'entrée. Un appareil sans rôle fait
    les deux, ce qui convient à une petite soirée et pas à un bar qui bouscule.
-5. Faire **une vente en mode test** sur chaque tablette, puis l'annuler. C'est
+6. Faire **une vente en mode test** sur chaque tablette, puis l'annuler. C'est
    le seul moyen de savoir que le token est encore valide, que l'événement est
    joignable et que l'écran répond. Le mode test ne se mélange pas à la recette.
    *Appareils de caisse* dit ensuite, sous chaque tablette, un **dernier
@@ -2591,35 +2749,35 @@ ligne est là parce que son absence coûte cher une fois la porte ouverte.
 
 **Le lecteur de carte**
 
-6. *Open POS → Lecteurs de carte* : le lecteur est **Appairé** et, dans la
+7. *Open POS → Lecteurs de carte* : le lecteur est **Appairé** et, dans la
    colonne *En ce moment*, **Prêt**. « Inconnu » veut dire que le lecteur est
    trop ancien pour répondre à cette question et non qu'il est éteint ; « Hors
    ligne » veut dire qu'il l'est vraiment ; « Mise à jour en cours » veut dire
    attendre qu'il ait fini.
-7. La **batterie** affichée est suffisante, ou le lecteur est sur son socle.
-8. Si un lecteur affiche **Encaissement en cours** alors que personne
+8. La **batterie** affichée est suffisante, ou le lecteur est sur son socle.
+9. Si un lecteur affiche **Encaissement en cours** alors que personne
    n'encaisse, presser **Effacer son écran** : il reste bloqué d'une soirée à
    l'autre sinon, et refuse le premier paiement de la vôtre.
-9. Faire **un aller-retour à un euro** : une vente carte, puis son annulation.
-   C'est le seul test qui prouve la chaîne entière, du panier jusqu'au
-   remboursement.
+10. Faire **un aller-retour à un euro** : une vente carte, puis son annulation.
+    C'est le seul test qui prouve la chaîne entière, du panier jusqu'au
+    remboursement.
 
 **Le serveur**
 
-10. *Open POS → Ventes* : la chaîne du journal ne signale rien, et la section
+11. *Open POS → Ventes* : la chaîne du journal ne signale rien, et la section
     **Paiements carte sans vente** est vide. Si elle ne l'est pas, régler ces
     lignes avant d'en ajouter de nouvelles.
-11. Les **prix des produits** dans pretix sont ceux de ce soir. Un prix modifié
+12. Les **prix des produits** dans pretix sont ceux de ce soir. Un prix modifié
     pendant une vente est géré, mais c'est une seconde de flottement devant un
     client.
 
 **Les caisses espèces**
 
-12. *Open POS → Caisses espèces* : aucun tiroir n'est resté ouvert depuis une
+13. *Open POS → Caisses espèces* : aucun tiroir n'est resté ouvert depuis une
     soirée précédente. S'il y en a un, le fermer depuis son rapport, avec le
     montant si quelqu'un a compté le tiroir, sans sinon — ou le laisser faire à
     la caisse, qui le proposera.
-13. Juste avant l'ouverture des portes, sur un appareil de chaque tiroir :
+14. Juste avant l'ouverture des portes, sur un appareil de chaque tiroir :
     compter le fond et **ouvrir la caisse**. Une fois par tiroir ; les autres
     appareils du même tiroir le voient ouvert dans la minute, ou dès qu'on
     touche leur bandeau.
@@ -3324,13 +3482,13 @@ l'installation — donc `npm i --no-save playwright` avant de s'en servir.
 | Aucun produit dans le catalogue | Canal **Open POS** non coché sur les produits, ou produits sans quota disponible |
 | Les photos de produits ne s'affichent pas | Le produit n'a pas d'image dans pretix — ou les médias sont servis depuis un autre domaine (S3, CDN) : la coquille annonce `img-src 'self' data:`, et une image d'ailleurs est bloquée. La case reste vide, la vente n'est pas gênée |
 | Un produit reste « Épuisé » alors qu'aucune limite n'est atteinte | Il n'est rattaché à aucun quota : pretix ne peut pas le vendre, et la caisse le montre comme épuisé plutôt que de le laisser au panier pour être refusé au paiement. Créer un quota (illimité au besoin) et l'y rattacher |
-| « Une erreur est survenue » avec un 401 ou 403 au lancement | Device révoqué ou supprimé, plugin désactivé sur l'événement — ou un CDN / pare-feu qui conteste la requête. *Réessayer* d'abord ; *Dépairer* seulement si le device a bien été révoqué |
+| « Une erreur est survenue » avec un 401 ou 403 au lancement | Device révoqué ou supprimé, plugin désactivé sur l'événement — ou un CDN / pare-feu qui conteste la requête. pretix motive toujours ses refus ; une réponse sans motif (une page, pas du JSON) s'affiche « Accès refusé par le serveur (HTTP 403) — peut-être un pare-feu devant pretix… », et c'est presque toujours le second cas. *Réessayer* d'abord ; *Dépairer* seulement si le device a bien été révoqué |
 | L'événement n'apparaît pas au moment de l'appairage ou dans *Réglages → Événement* | Plugin non activé sur l'événement (l'app le nomme alors, sous le champ), ou device sans accès à l'événement (*Appareils → cet appareil*). Que la boutique soit en ligne ne compte pas |
 | « Faites entrer » ne s'affiche jamais | Aucune liste de contrôle choisie dans *Open POS → Réglages*, ou aucun produit d'admission dans la vente |
 | Un billet refuse de se scanner | Code-barres non-QR : passer par la recherche par nom ou une douchette clavier |
 | La recherche par nom répond « Request denied by device security profile » | Moins de trois caractères, espaces non comptés : le serveur refuse une recherche qui rendrait toute la liste (§2.3) |
 | Une caisse n'a pas de liste embarquée, ou la porte hors ligne dit n'en avoir aucune | L'appareil est réglé *Caisse* dans *Open POS → Appareils de caisse* : seule une *Porte*, ou un appareil non attribué, reçoit la liste (§2.7) |
-| La caméra ne démarre pas | Contexte non sécurisé (HTTP), ou autorisation refusée dans les réglages du navigateur |
+| La caméra ne démarre pas | Contexte non sécurisé (HTTP), ou autorisation refusée dans les réglages du navigateur ; si une autre app la tenait, la fermer puis toucher *Réessayer la caméra* |
 | La recette ne correspond pas au tiroir | Vérifier la ligne « mode test » sur l'écran *Ventes* : elle est comptée à part. Sur un appareil rattaché à une caisse espèces, c'est le rapport de fermeture qui se rapproche du tiroir, pas la recette : elle ne compte ni le fond ni les entrées et sorties d'argent |
 | Le tiroir compté dépasse l'attendu | Une caisse du tiroir garde des ventes en espèces pas encore envoyées : c'est dit en orange à côté de l'attendu et sur *Appareils de caisse*. Remettre la tablette en réseau et la laisser les envoyer, puis relire le rapport (§5septies) |
 | La caisse refuse les espèces : « La caisse … n'est pas ouverte » | Ouvrir la caisse espèces (bouton billet de la barre du haut) sur un fond compté. Le client peut attendre : rien n'a été enregistré |
@@ -3342,7 +3500,7 @@ l'installation — donc `npm i --no-save playwright` avant de s'en servir.
 | « Le lecteur tient encore le paiement laissé de côté à … » | Ce paiement est encore sur le lecteur : l'annuler sur le lecteur, ou réessayer une minute plus tard. La caisse demande elle-même à l'en retirer dans les premières minutes, dès que le serveur répond, et le serveur libère le lecteur au bout de cinq |
 | Panneau d'envoi : « Le serveur refuse cette caisse » | Appareil révoqué ou supprimé dans pretix. Les ventes en attente restent sur l'appareil : l'appairer de nouveau sur le même événement, elles partiront sans doublon |
 | « La mémoire de cet appareil est pleine » | Le stockage du navigateur est plein : la tablette ne peut plus garder de ventes hors ligne. Ne plus encaisser hors ligne, libérer de la place, et envoyer ce qui attend dès que le réseau revient |
-| L'app reste sur un vieux build | Une caisse ouverte compare sa version à celle du serveur au rafraîchissement du catalogue et affiche « Nouvelle version — recharger » entre deux clients ; sinon, fermer et rouvrir l'app force la reprise |
+| L'app reste sur un vieux build | Caisse ou porte, l'app compare sa version à celle du serveur chaque minute au repos, affiche « Nouvelle version — recharger » entre deux clients (à la porte, sur le scanner) et se met à jour seule après 20 s (porte) ou une minute (caisse) sans activité, jamais sans réseau (§2.6). « La nouvelle version n'a pas pu être téléchargée » : le serveur ou le wifi n'a pas livré la coquille ou ses fichiers, l'app reste sur la version qu'elle a et réessaie. Sinon, fermer et rouvrir l'app force la reprise |
 | La liste des appareils affiche une ancienne version | Le device n'a pas été rouvert avec du réseau depuis la mise à jour : il déclare sa version à la première ouverture connectée. C'est aussi le moyen de voir, après un déploiement, quels appareils ont repris le nouveau JavaScript |
 | *Lecteurs de carte* n'apparaît pas dans le menu, ou répond 403 | L'écran demande le droit de modifier les réglages de l'organisateur, pas seulement les appareils (§2.5) |
 | Une alerte sur « Open POS periodic task failed », ou la page Ventes dit que la dernière comparaison avec SumUp est vieille | Lire la ligne ERROR dans les journaux du serveur : l'étape et la réponse de SumUp y sont (§5quinquies, *Quand ça échoue*). `read_history` à chaque passage, c'est souvent une clé d'API révoquée dans SumUp |

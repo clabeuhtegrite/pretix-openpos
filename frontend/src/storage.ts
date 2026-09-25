@@ -160,6 +160,87 @@ export function saveDoorScans(event: string, scans: DoorScans): void {
   }
 }
 
+const DOOR_LIST_PREFIX = "openpos.doorList.v1.";
+
+/**
+ * The check-in list last chosen at this event's door.
+ *
+ * It used to live in memory only, so every relaunch — iOS reclaiming the app
+ * in the background, a reload for an update — put a door switched to the
+ * guest list back on the event's default one, and nobody notices that until
+ * somebody is turned away. Per event, because a list is one event's.
+ * Whether the list still exists is for the caller to check: it may have been
+ * deleted in pretix since.
+ */
+export function loadDoorList(event: string): number | null {
+  const saved = readJson<unknown>(`${DOOR_LIST_PREFIX}${event}`, null);
+  return typeof saved === "number" && Number.isInteger(saved) ? saved : null;
+}
+
+export function saveDoorList(event: string, list: number): void {
+  try {
+    localStorage.setItem(`${DOOR_LIST_PREFIX}${event}`, JSON.stringify(list));
+  } catch {
+    // The choice holds until the next relaunch, as it always used to.
+  }
+}
+
+/** Every event's choice: the device is being handed back. */
+export function clearDoorLists(): void {
+  try {
+    const keys: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key?.startsWith(DOOR_LIST_PREFIX)) keys.push(key);
+    }
+    keys.forEach((key) => localStorage.removeItem(key));
+  } catch {
+    // Nothing more to do about a storage that refuses to be read.
+  }
+}
+
+const ADMISSIONS_PREFIX = "openpos.admitted.v1.";
+
+/** List id → ticket secret → when: `Admissions` in offline.ts, which says why. */
+type AdmissionRecord = Record<string, Record<string, number>>;
+
+/**
+ * The tickets let in at this device, per event — see Admissions in offline.ts.
+ *
+ * Kept per event, and dropped with the guest list: a device that leaves the
+ * event, or the door, has no use for either.
+ */
+export function loadAdmissions(event: string): AdmissionRecord {
+  const saved = readJson<AdmissionRecord | null>(`${ADMISSIONS_PREFIX}${event}`, null);
+  return saved && typeof saved === "object" && !Array.isArray(saved) ? saved : {};
+}
+
+export function saveAdmissions(event: string, admissions: AdmissionRecord): void {
+  try {
+    if (Object.keys(admissions).length) {
+      localStorage.setItem(`${ADMISSIONS_PREFIX}${event}`, JSON.stringify(admissions));
+    } else {
+      localStorage.removeItem(`${ADMISSIONS_PREFIX}${event}`);
+    }
+  } catch {
+    // Storage full: the record holds for as long as the door screen is open,
+    // and the queue still covers what was admitted offline.
+  }
+}
+
+export function clearAdmissions(): void {
+  try {
+    const keys: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key?.startsWith(ADMISSIONS_PREFIX)) keys.push(key);
+    }
+    keys.forEach((key) => localStorage.removeItem(key));
+  } catch {
+    // Nothing more to do about a storage that refuses to be read.
+  }
+}
+
 export function loadSnapshot(): OfflineSnapshot | null {
   return readJson<OfflineSnapshot | null>(SNAPSHOT_KEY, null);
 }
@@ -173,8 +254,50 @@ export function saveSnapshot(snapshot: OfflineSnapshot): void {
   }
 }
 
+const SNAPSHOT_PULL_KEY = "openpos.snapshotPull.v1";
+
+/**
+ * Forget the guest list, and when it was last asked for.
+ *
+ * Every name and every ticket secret of an event is not something a device
+ * keeps once it has no business with that event's door: unpaired, moved to
+ * another event, made a bar till, or told by the server that it is not a door.
+ */
 export function clearSnapshot(): void {
-  localStorage.removeItem(SNAPSHOT_KEY);
+  try {
+    localStorage.removeItem(SNAPSHOT_KEY);
+    localStorage.removeItem(SNAPSHOT_PULL_KEY);
+  } catch {
+    // Storage refused even this; nothing more can be done about it here.
+  }
+}
+
+/** When a pull of the guest list last set off, for which event and list. */
+export interface SnapshotPull {
+  event: string;
+  list: number;
+  at: number;
+}
+
+/**
+ * The last pull of the guest list, whoever made it.
+ *
+ * On disk rather than in the hook that pulls, because two screens pull —
+ * the app while the door is closed, the door while it is open — and a reload
+ * starts both from nothing: kept in each, a door stepping out to the grid and
+ * back pulled the whole list at every round trip.
+ */
+export function loadSnapshotPull(): SnapshotPull | null {
+  const saved = readJson<SnapshotPull | null>(SNAPSHOT_PULL_KEY, null);
+  return typeof saved?.at === "number" && typeof saved.list === "number" ? saved : null;
+}
+
+export function saveSnapshotPull(pull: SnapshotPull): void {
+  try {
+    localStorage.setItem(SNAPSHOT_PULL_KEY, JSON.stringify(pull));
+  } catch {
+    // The next screen pulls a little early; the list itself is unaffected.
+  }
 }
 
 export function loadPairing(): Pairing | null {
@@ -271,7 +394,12 @@ export function saveCashier(name: string): void {
  * asking to be pressed again. Remembering the attempt turns it into one offer.
  */
 export function loadUpdateAttempt(): string | null {
-  return localStorage.getItem(UPDATE_KEY);
+  try {
+    return localStorage.getItem(UPDATE_KEY);
+  } catch {
+    // Read at startup: a storage that refuses must not stop the till opening.
+    return null;
+  }
 }
 
 export function saveUpdateAttempt(version: string): void {
@@ -279,6 +407,52 @@ export function saveUpdateAttempt(version: string): void {
     localStorage.setItem(UPDATE_KEY, version);
   } catch {
     // Worst case the prompt is offered again after the reload. Harmless.
+  }
+}
+
+const DOOR_RESUME_KEY = "openpos.resumeDoor.v1";
+
+/**
+ * How long "reopen the door" stays good for after an update reload.
+ *
+ * The reload itself takes seconds. Past a few minutes the app was not
+ * started by that reload but by somebody, later, who may want the grid.
+ */
+export const DOOR_RESUME_KEEPS_FOR_MS = 5 * 60_000;
+
+/**
+ * The door screen was on when the app reloaded itself for an update.
+ *
+ * A door device opens on the scanner by itself, but a device that does both
+ * jobs opens on the grid — and an update that lands while it is scanning
+ * would otherwise leave the queue at the door facing a till. Written just
+ * before the reload, read when the new build starts, and cleared once acted
+ * upon.
+ */
+export function saveDoorResume(): void {
+  try {
+    localStorage.setItem(DOOR_RESUME_KEY, String(Date.now()));
+  } catch {
+    // The new build opens on the grid, one tap from the door.
+  }
+}
+
+export function loadDoorResume(now = Date.now()): boolean {
+  try {
+    const at = Number(localStorage.getItem(DOOR_RESUME_KEY) ?? NaN);
+    // Either way round: a clock put back by the reload's few seconds is no
+    // reason to ignore it, and one far off either way is not this reload's.
+    return Number.isFinite(at) && Math.abs(now - at) <= DOOR_RESUME_KEEPS_FOR_MS;
+  } catch {
+    return false;
+  }
+}
+
+export function clearDoorResume(): void {
+  try {
+    localStorage.removeItem(DOOR_RESUME_KEY);
+  } catch {
+    // Expires by itself; see DOOR_RESUME_KEEPS_FOR_MS.
   }
 }
 

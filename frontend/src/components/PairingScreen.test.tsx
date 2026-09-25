@@ -228,6 +228,15 @@ describe("when it does not take", () => {
     expect(await screen.findByText(t("error.offline"))).toBeDefined();
   });
 
+  it("says the server is in trouble rather than 'HTTP 502' when a proxy answers for it", async () => {
+    initialize.mockRejectedValue(new ApiError(502, "HTTP 502", "<html>Bad Gateway</html>"));
+    const { typeCode } = show();
+
+    await typeCode("abcd1234");
+
+    expect(await screen.findByText(t("error.server", { status: 502 }))).toBeDefined();
+  });
+
   it("says something for a failure that is not the API's at all", async () => {
     initialize.mockRejectedValue(new TypeError("bug in the app"));
     const { typeCode } = show();

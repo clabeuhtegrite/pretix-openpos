@@ -1373,7 +1373,8 @@ table.takings thead th {
   object-fit: cover;
 }
 
-/* Aiming aid. Purely cosmetic: jsQR reads the whole frame, not just this box. */
+/* Aiming aid. Purely cosmetic: jsQR reads everything visible on the stage, not
+   just this box — and nothing of the frame that object-fit crops away. */
 .scanner-reticle {
   position: absolute;
   top: 50%;
@@ -1445,6 +1446,16 @@ table.takings thead th {
   font-weight: 400;
   font-size: 14px;
   opacity: 0.9;
+}
+
+/* White on the red box, like the words in it: the one thing in the box that
+   can be pressed has to look it, whatever the palette. */
+.scanner-status .scanner-retry {
+  margin-top: 14px;
+  min-height: 48px;
+  background: #fff;
+  color: #7f1d1d;
+  font-size: 16px;
 }
 
 .scanner-hint {

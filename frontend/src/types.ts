@@ -484,7 +484,14 @@ export interface History {
 }
 
 export interface CancelResult {
-  cancellation: JournalLine;
+  /**
+   * The reversing line in this till's journal. Always there for a
+   * cancellation made by this request; typed as optional because the app also
+   * shows answers handed back for one made before — perhaps in the back
+   * office, which leaves no line on any till — and it reads the sale in its
+   * place rather than trusting every server to invent one.
+   */
+  cancellation: JournalLine | null;
   /** The sale that was reversed, so its lines can go back in the basket. */
   sale: JournalLine | null;
   replayed: boolean;
@@ -508,6 +515,19 @@ export interface CancelResult {
    * older than 0.24.0.
    */
   card_refund?: "none" | "done" | "already" | "pending" | "failed";
+  /**
+   * The sale had been cancelled before this request, and this is that earlier
+   * cancellation handed back — sent by a server that answers a repeated
+   * cancellation with what it did rather than with a refusal. Absent from an
+   * older one, which answers 400.
+   */
+  already_cancelled?: boolean;
+  /**
+   * ...and it was pretix' back office that cancelled it, not a till. Its
+   * journal line is on no till, nothing left this one's drawer for it, and
+   * the refund is pretix' business.
+   */
+  by_back_office?: boolean;
 }
 
 /** One ticket of the guest list a till carries for a network dropout. */

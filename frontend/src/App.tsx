@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api, ApiError, errorCode, isRetryable, isThrottled } from "./api";
 import { basketFromJournal, customKey, refundKey, repriceCart } from "./basket";
+import { clearCancellations } from "./cancellation";
 import { formatDrift, useClockSkew } from "./clock";
 import CheckinScreen from "./components/CheckinScreen";
 import CustomSalePanel from "./components/CustomSalePanel";
@@ -16,23 +17,27 @@ import SaleScreen, { type Sellable } from "./components/SaleScreen";
 import SettingsPanel from "./components/SettingsPanel";
 import SyncPanel from "./components/SyncPanel";
 import { briefOf, cashBlockedBy, drawerIcon, moment } from "./drawer";
-import { describeError } from "./errors";
+import { describeError, wordlessRefusal } from "./errors";
 import { t, tn } from "./i18n";
 import { formatMoney, fromCents, toCents } from "./money";
 import { newNonce } from "./nonce";
 import {
   admitsAnyone, basketTotals, positionsOf, queuedResultOf, queuedSaleOf,
 } from "./payment";
-import { play, setSoundEnabled, soundEnabled, unlock } from "./sound";
+import { keepSoundReady, play, setSoundEnabled, soundEnabled } from "./sound";
 import {
-  addOrphan, clearBasket, clearPairing, clearPendingPayment, enqueue, isResumable, loadBasket,
-  loadCached, loadCashier, loadFailures, loadPairing, loadPendingPayment, loadQueue,
+  addOrphan, clearAdmissions, clearBasket, clearDoorLists, clearDoorResume, clearPairing,
+  clearPendingPayment, clearSnapshot, enqueue, isResumable, loadBasket, loadCached, loadCashier,
+  loadDoorList, loadDoorResume, loadFailures, loadPairing, loadPendingPayment, loadQueue,
   loadUpdateAttempt, queueRevocation, requestPersistence, saveBasket, saveCached, saveCashier,
-  savePairing, savePendingPayment, saveUpdateAttempt,
+  saveDoorList, savePairing, savePendingPayment,
 } from "./storage";
 import { useConnectivity } from "./connectivity";
 import { drainQueue } from "./sync";
 import { applyTheme, loadTheme, saveTheme, watchDeviceTheme, type Theme } from "./theme";
+import {
+  DOOR_IDLE_UPDATE_MS, installUpdate, TILL_IDLE_UPDATE_MS, UPDATE_RETRY_MS,
+} from "./update";
 import type {
   Catalog, CartLine, Credit, DeviceRole, DrawerState, Pairing, PaymentType, PendingPayment,
   PosConfig, SaleResult, SyncReport,
@@ -127,23 +132,15 @@ function screensFor(config: PosConfig | null) {
 }
 
 /**
- * Pull the new build in one tap.
+ * Drop what this device carried for a door: the guest list, and the tickets it
+ * let in that the list did not know of yet.
  *
- * The service worker hands static assets out cache-first, so a bare reload
- * would come back with the very bundle it is trying to replace. Dropping the
- * caches first makes the reload fetch the new shell for real.
+ * Every name and ticket secret of an event, on a device that has left it —
+ * unpaired, moved to another event, or made a bar till.
  */
-async function reloadForUpdate(serverVersion: string): Promise<void> {
-  // Written before the reload, not after: whatever comes back has to be able to
-  // tell that the offer was already taken up.
-  saveUpdateAttempt(serverVersion);
-  try {
-    const names = await caches.keys();
-    await Promise.all(names.map((name) => caches.delete(name)));
-  } catch {
-    // No Cache API (plain-HTTP dev box): the reload alone still helps.
-  }
-  window.location.reload();
+function forgetDoor(): void {
+  clearSnapshot();
+  clearAdmissions();
 }
 
 export default function App() {
@@ -295,21 +292,16 @@ export default function App() {
   useEffect(requestPersistence, []);
 
   /**
-   * Start the audio on the first tap, whatever that tap was.
+   * Keep the audio ready, from the first tap to the last.
    *
    * No browser will start an audio context outside a gesture, and the sound
    * that matters most — a refused ticket at the door — arrives on a camera
-   * frame rather than a tap. So it is claimed at the first opportunity,
-   * whichever screen the operator happens to be on.
+   * frame rather than a tap. So every tap, whichever screen it lands on, tries
+   * until the audio runs, and coming back to the app asks for it again: this
+   * used to try once, on the first touch, and an iPhone that refused that one
+   * or took the audio away after a call left the door silent all night.
    */
-  useEffect(() => {
-    const once = () => {
-      unlock();
-      window.removeEventListener("pointerdown", once);
-    };
-    window.addEventListener("pointerdown", once);
-    return () => window.removeEventListener("pointerdown", once);
-  }, []);
+  useEffect(() => keepSoundReady(), []);
 
   /**
    * Keep the basket on disk, so a reload does not lose it.
@@ -353,14 +345,41 @@ export default function App() {
     if (opensOnDoor) setCheckinOpen(true);
   }, [opensOnDoor]);
 
-  /** The list last chosen at the door, so the door reopens on it — see doorListFor. */
-  const [doorListId, setDoorListId] = useState<number | null>(null);
+  // ...and a device that also sells goes back to the door when that is where it
+  // was when it reloaded itself for an update (saveDoorResume). Once, and only
+  // once the event is known: it has to have a door to go back to.
+  const [resumeDoor, setResumeDoor] = useState(() => loadDoorResume());
+  useEffect(() => {
+    if (!resumeDoor || !config) return;
+    setResumeDoor(false);
+    clearDoorResume();
+    if (doorReachable && config.checkin.lists.length > 0) setCheckinOpen(true);
+  }, [resumeDoor, config, doorReachable]);
+
+  /**
+   * The list last chosen at the door, so the door reopens on it — see
+   * doorListFor. Kept on the device per event, so that it also survives a
+   * relaunch (loadDoorList).
+   */
+  const [doorListId, setDoorListId] = useState<number | null>(() =>
+    pairing ? loadDoorList(pairing.event) : null,
+  );
   const doorList = doorListFor(config, doorListId);
   // The guest list for a dropout, fetched from the moment the till is paired
   // rather than the first time somebody opens the scanner. The door screen
   // fetches for the list on screen while it is open, and this stands down for
-  // that time, so the two never run side by side.
-  useOfflineSnapshot(pairing, doorList, online && !checkinOpen);
+  // that time, so the two never run side by side. Only on a device that can
+  // open the door at all: a bar till used to download every guest's name and
+  // ticket secret every five minutes, for a door it has no button for.
+  useOfflineSnapshot(pairing, doorList, online && !checkinOpen && doorReachable);
+
+  // ...and a device that has stopped being a door forgets what it carried for
+  // one. Keyed on the role rather than on every config: the refresh brings a
+  // new config every minute, and the answer only matters when it changes.
+  const roleKnown = config !== null;
+  useEffect(() => {
+    if (roleKnown && !doorReachable) forgetDoor();
+  }, [roleKnown, doorReachable]);
 
   // A ref, not the state above: the automatic drain and a tap on "send now" can
   // land in the same tick, and a state flag would not have flipped yet. The
@@ -471,8 +490,17 @@ export default function App() {
       // at the back office minting a new code. Nor does it fall back on the
       // cache below: a revoked device selling from a stale catalogue would
       // only be refused again at the first sale, in front of a customer.
+      // Worded by who said it: pretix explains its refusals, and "The server
+      // refused this till: HTTP 403" was all the screen could make of a page
+      // from a CDN — which says nothing of this till, and sent people to the
+      // unpair button for a refusal that the next retry gets past.
       if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
-        setLoadError({ text: t("error.refused", { detail: err.message }), refused: true });
+        setLoadError({
+          text: wordlessRefusal(err)
+            ? describeError(err)
+            : t("error.refused", { detail: err.message }),
+          refused: true,
+        });
         return false;
       }
 
@@ -524,9 +552,6 @@ export default function App() {
     else setReloadFailed(true);
   }
 
-  /** The update bar has been pressed, and the new build is being fetched. */
-  const [updating, setUpdating] = useState(false);
-
   useEffect(() => {
     if (pairing) void load(pairing);
   }, [pairing, load]);
@@ -534,23 +559,34 @@ export default function App() {
   // True whenever a customer is mid-transaction and the catalogue must hold still.
   // The free-amount panel counts even with an empty basket: an amount typed
   // against a tariff that moves underneath it is the same bug one step earlier.
-  const servingCustomer =
-    cart.length > 0 || paying !== null || sale !== null || checkinOpen || customOpen;
+  const midSale = cart.length > 0 || paying !== null || sale !== null || customOpen;
+  // ...or the door screen is up, which covers the grid and the bars under the
+  // top one.
+  const servingCustomer = midSale || checkinOpen;
 
   useEffect(() => {
-    if (!pairing || servingCustomer) return;
+    if (!pairing || midSale) return;
     let cancelled = false;
 
     const refresh = () => {
       // Config rides along with the catalogue: it is where the server's
       // version comes from, and it also lets a check-in list added mid-evening
-      // reach the door without a relaunch.
-      Promise.all([api.catalog(pairing), api.config(pairing)])
+      // reach the door without a relaunch. At the door it is all that is
+      // read. The grid is out of sight under the scanner, and read again on
+      // the way out to it; the version and the lists are what a door that
+      // never leaves its scanner used to go the whole evening without — which
+      // is why every door phone had to be relaunched by hand after a release.
+      const reading = checkinOpen
+        ? api.config(pairing).then((nextConfig) => [null, nextConfig] as const)
+        : Promise.all([api.catalog(pairing), api.config(pairing)]);
+      reading
         .then(([nextCatalog, nextConfig]) => {
           if (cancelled) return;
-          setCatalog(nextCatalog);
+          if (nextCatalog) {
+            setCatalog(nextCatalog);
+            saveCached("catalog", pairing.event, nextCatalog);
+          }
           setConfig(nextConfig);
-          saveCached("catalog", pairing.event, nextCatalog);
           saveCached("config", pairing.event, nextConfig);
         })
         .catch(() => {
@@ -572,7 +608,112 @@ export default function App() {
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [pairing, servingCustomer]);
+  }, [pairing, midSale, checkinOpen]);
+
+  /**
+   * The server runs a newer build than this page.
+   *
+   * Offered once per server version: if the device came back from that reload
+   * still mismatched, the build it was served cannot satisfy this server, and
+   * asking again every minute would be noise for the rest of the evening.
+   */
+  const serverVersion = config?.version;
+  const updateAvailable =
+    serverVersion !== undefined &&
+    serverVersion !== __APP_VERSION__ &&
+    serverVersion !== updateTried;
+
+  /** The new build is being fetched, and the page is about to reload onto it. */
+  const [updating, setUpdating] = useState(false);
+  /** The bar was pressed while the door had a ticket in hand: applied once it is done. */
+  const [updateAsked, setUpdateAsked] = useState(false);
+  /** When the last attempt could not bring the new build in, if one could not. */
+  const [updateFailedAt, setUpdateFailedAt] = useState<number | null>(null);
+  /** The door screen has a ticket in hand or a panel open — see CheckinScreen. */
+  const [doorBusy, setDoorBusy] = useState(false);
+
+  // Read when the reload is written down, not when the attempt was scheduled.
+  const checkinOpenRef = useRef(checkinOpen);
+  checkinOpenRef.current = checkinOpen;
+  // A ref for the same reason as the drain's: a press and the idle timer can
+  // land in the same tick.
+  const updatingRef = useRef(false);
+
+  const applyUpdate = useCallback(async (version: string) => {
+    if (updatingRef.current) return;
+    updatingRef.current = true;
+    setUpdating(true);
+    if (await installUpdate(version, checkinOpenRef.current)) return;
+    // The new build could not be fetched. The device stays on the one it has,
+    // which works, and the bar says what happened.
+    updatingRef.current = false;
+    setUpdating(false);
+    setUpdateFailedAt(Date.now());
+  }, []);
+
+  // A press at the door waits for the ticket in hand: reloading under a scan
+  // pretix has taken but not yet answered would lose the verdict, and turn the
+  // guest's next try into "already used".
+  useEffect(() => {
+    if (!updateAsked || serverVersion === undefined) return;
+    if (checkinOpen && doorBusy) return;
+    setUpdateAsked(false);
+    void applyUpdate(serverVersion);
+  }, [updateAsked, checkinOpen, doorBusy, serverVersion, applyUpdate]);
+
+  /**
+   * Install the new build unasked, once the device has been left alone.
+   *
+   * Doors are the reason. Nobody closes one — the scanner is its home screen —
+   * so a door ran the build it was opened with, the scanner covering the bar
+   * that would have said so, until somebody relaunched every phone by hand.
+   * Tills get it too, after a longer lull.
+   *
+   * Only ever over nothing a reload could cost: no basket, no credit, no
+   * payment or card reader under way, no ticket in hand or verdict on screen
+   * at the door, no panel open, nothing being sent or loaded — and with a
+   * network, without which the new build cannot come in. What a reload does
+   * not cost is kept anyway: the queue, the basket, the door's list and the
+   * screen it was on (storage.ts), and the build it has, which is only
+   * replaced once the new one is on the device (update.ts).
+   */
+  const panelOpen = customOpen || settingsOpen || historyOpen || syncOpen || drawerOpen;
+  const idle =
+    online &&
+    loadError === null &&
+    !loading &&
+    !syncing &&
+    !busy &&
+    !panelOpen &&
+    cart.length === 0 &&
+    credit === null &&
+    paying === null &&
+    sale === null &&
+    terminal.state === null &&
+    !(checkinOpen && doorBusy);
+  const autoUpdate = updateAvailable && idle && !updating && !updateAsked;
+
+  useEffect(() => {
+    if (!autoUpdate || serverVersion === undefined) return;
+    const wait = checkinOpen ? DOOR_IDLE_UPDATE_MS : TILL_IDLE_UPDATE_MS;
+    let timer = 0;
+    // Every touch starts the wait again: somebody is using the device, even
+    // when nothing they do shows — reading the grid out to a customer,
+    // looking for the right button.
+    const arm = () => {
+      window.clearTimeout(timer);
+      const retry = updateFailedAt === null ? 0 : updateFailedAt + UPDATE_RETRY_MS - Date.now();
+      timer = window.setTimeout(() => void applyUpdate(serverVersion), Math.max(wait, retry));
+    };
+    arm();
+    window.addEventListener("pointerdown", arm, true);
+    window.addEventListener("keydown", arm, true);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("pointerdown", arm, true);
+      window.removeEventListener("keydown", arm, true);
+    };
+  }, [autoUpdate, serverVersion, checkinOpen, updateFailedAt, applyUpdate]);
 
   /**
    * The drawer panel, once, when the till starts on a drawer that cannot take cash.
@@ -629,9 +770,12 @@ export default function App() {
     if (credit && !window.confirm(t("settings.eventCredit", { order: credit.order }))) return;
     const next = { ...pairing, event: slug };
     savePairing(next);
+    // The guest list is the event being left's: nothing to scan against here.
+    forgetDoor();
     setCart([]);
     setCredit(null);
-    setDoorListId(null);
+    // The door there reopens on the list last chosen there, if any.
+    setDoorListId(loadDoorList(slug));
     // The event being left may be the one that would not open: what is on
     // screen next is the new one loading, not the old one's error.
     setLoadError(null);
@@ -647,6 +791,15 @@ export default function App() {
     if (pairing) queueRevocation(pairing.token);
     clearPairing();
     clearBasket();
+    // A device handed back is not one that keeps the event's guest list.
+    forgetDoor();
+    // Nor the keys of cancellations it was waiting on, nor an answer still on
+    // its screen: they are this pairing's, and the next one is a new till
+    // whose sale #12 is another sale.
+    clearCancellations();
+    clearDoorLists();
+    clearDoorResume();
+    setDoorListId(null);
     setPairing(null);
     setLoadError(null);
     setConfig(null);
@@ -1137,16 +1290,28 @@ export default function App() {
   // What changes hands: see basketTotals for the other two figures.
   const { total } = basketTotals(cart);
 
-  // The server has been upgraded under this till. Only ever offered between
-  // customers — reloading is safe (the queue and pairing survive it), but the
-  // prompt must not sit next to a basket being rung up. And only ever offered
-  // once per server version: if the till came back from that reload still
-  // mismatched, the build it was served cannot satisfy this server and asking
-  // again every minute would be noise for the rest of the evening.
-  const updateAvailable =
-    config.version !== undefined &&
-    config.version !== __APP_VERSION__ &&
-    config.version !== updateTried;
+  // The server has been upgraded under this device (updateAvailable). Only
+  // ever offered between customers — reloading is safe (the queue, the basket
+  // and the pairing survive it), but the prompt must not sit next to a basket
+  // being rung up. At the door it sits on the scanner itself, which covers
+  // the top of the till.
+  const updateWaiting = updating || updateAsked;
+  const updateBar = (
+    <button
+      className="update-bar"
+      onClick={() => setUpdateAsked(true)}
+      // Nothing to set back: the page is on its way out, or the bar says why
+      // it is not.
+      disabled={updateWaiting}
+      aria-busy={updateWaiting || undefined}
+    >
+      {updateWaiting
+        ? t("update.reloading")
+        : updateFailedAt !== null
+          ? t("update.failed")
+          : t("update.reload")}
+    </button>
+  );
 
   // The drawer this till's cash goes into, when it is not open to take any.
   const drawerBlocked = cashBlockedBy(config.drawer, online);
@@ -1249,20 +1414,7 @@ export default function App() {
         </div>
       )}
 
-      {updateAvailable && !servingCustomer && (
-        <button
-          className="update-bar"
-          onClick={() => {
-            setUpdating(true);
-            void reloadForUpdate(config.version as string);
-          }}
-          // Nothing to set back: the page is on its way out.
-          disabled={updating}
-          aria-busy={updating || undefined}
-        >
-          {updating ? t("update.reloading") : t("update.reload")}
-        </button>
-      )}
+      {updateAvailable && !servingCustomer && updateBar}
 
       <SaleScreen
         catalog={catalog}
@@ -1348,7 +1500,14 @@ export default function App() {
           lists={config.checkin.lists}
           defaultListId={doorList}
           admissionItems={config.admission_items}
-          onListChange={setDoorListId}
+          onListChange={(list) => {
+            setDoorListId(list);
+            saveDoorList(pairing.event, list);
+          }}
+          // What an update waits on at the door, and the bar that offers it,
+          // on the one screen a door never leaves.
+          onBusyChange={setDoorBusy}
+          notice={updateAvailable && !midSale ? updateBar : undefined}
           // A scan admitted with no network is money's equivalent at the door:
           // pretix has not heard of it yet, and only this count gets it sent.
           onQueued={() => setPending(loadQueue().length)}

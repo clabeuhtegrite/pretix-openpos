@@ -38,12 +38,17 @@ Paramètres d'URL, cumulables :
 | `photos=1` | une photo sur un produit sur deux |
 | `checkout=fail` | le serveur refuse d’enregistrer la vente |
 | `testmode=1` | événement en mode test |
-| `update=1` | le serveur annonce une version plus récente |
+| `update=1` | le serveur annonce une version plus récente ; laissée sans y toucher, l’app se recharge seule au bout de 20 s à la porte, d’une minute à la caisse |
 | `events=one` / `blocked` / `mixed` | les événements que l’appareil atteint : le seul où il est ; plus un sans Open POS ; deux ouverts plus un sans Open POS (défaut : deux ouverts) |
-| `load=refused` / `series` | l’événement de l’appareil ne s’ouvre pas : Open POS désactivé dessus, ou une série sans date ce soir |
+| `load=refused` / `series` / `cdn` | l’événement de l’appareil ne s’ouvre pas : Open POS désactivé dessus, une série sans date ce soir, ou un pare-feu devant pretix qui répond 403 par sa propre page (sans un mot de pretix) |
 | `takings=empty` / `nights` / `series` | la recette de l’événement (Réglages → Détail de la recette) : rien de vendu ; un festival sur deux soirées, avec une vente du back-office ; une date d’une série (défaut : une soirée complète) |
 | `drawer=closed` / `open` / `stale` / `counted` / `moved` | une caisse espèces est attribuée à l’appareil : fermée, ouverte avec une entrée et une sortie, ouverte depuis un autre jour, comptée et prête à fermer, comptée puis une vente passée ; l’ouvrir, la compter et la fermer dans l’app la font vraiment changer d’état |
 | `slow=1` | le serveur met deux secondes et demie à répondre : ce que montre chaque écran pendant qu’il attend (chargement, réessai, catalogue rechargé, scan à la porte) |
+| `update=fail` | comme `update=1`, et la nouvelle version ne se télécharge pas : la barre le dit, l’app reste sur la sienne |
+| `cancel=already` / `backoffice` / `lost` | ce que le serveur répond à une annulation (Historique) : la vente l’était déjà, sous une autre clé ; elle l’a été depuis le back-office ; la première réponse se perd en route, et la vente relue « annulée » propose *Afficher l’annulation* |
+| `camera=busy` | une autre app tient la caméra à l’ouverture du scanner : le cadre rouge et *Réessayer la caméra*, qui la trouve libre |
+| `cached=1` | configuration, catalogue et liste embarquée déjà sur l’appareil : avec `offline=1`, une caisse rouverte pendant une coupure plutôt qu’un premier lancement sans réseau |
+| `snapshot=21:14` / `yesterday` | l’heure à laquelle la liste embarquée a été tirée, que la porte affiche hors ligne (défaut : celle du jeu d’essai) |
 
 `browser=1` est nécessaire : sans lui l'app affiche l'écran d'installation.
 

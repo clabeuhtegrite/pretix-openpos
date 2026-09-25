@@ -3,7 +3,13 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { apiMock, sound } = vi.hoisted(() => ({
-  sound: { play: vi.fn(), unlock: vi.fn(), setSoundEnabled: vi.fn(), soundEnabled: vi.fn(() => true) },
+  sound: {
+    play: vi.fn(),
+    unlock: vi.fn(),
+    keepSoundReady: vi.fn(() => vi.fn()),
+    setSoundEnabled: vi.fn(),
+    soundEnabled: vi.fn(() => true),
+  },
   apiMock: {
     config: vi.fn(),
     catalog: vi.fn(),
@@ -41,14 +47,18 @@ vi.mock("./api", async (importOriginal) => {
 vi.mock("./sound", () => sound);
 
 // No camera in jsdom, and the door has its own tests. What is kept is the
-// way out, so a test can close the door again.
+// way out, so a test can close the door again; the strip over the picture,
+// where the door shows the update bar; and a ticket to hold up to it.
 vi.mock("./components/QrScanner", () => ({
-  default: ({ title, footer, children, onClose }: {
-    title: string; footer?: React.ReactNode; children?: React.ReactNode; onClose: () => void;
+  default: ({ title, footer, children, banner, onClose, onDecode }: {
+    title: string; footer?: React.ReactNode; children?: React.ReactNode;
+    banner?: React.ReactNode; onClose: () => void; onDecode: (text: string) => void;
   }) => (
     <div>
       <h2>{title}</h2>
       <button onClick={onClose}>close-scanner</button>
+      {banner}
+      <button onClick={() => onDecode("secret-alice")}>scan-ticket</button>
       {footer}
       {children}
     </div>
@@ -57,6 +67,7 @@ vi.mock("./components/QrScanner", () => ({
 
 import App from "./App";
 import { ApiError, deviceDescription } from "./api";
+import { cancellationKeys, loadCancellationResult, saveCancellationResult } from "./cancellation";
 import { noteServerTime } from "./clock";
 import { markReachable, markUnreachable } from "./connectivity";
 import { moment } from "./drawer";
@@ -64,15 +75,20 @@ import { describeError } from "./errors";
 import { t, tn } from "./i18n";
 import { formatMoney } from "./money";
 import {
-  addOrphan, clearBasket, loadBasket, loadCashier, loadDeviceReport, loadFailures, loadOrphans,
-  loadPairing, loadPendingPayment, loadQueue, loadRevocations, savePairing, saveBasket,
-  saveDeviceReport, saveFailures, savePendingPayment, saveQueue,
+  addOrphan, clearBasket, loadAdmissions, loadBasket, loadCashier, loadDeviceReport,
+  loadDoorResume, loadFailures, loadOrphans, loadPairing, loadPendingPayment, loadQueue,
+  loadRevocations, loadSnapshot, saveAdmissions, saveBasket, saveDeviceReport, saveDoorList,
+  saveDoorResume, saveFailures, savePairing, savePendingPayment, saveQueue, saveSnapshot,
 } from "./storage";
 import { fillStorage } from "./test/setup";
 import { noTakings } from "./test/takings";
 import type {
-  Catalog, DrawerState, JournalLine, PendingPayment, PosConfig, QueuedSale, SaleResult,
+  Catalog, DrawerState, JournalLine, PendingPayment, PosConfig, QueuedSale, RedeemResult,
+  SaleResult,
 } from "./types";
+import {
+  DOOR_IDLE_UPDATE_MS, PREPARE_UPDATE, TILL_IDLE_UPDATE_MS, UPDATE_RETRY_MS,
+} from "./update";
 import { STATUS_SETTLE_MS } from "./useDeviceStatus";
 import { ORPHAN_CHECK_MS } from "./useOrphanPayments";
 import { TERMINAL_POLL_MS, TERMINAL_UNANSWERED_MS } from "./useTerminal";
@@ -295,6 +311,24 @@ describe("getting to the till", () => {
     expect(
       await screen.findByText(t("error.refused", { detail: "Unknown device." })),
     ).toBeDefined();
+    expect(loadPairing()).not.toBeNull();
+  });
+
+  it("says a refusal pretix did not write is not pretix refusing the till", async () => {
+    // A CDN's challenge page: no JSON, so the API layer can only call it by
+    // its status. "The server refused this till: HTTP 403" read like a
+    // revocation and sent people to the unpair button; the next retry is what
+    // usually gets past it.
+    const page = new ApiError(403, "HTTP 403", "<!DOCTYPE html><title>Just a moment…</title>");
+    apiMock.config.mockRejectedValue(page);
+    apiMock.catalog.mockRejectedValue(page);
+    show();
+
+    expect(await screen.findByText(t("error.denied", { status: 403 }))).toBeDefined();
+    expect(screen.queryByText(/HTTP 403 /)).toBeNull();
+    // Still a refusal: the way out stays next to it, and the pairing stays.
+    expect(screen.getByRole("button", { name: t("error.retry") })).toBeDefined();
+    expect(screen.getByRole("button", { name: t("settings.unpair") })).toBeDefined();
     expect(loadPairing()).not.toBeNull();
   });
 
@@ -545,16 +579,24 @@ describe("hearing the till", () => {
     expect(sound.play).toHaveBeenCalledWith("add");
   });
 
-  it("starts the audio on the first tap, whatever that tap was", async () => {
+  it("keeps the audio ready for as long as the app runs, and lets go after", async () => {
     // No browser will open an audio context outside a gesture, and a refused
-    // ticket at the door arrives on a camera frame rather than a tap.
-    sound.unlock.mockClear();
-    const { user } = show();
+    // ticket at the door arrives on a camera frame rather than a tap. What
+    // the gestures do is sound.ts's to prove; here, that it is held from the
+    // start and released once, not re-armed on every render.
+    const release = vi.fn();
+    sound.keepSoundReady.mockClear();
+    sound.keepSoundReady.mockReturnValue(release);
+    const { unmount } = render(<App />);
     await ready();
+    await userEvent.setup().click(screen.getByRole("tab", { name: "Bar" }));
 
-    await user.click(screen.getByRole("tab", { name: "Bar" }));
+    expect(sound.keepSoundReady).toHaveBeenCalledTimes(1);
+    expect(release).not.toHaveBeenCalled();
 
-    expect(sound.unlock).toHaveBeenCalled();
+    unmount();
+
+    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("remembers being told to keep quiet", async () => {
@@ -1205,6 +1247,45 @@ describe("the queue", () => {
 });
 
 describe("a new build on the server", () => {
+  let reload: ReturnType<typeof vi.fn>;
+  let location: PropertyDescriptor | undefined;
+
+  beforeEach(() => {
+    reload = vi.fn();
+    location = Object.getOwnPropertyDescriptor(window, "location");
+    Object.defineProperty(window, "location", {
+      configurable: true, value: { ...window.location, reload, search: "" },
+    });
+  });
+
+  afterEach(() => {
+    if (location) Object.defineProperty(window, "location", location);
+    Reflect.deleteProperty(navigator, "serviceWorker");
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  /**
+   * A service worker that answers the update handshake (sw.js) with these
+   * states, in this order. Returns what the page asked it.
+   */
+  function worker(...states: string[]) {
+    const postMessage = vi.fn((_message: unknown, transfer: MessagePort[]) => {
+      for (const state of states) transfer[0].postMessage({ state });
+    });
+    Object.defineProperty(navigator, "serviceWorker", {
+      configurable: true, value: { controller: { postMessage } },
+    });
+    return postMessage;
+  }
+
+  /** Let fake time run, the page's effects and answers with it. */
+  async function wait(ms: number) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
   it("is offered between customers", async () => {
     apiMock.config.mockResolvedValue(config({ version: "99.0.0" }));
     show();
@@ -1243,13 +1324,13 @@ describe("a new build on the server", () => {
     expect(screen.queryByRole("button", { name: t("update.reload") })).toBeNull();
   });
 
-  it("drops the caches before reloading, or the reload serves the old bundle", async () => {
+  it("is fetched before the reload, and the copy the till has is never thrown away", async () => {
+    // Every cache used to be wiped first. The reload was then the only way
+    // back to a working till, and a reload that met a dropped wifi or a
+    // server mid-restart left one that could not open at all.
     const remove = vi.fn().mockResolvedValue(true);
-    vi.stubGlobal("caches", { keys: vi.fn().mockResolvedValue(["v1"]), delete: remove });
-    const reload = vi.fn();
-    Object.defineProperty(window, "location", {
-      configurable: true, value: { ...window.location, reload, search: "" },
-    });
+    vi.stubGlobal("caches", { keys: vi.fn().mockResolvedValue(["openpos-shell-v2"]), delete: remove });
+    const asked = worker("preparing", "ready");
     apiMock.config.mockResolvedValue(config({ version: "99.0.0" }));
     const { user } = show();
     await ready();
@@ -1262,10 +1343,235 @@ describe("a new build on the server", () => {
     expect(updating).toHaveProperty("disabled", true);
     expect(updating.getAttribute("aria-busy")).toBe("true");
     await waitFor(() => expect(reload).toHaveBeenCalled());
-    expect(remove).toHaveBeenCalledWith("v1");
+    expect(asked).toHaveBeenCalledWith({ type: PREPARE_UPDATE }, expect.any(Array));
+    expect(remove).not.toHaveBeenCalled();
     // Written before the reload: whatever comes back has to know it tried.
     expect(localStorage.getItem("openpos.updateTried.v1")).toBe("99.0.0");
-    vi.unstubAllGlobals();
+  });
+
+  it("stays on the build it has when the new one cannot be fetched, and says so", async () => {
+    const asked = worker("preparing", "failed");
+    apiMock.config.mockResolvedValue(config({ version: "99.0.0" }));
+    const { user } = show();
+    await ready();
+
+    await user.click(screen.getByRole("button", { name: t("update.reload") }));
+
+    const failed = await screen.findByRole("button", { name: t("update.failed") });
+    expect(reload).not.toHaveBeenCalled();
+    // Not spent: the offer stands, and the next press is a real attempt.
+    expect(localStorage.getItem("openpos.updateTried.v1")).toBeNull();
+    await user.click(failed);
+    await waitFor(() => expect(asked).toHaveBeenCalledTimes(2));
+  });
+
+  describe("at a till", () => {
+    it("installs itself after a quiet minute", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      apiMock.config.mockResolvedValue(config({ version: "99.0.0" }));
+      show();
+      await ready();
+
+      await wait(TILL_IDLE_UPDATE_MS - 5_000);
+      expect(reload).not.toHaveBeenCalled();
+      await wait(10_000);
+
+      expect(reload).toHaveBeenCalled();
+      // A till goes back to its grid: there is no door to reopen.
+      expect(loadDoorResume()).toBe(false);
+    });
+
+    it("never under a basket", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      apiMock.config.mockResolvedValue(config({ version: "99.0.0" }));
+      const { user } = show();
+      await ready();
+      await user.click(tile(/Bière/));
+
+      await wait(10 * 60_000);
+
+      expect(reload).not.toHaveBeenCalled();
+    });
+
+    it("never with a panel open", async () => {
+      // A cashier's name half typed, a count half entered, a cancellation's
+      // amount still to hand back.
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      apiMock.config.mockResolvedValue(config({ version: "99.0.0" }));
+      const { user } = show();
+      await ready();
+      await user.click(screen.getByRole("button", { name: "settings" }));
+
+      await wait(10 * 60_000);
+
+      expect(reload).not.toHaveBeenCalled();
+    });
+
+    it("never without a network, which the new build would have to come through", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      apiMock.config.mockResolvedValue(config({ version: "99.0.0" }));
+      show();
+      await ready();
+      act(() => markUnreachable());
+
+      await wait(10 * 60_000);
+
+      expect(reload).not.toHaveBeenCalled();
+    });
+
+    it("waits again from every touch", async () => {
+      // Somebody reading the grid out to a customer has not put anything in
+      // the basket yet.
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      apiMock.config.mockResolvedValue(config({ version: "99.0.0" }));
+      show();
+      await ready();
+
+      await wait(TILL_IDLE_UPDATE_MS - 10_000);
+      act(() => {
+        window.dispatchEvent(new Event("pointerdown"));
+      });
+      await wait(TILL_IDLE_UPDATE_MS - 10_000);
+      expect(reload).not.toHaveBeenCalled();
+      await wait(20_000);
+
+      expect(reload).toHaveBeenCalled();
+    });
+
+    it("tries again by itself only after a pause, once an attempt has failed", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const asked = worker("preparing", "failed");
+      apiMock.config.mockResolvedValue(config({ version: "99.0.0" }));
+      show();
+      await ready();
+
+      await wait(TILL_IDLE_UPDATE_MS + 1_000);
+      await waitFor(() => expect(screen.getByRole("button", { name: t("update.failed") })).toBeDefined());
+      expect(asked).toHaveBeenCalledTimes(1);
+      await wait(TILL_IDLE_UPDATE_MS * 2);
+      expect(asked).toHaveBeenCalledTimes(1);
+      await wait(UPDATE_RETRY_MS);
+
+      await waitFor(() => expect(asked).toHaveBeenCalledTimes(2));
+      expect(reload).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("at the door", () => {
+    const door = (version = "99.0.0") =>
+      config({ version, device: { serial: "TILL1", name: "Porte", role: "door" } });
+
+    it("is offered on the scanner, which covers the bar under the top one", async () => {
+      apiMock.config.mockResolvedValue(door());
+      show();
+      await screen.findByRole("heading", { name: t("checkin.title") });
+
+      expect(screen.getByRole("button", { name: t("update.reload") })).toBeDefined();
+    });
+
+    it("is learnt while the scanner is up, without anyone relaunching it", async () => {
+      // A door never leaves its scanner, and it used to read the server's
+      // version only when it was opened — so every door phone had to be
+      // closed and reopened by hand after every release.
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      apiMock.config.mockResolvedValue(door(__APP_VERSION__));
+      show();
+      await screen.findByRole("heading", { name: t("checkin.title") });
+      apiMock.config.mockResolvedValue(door());
+      apiMock.catalog.mockClear();
+
+      await wait(61_000);
+
+      expect(screen.getByRole("button", { name: t("update.reload") })).toBeDefined();
+      // Only the config: the grid is out of sight, and read on the way out.
+      expect(apiMock.catalog).not.toHaveBeenCalled();
+    });
+
+    it("installs itself once nobody has held a ticket up for a while", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      apiMock.config.mockResolvedValue(door());
+      show();
+      await screen.findByRole("heading", { name: t("checkin.title") });
+
+      await wait(DOOR_IDLE_UPDATE_MS - 5_000);
+      expect(reload).not.toHaveBeenCalled();
+      await wait(10_000);
+
+      expect(reload).toHaveBeenCalled();
+      // And asks the new build to open where this one was.
+      expect(loadDoorResume()).toBe(true);
+    });
+
+    it("waits out a verdict before it installs itself", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      apiMock.redeem.mockResolvedValue({ status: "ok" });
+      apiMock.config.mockResolvedValue(door());
+      const { user } = show();
+      await screen.findByRole("heading", { name: t("checkin.title") });
+
+      await wait(DOOR_IDLE_UPDATE_MS - 5_000);
+      await user.click(screen.getByRole("button", { name: "scan-ticket" }));
+      await wait(10_000);
+      // The verdict held its few seconds, and the wait started again after.
+      expect(reload).not.toHaveBeenCalled();
+      await wait(DOOR_IDLE_UPDATE_MS);
+
+      expect(reload).toHaveBeenCalled();
+    });
+
+    it("lets the ticket in hand finish before an update pressed meanwhile", async () => {
+      // Reloading under a scan pretix has taken but not answered would lose
+      // the verdict, and make the guest's next try "already used".
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const answer = later<RedeemResult>();
+      apiMock.redeem.mockReturnValue(answer.promise);
+      apiMock.config.mockResolvedValue(door());
+      const { user } = show();
+      await screen.findByRole("heading", { name: t("checkin.title") });
+
+      await user.click(screen.getByRole("button", { name: "scan-ticket" }));
+      await user.click(screen.getByRole("button", { name: t("update.reload") }));
+
+      // Said at once, all the same.
+      expect(screen.getByRole("button", { name: t("update.reloading") })).toBeDefined();
+      await wait(1_000);
+      expect(reload).not.toHaveBeenCalled();
+      await act(async () => answer.resolve({ status: "ok" }));
+      expect(reload).not.toHaveBeenCalled();
+      await wait(10_000);
+
+      expect(reload).toHaveBeenCalled();
+    });
+  });
+
+  describe("once the new build has started", () => {
+    it("puts a device that does both back on the door it was scanning at", async () => {
+      saveDoorResume();
+      show();
+
+      expect(await screen.findByRole("heading", { name: t("checkin.title") })).toBeDefined();
+      // Once: the next launch is somebody opening the app.
+      expect(loadDoorResume()).toBe(false);
+    });
+
+    it("leaves a device that was selling on its grid", async () => {
+      show();
+      await ready();
+
+      expect(screen.queryByRole("heading", { name: t("checkin.title") })).toBeNull();
+    });
+
+    it("does not open a door the device no longer has", async () => {
+      saveDoorResume();
+      apiMock.config.mockResolvedValue(config({
+        device: { serial: "TILL1", name: "Caisse bar", role: "pos" },
+      }));
+      show();
+      await ready();
+
+      expect(screen.queryByRole("heading", { name: t("checkin.title") })).toBeNull();
+      expect(loadDoorResume()).toBe(false);
+    });
   });
 });
 
@@ -1493,6 +1799,30 @@ describe("the settings", () => {
     confirmed.mockRestore();
   });
 
+  it("forgets the cancellations it was still waiting on when it is unpaired", async () => {
+    // Their keys and the answer left on screen are this pairing's: the next
+    // one is a new till, whose sale #12 is another sale.
+    cancellationKeys("TILL1:festival").for(12);
+    saveCancellationResult("TILL1:festival", {
+      cancellation: {
+        seq: 13, kind: "cancellation", datetime: "2026-08-16T22:02:00.000Z", order: "POS01",
+        total: "-12.00", payment_type: "cash", cashier: "", testmode: false, positions: [],
+        reason: "", cancels_seq: 12, cancelled: false, can_cancel: false,
+      },
+      sale: null, replayed: false, credit_note: null, refunded: true,
+    });
+    const confirmed = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const { user } = show();
+    await ready();
+
+    await user.click(screen.getByRole("button", { name: "settings" }));
+    await user.click(await screen.findByRole("button", { name: new RegExp(t("settings.unpair")) }));
+
+    expect(cancellationKeys("TILL1:festival").pending(12)).toBe(false);
+    expect(loadCancellationResult("TILL1:festival")).toBeNull();
+    confirmed.mockRestore();
+  });
+
   it("tells pretix the unpaired till is gone, so it reads revoked there", async () => {
     // Forgetting the token was all unpairing did: the device went on reading
     // "active" in the back office, with a token that still worked.
@@ -1637,6 +1967,77 @@ describe("the door", () => {
     expect(apiMock.catalog).not.toHaveBeenCalled();
     vi.useRealTimers();
   });
+
+  it("reads the config again while it is open, for the lists and the version", async () => {
+    // A door that never leaves its scanner used to read neither all evening.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { user } = show();
+    await ready();
+    await user.click(screen.getByRole("button", { name: t("checkin.open") }));
+    apiMock.config.mockClear();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+
+    expect(apiMock.config).toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  describe("and the list it scans on", () => {
+    const twoLists = () =>
+      config({
+        checkin: {
+          enabled: true, list_id: 7, list_name: "Porte",
+          lists: [
+            { id: 7, name: "Porte", all_products: true, include_pending: false },
+            { id: 8, name: "VIP", all_products: false, include_pending: false },
+          ],
+        },
+      });
+
+    it("is the one it was switched to, after a relaunch", async () => {
+      // Forgotten at every relaunch — iOS reclaiming the app, an update — and
+      // nobody notices until somebody is turned away at the wrong list.
+      apiMock.config.mockResolvedValue(twoLists());
+      const first = render(<App />);
+      const user = userEvent.setup();
+      await ready();
+      await user.click(screen.getByRole("button", { name: t("checkin.open") }));
+      await user.selectOptions(screen.getByLabelText(t("checkin.list")), "8");
+      first.unmount();
+
+      show();
+      await ready();
+      await user.click(screen.getByRole("button", { name: t("checkin.open") }));
+
+      expect((screen.getByLabelText(t("checkin.list")) as HTMLSelectElement).value).toBe("8");
+    });
+
+    it("is the event's own again when the one chosen has since been deleted", async () => {
+      saveDoorList("festival", 99);
+      apiMock.config.mockResolvedValue(twoLists());
+      const { user } = show();
+      await ready();
+
+      await user.click(screen.getByRole("button", { name: t("checkin.open") }));
+
+      expect((screen.getByLabelText(t("checkin.list")) as HTMLSelectElement).value).toBe("7");
+    });
+
+    it("is forgotten when the till is unpaired", async () => {
+      saveDoorList("festival", 8);
+      const confirmed = vi.spyOn(window, "confirm").mockReturnValue(true);
+      const { user } = show();
+      await ready();
+
+      await user.click(screen.getByRole("button", { name: "settings" }));
+      await user.click(await screen.findByRole("button", { name: new RegExp(t("settings.unpair")) }));
+
+      expect(localStorage.getItem("openpos.doorList.v1.festival")).toBeNull();
+      confirmed.mockRestore();
+    });
+  });
 });
 
 describe("the guest list carried for a dropout", () => {
@@ -1683,37 +2084,112 @@ describe("the guest list carried for a dropout", () => {
     expect(apiMock.offlineSnapshot).not.toHaveBeenCalled();
   });
 
-  it("is left to the door screen while that is open", async () => {
+  it("is left to the door screen while that is open, which does not pull it again", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const { user } = show();
     await ready();
     await waitFor(() => expect(apiMock.offlineSnapshot).toHaveBeenCalledOnce());
     apiMock.offlineSnapshot.mockClear();
 
+    // Pulled a moment ago by the app: the door has the same list already.
     await user.click(screen.getByRole("button", { name: t("checkin.open") }));
-    await waitFor(() => expect(apiMock.offlineSnapshot).toHaveBeenCalledOnce());
+    expect(apiMock.offlineSnapshot).not.toHaveBeenCalled();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(300_000);
     });
 
     // One fetcher at a time: the door's own refresh, not the app's on top of it.
-    expect(apiMock.offlineSnapshot).toHaveBeenCalledTimes(2);
+    expect(apiMock.offlineSnapshot).toHaveBeenCalledOnce();
     vi.useRealTimers();
   });
 
+  it("is not pulled again at every step out of the door and back", async () => {
+    // A door selling a ticket at the grid and going straight back used to
+    // download the whole guest list at every round trip.
+    const { user } = show();
+    await ready();
+    await waitFor(() => expect(apiMock.offlineSnapshot).toHaveBeenCalledOnce());
+
+    for (let i = 0; i < 3; i++) {
+      await user.click(screen.getByRole("button", { name: t("checkin.open") }));
+      await user.click(await screen.findByRole("button", { name: "close-scanner" }));
+    }
+
+    expect(apiMock.offlineSnapshot).toHaveBeenCalledOnce();
+  });
+
   it("follows the door to the list it was switched to, and reopens on it", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     apiMock.config.mockResolvedValue(twoDoors());
     const { user } = show();
     await ready();
     await user.click(screen.getByRole("button", { name: t("checkin.open") }));
     await user.selectOptions(screen.getByLabelText(t("checkin.list")), "8");
+    await waitFor(() => expect(apiMock.offlineSnapshot).toHaveBeenCalledWith(pairing, 8));
     apiMock.offlineSnapshot.mockClear();
 
+    // The door pulled list 8 a moment ago; the app carries on refreshing that
+    // one rather than going back to the default list.
     await user.click(screen.getByRole("button", { name: "close-scanner" }));
-    await waitFor(() => expect(apiMock.offlineSnapshot).toHaveBeenCalledWith(pairing, 8));
+    expect(apiMock.offlineSnapshot).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300_000);
+    });
+    expect(apiMock.offlineSnapshot).toHaveBeenCalledWith(pairing, 8);
+    expect(apiMock.offlineSnapshot).not.toHaveBeenCalledWith(pairing, 7);
     await user.click(screen.getByRole("button", { name: t("checkin.open") }));
 
     expect(screen.getByLabelText(t("checkin.list"))).toHaveProperty("value", "8");
+    vi.useRealTimers();
+  });
+
+  it("is never pulled by a bar till, and one it carried from before is dropped", async () => {
+    // Every guest's name and ticket secret, every five minutes, on a till
+    // with no door button.
+    saveSnapshot({
+      list: { id: 7, name: "Porte" }, generated: "2026-08-16T20:00:00.000Z",
+      tickets: [{ secret: "alice", item: 20, name: "Alice", used: false }], truncated: false,
+    });
+    saveAdmissions("festival", { 7: { alice: Date.now() } });
+    apiMock.config.mockResolvedValue(config({
+      device: { serial: "TILL1", name: "Caisse bar", role: "pos" },
+    }));
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    show();
+    await ready();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_600_000);
+    });
+
+    expect(apiMock.offlineSnapshot).not.toHaveBeenCalled();
+    expect(loadSnapshot()).toBeNull();
+    expect(loadAdmissions("festival")).toEqual({});
+    vi.useRealTimers();
+  });
+
+  it("is pulled by a door, and by a device nobody has given a role", async () => {
+    apiMock.config.mockResolvedValue(config({
+      device: { serial: "TILL1", name: "Porte", role: "door" },
+    }));
+    show();
+
+    await waitFor(() => expect(apiMock.offlineSnapshot).toHaveBeenCalledWith(pairing, 7));
+  });
+
+  it("is forgotten when the till is unpaired, with who the door let in", async () => {
+    saveAdmissions("festival", { 7: { alice: Date.now() } });
+    const { user } = show();
+    await ready();
+    await waitFor(() => expect(loadSnapshot()).not.toBeNull());
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    await user.click(screen.getByRole("button", { name: "settings" }));
+    await user.click(await screen.findByRole("button", { name: new RegExp(t("settings.unpair")) }));
+
+    expect(loadSnapshot()).toBeNull();
+    expect(loadAdmissions("festival")).toEqual({});
+    vi.restoreAllMocks();
   });
 
   it("forgets the door's list when the till is switched to another event", async () => {
@@ -1742,11 +2218,29 @@ describe("the guest list carried for a dropout", () => {
     await user.click(screen.getByRole("button", { name: "close-scanner" }));
 
     await user.click(screen.getByRole("button", { name: "settings" }));
+    saveAdmissions("festival", { 8: { alice: Date.now() } });
+    let heldAtSwitch: unknown = "unread";
+    let admittedAtSwitch: unknown = "unread";
+    apiMock.config.mockImplementationOnce(async () => {
+      heldAtSwitch = loadSnapshot();
+      admittedAtSwitch = loadAdmissions("festival");
+      return config({
+        event: { ...config().event, slug: "gala", name: "Gala" },
+        checkin: {
+          enabled: true, list_id: 21, list_name: "Gala",
+          lists: [{ id: 21, name: "Gala", all_products: true, include_pending: false }],
+        },
+      });
+    });
     await user.selectOptions(await screen.findByLabelText(t("settings.event")), "gala");
 
     await waitFor(() =>
       expect(apiMock.offlineSnapshot).toHaveBeenCalledWith({ ...pairing, event: "gala" }, 21),
     );
+    // The festival's guest list was gone before the gala's was asked for,
+    // and so was the record of who its door let in.
+    expect(heldAtSwitch).toBeNull();
+    expect(admittedAtSwitch).toEqual({});
   });
 });
 
