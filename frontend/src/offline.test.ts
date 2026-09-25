@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 
-import { indexSnapshot, offlineVerdict } from "./offline";
+import {
+  ADMISSION_MEMORY_MS, admittedOn, indexSnapshot, offlineVerdict, pruneAdmissions, recordAdmission,
+} from "./offline";
 import type { OfflineSnapshot } from "./types";
 
 const snapshot: OfflineSnapshot = {
@@ -87,5 +89,73 @@ describe("offlineVerdict", () => {
 describe("indexSnapshot", () => {
   it("carries the size the footer displays", () => {
     expect(indexSnapshot(snapshot)?.count).toBe(4);
+  });
+});
+
+describe("what this door has let in", () => {
+  const now = Date.parse("2026-08-17T21:00:00Z");
+
+  it("is recorded per list, without touching the record it was given", () => {
+    const before = recordAdmission({}, 7, "alice-secret", now);
+
+    const after = recordAdmission(before, 8, "alice-secret", now);
+
+    expect(admittedOn(after, 7)).toEqual(new Set(["alice-secret"]));
+    expect(admittedOn(after, 8)).toEqual(new Set(["alice-secret"]));
+    expect(admittedOn(before, 8).size).toBe(0);
+  });
+
+  it("is what stops the guest list letting the same ticket in twice", () => {
+    const admitted = recordAdmission({}, 7, "alice-secret", now);
+
+    expect(offlineVerdict(indexSnapshot(snapshot), 7, "alice-secret", admittedOn(admitted, 7)))
+      .toEqual({ status: "error", reason: "already_redeemed" });
+  });
+
+  it("is forgotten once the guest list for that door says the ticket is used", () => {
+    // pretix has the entry and the list carries it: nothing left to cover.
+    const admitted = recordAdmission(recordAdmission({}, 7, "bob-secret", now), 7, "alice-secret", now);
+
+    const pruned = pruneAdmissions(admitted, snapshot, now);
+
+    expect(admittedOn(pruned, 7)).toEqual(new Set(["alice-secret"]));
+  });
+
+  it("is kept while a newer list still has the ticket unused", () => {
+    // Admitted offline, not sent yet: a list pulled since cannot know.
+    const admitted = recordAdmission({}, 7, "alice-secret", now);
+
+    expect(pruneAdmissions(admitted, snapshot, now)).toBe(admitted);
+  });
+
+  it("is not forgotten because another door's list has the ticket used", () => {
+    const admitted = recordAdmission({}, 8, "bob-secret", now);
+
+    expect(pruneAdmissions(admitted, snapshot, now)).toBe(admitted);
+  });
+
+  it("is kept when there is no list to check against", () => {
+    const admitted = recordAdmission({}, 7, "bob-secret", now);
+
+    expect(pruneAdmissions(admitted, null, now)).toBe(admitted);
+  });
+
+  it("is forgotten after a day and a half, list or no list", () => {
+    const admitted = recordAdmission(
+      recordAdmission({}, 7, "old-secret", now - ADMISSION_MEMORY_MS - 1),
+      8, "recent-secret", now - 1000,
+    );
+
+    const pruned = pruneAdmissions(admitted, null, now);
+
+    expect(pruned).toEqual({ 8: { "recent-secret": now - 1000 } });
+  });
+
+  it("drops what is not a time at all", () => {
+    const damaged = { 7: { "alice-secret": "yesterday" } } as unknown as Record<
+      string, Record<string, number>
+    >;
+
+    expect(pruneAdmissions(damaged, null, now)).toEqual({});
   });
 });

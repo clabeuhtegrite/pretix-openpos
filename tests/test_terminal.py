@@ -17,6 +17,7 @@ The flow, once, so the tests below read as steps rather than as HTTP:
    server finds the payment, books the order from the *pinned* basket, and only
    then is anything in the journal.
 """
+from datetime import timedelta
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -229,6 +230,35 @@ def test_a_sold_out_product_does_not_reach_a_cardholder(till, ticket, reader_til
 
 
 @pytest.mark.django_db
+def test_a_basket_bigger_than_any_sale_never_reaches_a_cardholder(
+    till, ticket, reader_till, sumup, monkeypatch
+):
+    from pretix_openpos.api import serializers
+
+    monkeypatch.setattr(serializers, "MAX_ITEMS", 3)
+
+    response = start(till, [{"item": ticket.pk, "count": 2}, {"item": ticket.pk, "count": 2}])
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "too_many_items"
+    assert sumup.started == []
+    assert not PosTerminalPayment.objects.exists()
+
+
+@pytest.mark.django_db
+def test_a_basket_the_card_paid_for_is_not_measured_again(till, ticket, reader_till, sumup, monkeypatch):
+    """Capped when it went on the reader. After the card, refusing it strands a payment."""
+    from pretix_openpos.api import serializers
+
+    take_payment(till, [{"item": ticket.pk, "count": 3}], sumup=sumup)
+    monkeypatch.setattr(serializers, "MAX_ITEMS", 2)
+
+    response = sell(till, [{"item": ticket.pk, "count": 3}], payment_type="card", idempotency_key=KEY)
+
+    assert response.status_code == 201
+
+
+@pytest.mark.django_db
 def test_a_product_that_is_not_on_sale_here_is_refused(till, event, ticket, reader_till, sumup):
     ticket.all_sales_channels = False
     ticket.limit_sales_channels.clear()
@@ -386,6 +416,341 @@ def test_asking_about_a_basket_nobody_started_is_refused(till, reader_till, sumu
     assert response.json()["code"] == "no_payment"
 
 
+# -- a till waiting does not hold the server -------------------------------
+#
+# pretix runs on a handful of worker processes, and a till waiting for a card
+# polls every couple of seconds. Each poll used to ask SumUp up to twice, with
+# twenty seconds' patience each time: one slow SumUp and two waiting tills were
+# enough to leave the other tills, the door, the web shop and the health probe
+# queueing behind them.
+
+
+def a_moment_later(monkeypatch, seconds):
+    """Move the cache's clock on by ``seconds``, as the in-memory cache reads it."""
+    import time as clock
+    from types import SimpleNamespace
+
+    from django.core.cache.backends import locmem
+
+    monkeypatch.setattr(
+        locmem, "time", SimpleNamespace(time=lambda: clock.time() + seconds)
+    )
+
+
+def calls_since(sumup, before):
+    return [(method, path) for method, path, _body in sumup.calls[before:]]
+
+
+@pytest.mark.django_db
+def test_a_waiting_till_gives_up_on_sumup_long_before_a_start_would(
+    till, ticket, reader_till, sumup
+):
+    from pretix_openpos.sumup import POLL_TIMEOUT, TIMEOUT
+
+    start(till, [{"item": ticket.pk, "count": 1}])
+    status(till)
+    cancel_payment(till)
+
+    (_post, started, patience), *asked = sumup.timeouts
+    assert started.endswith("/checkout")
+    assert patience == TIMEOUT
+    # The poll's two questions, then the stop and the question after it.
+    checkout_id = PosTerminalPayment.objects.get().checkout_id
+    assert [path.rsplit("/", 1)[-1] for _method, path, _t in asked] == [
+        "transactions", checkout_id, "terminate", "transactions", checkout_id,
+    ]
+    assert {timeout for _method, _path, timeout in asked} == {POLL_TIMEOUT}
+    assert sum(POLL_TIMEOUT) < sum(TIMEOUT)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "failure", [requests.ReadTimeout("too slow"), requests.ConnectTimeout("no route")]
+)
+def test_a_sumup_too_slow_for_a_poll_leaves_the_till_waiting(
+    till, ticket, reader_till, sumup, failure
+):
+    """
+    Not a failure, and not a 5xx either: a slow SumUp is no news about the
+    payment, and the answer says what it said before the question — and that
+    nobody could find out otherwise, which the till can act on.
+    """
+    start(till, [{"item": ticket.pk, "count": 1}])
+    sumup.next_exception = failure
+
+    response = status(till)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "pending", "amount": "10.00", "currency": "EUR", "failure": "",
+        "sumup_unreachable": True,
+    }
+
+
+@pytest.mark.django_db
+def test_sumup_failing_on_its_side_is_out_of_reach_too(till, ticket, reader_till, sumup):
+    start(till, [{"item": ticket.pk, "count": 1}])
+    sumup.next_response = FakeResponse(503, {"message": "maintenance"})
+
+    body = status(till).json()
+
+    assert (body["status"], body["sumup_unreachable"]) == ("pending", True)
+
+
+@pytest.mark.django_db
+def test_an_answer_sumup_gave_says_it_was_reached(till, ticket, reader_till, sumup):
+    # Put on the reader, nobody asked yet; asked, nobody paid yet; paid.
+    assert start(till, [{"item": ticket.pk, "count": 1}]).json()["sumup_unreachable"] is False
+    assert status(till).json()["sumup_unreachable"] is False
+    sumup.pay()
+    assert status(till).json() == {
+        "status": "successful", "amount": "10.00", "currency": "EUR", "failure": "",
+        "sumup_unreachable": False,
+    }
+
+
+@pytest.mark.django_db
+def test_a_refusal_from_sumup_is_not_taken_for_silence(till, ticket, reader_till, sumup):
+    start(till, [{"item": ticket.pk, "count": 1}])
+    sumup.next_response = FakeResponse(401, {"message": "nope"})
+
+    body = status(till).json()
+
+    assert (body["status"], body["sumup_unreachable"]) == ("failed", False)
+
+
+@pytest.mark.django_db
+def test_a_poll_answered_from_the_row_repeats_what_the_last_question_found(
+    till, ticket, reader_till, sumup, real_cache, monkeypatch
+):
+    """
+    A till polling every two seconds is answered from the row every other
+    time. Out of reach has to be said on those answers too, or the till hears
+    it only half the time — and not at all once SumUp is slower than a poll.
+    """
+    from pretix_openpos.api.views import ASK_SUMUP_EVERY
+
+    start(till, [{"item": ticket.pk, "count": 1}])
+    sumup.next_exception = requests.ReadTimeout("too slow")
+    assert status(till).json()["sumup_unreachable"] is True
+    before = len(sumup.calls)
+
+    assert status(till).json()["sumup_unreachable"] is True
+    assert calls_since(sumup, before) == []
+
+    # SumUp is back: the next question says so, and so do the answers after it.
+    a_moment_later(monkeypatch, ASK_SUMUP_EVERY + 1)
+    assert status(till).json()["sumup_unreachable"] is False
+    assert status(till).json()["sumup_unreachable"] is False
+
+
+@pytest.mark.django_db
+def test_a_reader_request_too_slow_to_answer_changes_nothing(
+    till, ticket, reader_till, sumup, monkeypatch
+):
+    from pretix_openpos import sumup as sumup_module
+
+    start(till, [{"item": ticket.pk, "count": 1}])
+    # Over, as it happens — an answer in time would have closed the payment.
+    sumup.walk_away()
+    answer = sumup.request
+
+    def slow_reader(method, url, **kwargs):
+        if "/checkout/" in url:
+            raise requests.ReadTimeout("too slow")
+        return answer(method, url, **kwargs)
+
+    monkeypatch.setattr(sumup_module.requests, "request", slow_reader)
+
+    body = status(till).json()
+
+    assert body["status"] == "pending"
+    assert PosTerminalPayment.objects.get().status == PosTerminalPayment.STATUS_PENDING
+    # The Transactions API answered — no card yet — which is SumUp reached.
+    # Only the early close was missed, and the next poll tries it again.
+    assert body["sumup_unreachable"] is False
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("outcome", ["SUCCESSFUL", "FAILED", "PENDING"])
+def test_a_transaction_that_answers_is_the_only_question_asked(
+    till, ticket, reader_till, sumup, outcome
+):
+    """The request on the reader is only asked about while no card has been presented."""
+    start(till, [{"item": ticket.pk, "count": 1}])
+    sumup.pay(status=outcome)
+    before = len(sumup.calls)
+
+    status(till)
+
+    assert calls_since(sumup, before) == [
+        ("GET", f"/v2.1/merchants/{sumup.merchant}/transactions")
+    ]
+
+
+@pytest.mark.django_db
+def test_a_question_that_got_no_answer_is_not_followed_by_a_second(
+    till, ticket, reader_till, sumup
+):
+    start(till, [{"item": ticket.pk, "count": 1}])
+    sumup.walk_away()
+    sumup.next_exception = requests.ReadTimeout("too slow")
+    before = len(sumup.calls)
+
+    assert status(till).json()["status"] == "pending"
+    assert len(calls_since(sumup, before)) == 1
+
+
+@pytest.mark.django_db
+def test_a_poll_straight_after_another_is_answered_without_asking_sumup(
+    till, ticket, reader_till, sumup, real_cache
+):
+    start(till, [{"item": ticket.pk, "count": 1}])
+    status(till)
+    sumup.pay()
+    before = len(sumup.calls)
+
+    response = status(till)
+
+    # What the row says, in the shape of every other answer: the card that
+    # went through a moment ago is the next poll's news.
+    assert response.status_code == 200
+    assert response.json()["status"] == "pending"
+    assert calls_since(sumup, before) == []
+
+
+@pytest.mark.django_db
+def test_the_first_poll_after_the_pause_asks_again(
+    till, ticket, reader_till, sumup, real_cache, monkeypatch
+):
+    from pretix_openpos.api.views import ASK_SUMUP_EVERY
+
+    start(till, [{"item": ticket.pk, "count": 1}])
+    status(till)
+    sumup.pay()
+    # Well inside the time a question may take, so this also says the
+    # question that finished let go of the payment rather than timing out.
+    a_moment_later(monkeypatch, ASK_SUMUP_EVERY + 1)
+
+    assert status(till).json()["status"] == "successful"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("seconds_later", [0, 3])
+def test_a_poll_arriving_while_sumup_is_being_asked_does_not_ask_too(
+    till, ticket, reader_till, sumup, real_cache, monkeypatch, seconds_later
+):
+    """
+    SumUp is slow, and the next poll — from the same till, or a second tab on
+    it — arrives while the first is still waiting for its answer: straight
+    away, or once the pause between two questions is over.
+    """
+    from pretix_openpos import sumup as sumup_module
+
+    start(till, [{"item": ticket.pk, "count": 1}])
+    sumup.pay()
+    answer = sumup.request
+    meanwhile = {}
+
+    def slow(method, url, **kwargs):
+        if not meanwhile:
+            meanwhile["calls"] = len(sumup.calls)
+            a_moment_later(monkeypatch, seconds_later)
+            meanwhile["response"] = status(till)
+            meanwhile["asked"] = len(sumup.calls) - meanwhile["calls"]
+        return answer(method, url, **kwargs)
+
+    monkeypatch.setattr(sumup_module.requests, "request", slow)
+
+    first = status(till)
+
+    assert meanwhile["response"].status_code == 200
+    assert meanwhile["response"].json()["status"] == "pending"
+    assert meanwhile["asked"] == 0
+    assert first.json()["status"] == "successful"
+
+
+@pytest.mark.django_db
+def test_a_question_left_behind_by_a_dead_worker_holds_the_payment_for_so_long(
+    till, ticket, reader_till, sumup, real_cache, monkeypatch
+):
+    from pretix_openpos.api.views import ASKING_FOR_AT_MOST
+
+    start(till, [{"item": ticket.pk, "count": 1}])
+    payment = PosTerminalPayment.objects.get()
+    # What a worker killed in the middle of its question leaves behind.
+    real_cache.add(f"pretix_openpos:terminal:{payment.pk}:asking", True, ASKING_FOR_AT_MOST)
+    sumup.pay()
+
+    assert status(till).json()["status"] == "pending"
+    a_moment_later(monkeypatch, ASKING_FOR_AT_MOST + 1)
+    assert status(till).json()["status"] == "successful"
+
+
+@pytest.mark.django_db
+def test_a_payment_another_question_settled_meanwhile_is_not_asked_about(
+    till, organizer, ticket, reader_till, sumup
+):
+    from pretix_openpos.api.views import poll_terminal_payment
+    from pretix_openpos.sumup import SumUpAccount
+
+    start(till, [{"item": ticket.pk, "count": 1}])
+    # Read by this request a moment before another one settled it.
+    stale = PosTerminalPayment.objects.get()
+    PosTerminalPayment.objects.update(
+        status=PosTerminalPayment.STATUS_SUCCESSFUL, transaction_id="tx_1"
+    )
+    before = len(sumup.calls)
+
+    polled = poll_terminal_payment(stale, SumUpAccount(organizer))
+
+    assert polled.status == PosTerminalPayment.STATUS_SUCCESSFUL
+    assert calls_since(sumup, before) == []
+
+
+@pytest.mark.django_db
+def test_the_callback_asks_even_while_a_till_has_just_asked(
+    client, organizer, till, ticket, reader_till, sumup, real_cache
+):
+    """
+    A poll's question may have been answered "pending" the moment before the
+    card went through. The callback is SumUp saying it has; skipping it on the
+    poll's account would leave the payment waiting — for nothing, once the till
+    has gone.
+    """
+    start(till, [{"item": ticket.pk, "count": 1}])
+    status(till)
+    payment = PosTerminalPayment.objects.get()
+    sumup.pay()
+
+    response = client.post(
+        callback_url(organizer),
+        data={"payload": {"client_transaction_id": payment.client_transaction_id}},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    assert PosTerminalPayment.objects.get().status == PosTerminalPayment.STATUS_SUCCESSFUL
+
+
+@pytest.mark.django_db
+def test_a_second_till_reads_the_answer_the_first_one_just_had(
+    till, another_till, ticket, shared_reader, sumup, real_cache
+):
+    """
+    The first till has just asked about the payment holding the shared reader;
+    the second, starting a basket, takes that answer rather than asking again.
+    """
+    start(till, [{"item": ticket.pk, "count": 1}], key="premiere-01")
+    status(till, key="premiere-01")
+    before = len(sumup.calls)
+
+    response = start(another_till, [{"item": ticket.pk, "count": 1}], key="seconde-01")
+
+    assert response.json()["code"] == "terminal_busy"
+    assert calls_since(sumup, before) == []
+
+
 # -- taking it back off ----------------------------------------------------
 
 
@@ -456,6 +821,156 @@ def test_cancelling_a_basket_nobody_started_is_refused(till, reader_till, sumup)
     assert cancel_payment(till).json()["code"] == "no_payment"
 
 
+# A till that left a payment aside — the cashier took cash while the reader was
+# not answering — takes it off the reader once the network is back, minutes
+# later. SumUp's stop halts whatever is on the reader, and the reader may be
+# another payment's by then, on this till or the other one behind the bar.
+
+
+def left_aside(key=KEY):
+    """Age a payment past the time a reader is held for it."""
+    from pretix_openpos.api.views import READER_HELD_FOR
+
+    PosTerminalPayment.objects.filter(idempotency_key=key).update(
+        created=now() - READER_HELD_FOR - timedelta(minutes=1)
+    )
+
+
+def stops(sumup):
+    return len([p for p in sumup.call_paths("POST") if p.endswith("/terminate")])
+
+
+@pytest.mark.django_db
+def test_a_payment_another_till_took_the_reader_from_is_not_stopped_on_it(
+    till, another_till, ticket, shared_reader, sumup
+):
+    start(till, [{"item": ticket.pk, "count": 1}], key="laissee-01")
+    left_aside("laissee-01")
+    assert start(another_till, [{"item": ticket.pk, "count": 1}], key="suivante-01").status_code == 201
+    stopped = stops(sumup)
+
+    response = cancel_payment(till, key="laissee-01")
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["code"] == "reader_moved_on"
+    assert (body["status"], body["sumup_unreachable"]) == ("pending", False)
+    assert stops(sumup) == stopped
+    # The other till's customer is still in front of the reader, and the
+    # payment left aside is not written off on a guess.
+    assert PosTerminalPayment.objects.get(idempotency_key="suivante-01").status == "pending"
+    assert PosTerminalPayment.objects.get(idempotency_key="laissee-01").status == "pending"
+
+
+@pytest.mark.django_db
+def test_a_newer_payment_on_the_reader_is_never_stopped_by_an_older_one(
+    till, another_till, ticket, shared_reader, sumup
+):
+    # However it got there — two tills pressing card in the same instant —
+    # a payment put on the reader after this one is not this one's to stop.
+    start(till, [{"item": ticket.pk, "count": 1}], key="premiere-01")
+    first = PosTerminalPayment.objects.get(idempotency_key="premiere-01")
+    PosTerminalPayment.objects.create(
+        event=first.event, device=another_till.device, idempotency_key="seconde-01",
+        reader_id=first.reader_id, amount=first.amount, currency=first.currency,
+    )
+
+    response = cancel_payment(till, key="premiere-01")
+
+    assert response.json()["code"] == "reader_moved_on"
+    assert stops(sumup) == 0
+
+
+@pytest.mark.django_db
+def test_of_two_payments_written_in_the_same_instant_only_the_second_may_stop_the_reader(
+    till, another_till, ticket, shared_reader, sumup
+):
+    start(till, [{"item": ticket.pk, "count": 1}], key="premiere-01")
+    first = PosTerminalPayment.objects.get(idempotency_key="premiere-01")
+    PosTerminalPayment.objects.create(
+        event=first.event, device=another_till.device, idempotency_key="seconde-01",
+        device_serial=another_till.device.unique_serial,
+        reader_id=first.reader_id, amount=first.amount, currency=first.currency,
+    )
+    PosTerminalPayment.objects.filter(idempotency_key="seconde-01").update(created=first.created)
+
+    assert cancel_payment(till, key="premiere-01").json()["code"] == "reader_moved_on"
+    assert stops(sumup) == 0
+    assert cancel_payment(another_till, key="seconde-01").status_code == 200
+    assert stops(sumup) == 1
+
+
+@pytest.mark.django_db
+def test_a_payment_past_the_time_a_reader_is_held_is_left_alone_on_it(
+    till, ticket, reader_till, sumup
+):
+    start(till, [{"item": ticket.pk, "count": 1}])
+    left_aside()
+
+    assert cancel_payment(till).json()["code"] == "reader_moved_on"
+    assert stops(sumup) == 0
+
+
+@pytest.mark.django_db
+def test_a_payment_left_aside_that_was_paid_after_all_is_answered_paid(
+    till, ticket, reader_till, sumup
+):
+    """The one answer that matters most here: a card charged, and cash taken too."""
+    start(till, [{"item": ticket.pk, "count": 1}])
+    left_aside()
+    sumup.pay()
+
+    response = cancel_payment(till)
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "successful"
+    assert stops(sumup) == 0
+
+
+@pytest.mark.django_db
+def test_a_payment_left_aside_that_sumup_calls_over_is_closed_on_its_word(
+    till, ticket, reader_till, sumup
+):
+    start(till, [{"item": ticket.pk, "count": 1}])
+    left_aside()
+    sumup.walk_away()
+
+    response = cancel_payment(till)
+
+    assert response.status_code == 200
+    assert (response.json()["status"], response.json()["failure"]) == ("failed", "CANCELLED")
+    assert stops(sumup) == 0
+
+
+@pytest.mark.django_db
+def test_a_payment_left_aside_that_sumup_cannot_be_asked_about_is_said_so(
+    till, ticket, reader_till, sumup
+):
+    start(till, [{"item": ticket.pk, "count": 1}])
+    left_aside()
+    sumup.next_exception = requests.ConnectTimeout("no route")
+
+    body = cancel_payment(till).json()
+
+    assert body["code"] == "reader_moved_on"
+    assert (body["status"], body["sumup_unreachable"]) == ("pending", True)
+    assert PosTerminalPayment.objects.get().status == PosTerminalPayment.STATUS_PENDING
+
+
+@pytest.mark.django_db
+def test_a_payment_left_aside_is_asked_about_even_straight_after_a_poll(
+    till, ticket, reader_till, sumup, real_cache
+):
+    # The poll's pause is for a till asking every two seconds, not for the one
+    # question that says whether a card was charged on top of the cash.
+    start(till, [{"item": ticket.pk, "count": 1}])
+    status(till)
+    left_aside()
+    sumup.pay()
+
+    assert cancel_payment(till).json()["status"] == "successful"
+
+
 # -- and then the sale ------------------------------------------------------
 
 
@@ -522,6 +1037,137 @@ def test_a_sale_the_app_sends_differently_is_booked_from_the_pinned_basket(
     assert response.status_code == 201
     positions = PosSale.objects.get().positions
     assert [p["item"] for p in positions] == [ticket.pk]
+
+
+def queued_offline(till, positions, charged, **kwargs):
+    """The sale as a till queues it when the network died after the reader said "paid"."""
+    return sell(
+        till,
+        positions,
+        payment_type="card",
+        idempotency_key=KEY,
+        offline={
+            "recorded_at": (now() - timedelta(minutes=1)).isoformat(),
+            "charged_total": charged,
+        },
+        **kwargs,
+    )
+
+
+@pytest.mark.django_db
+def test_a_card_sale_queued_after_the_reader_took_it_survives_a_price_change(
+    till, event, ticket, reader_till, sumup
+):
+    """
+    The network died between the reader's "paid" and the checkout, so the
+    till queued the sale under the same key and replays it later.
+
+    It priced the queue from the tariff it had cached — ten euros — while the
+    reader charged what the server had priced a moment earlier: twelve. The
+    lines then did not add up to what was charged, and the replay was refused
+    as a corrupted queue: a card charged, and no order behind it.
+    """
+    ticket.default_price = Decimal("12.00")
+    ticket.save(update_fields=["default_price"])
+    take_payment(till, [{"item": ticket.pk, "count": 1}], sumup=sumup)
+
+    response = queued_offline(
+        till, [{"item": ticket.pk, "count": 1, "price": "10.00"}], charged="12.00"
+    )
+
+    assert response.status_code == 201, response.content
+    # Booked from what the card paid for, not from the queue's own figures.
+    assert response.json()["order"]["total"] == "12.00"
+    sale = PosSale.objects.get()
+    assert sale.offline is True
+    assert sale.positions[0]["unit_price"] == "12.00"
+
+
+@pytest.mark.django_db
+def test_a_card_sale_queued_after_the_reader_took_it_is_booked_whatever_the_queue_says(
+    till, event, ticket, beer, reader_till, sumup
+):
+    # Lines that add up among themselves, and to a figure that is not what the
+    # reader took. The reader's is the one the customer agreed to.
+    take_payment(till, [{"item": ticket.pk, "count": 1}], sumup=sumup)
+
+    response = queued_offline(
+        till, [{"item": beer.pk, "count": 1, "price": "3.00"}], charged="3.00"
+    )
+
+    assert response.status_code == 201, response.content
+    assert response.json()["order"]["total"] == "10.00"
+    assert [p["item"] for p in PosSale.objects.get().positions] == [ticket.pk]
+
+
+@pytest.mark.django_db
+def test_a_card_sale_queued_offline_with_no_reader_payment_behind_it_is_refused(
+    till, event, ticket, reader_till, sumup
+):
+    # The owner's rule, replays included: a till with a reader may not record
+    # a card payment that reader did not validate.
+    response = queued_offline(
+        till, [{"item": ticket.pk, "count": 1, "price": "10.00"}], charged="10.00"
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "terminal_required"
+    assert not PosSale.objects.exists()
+
+
+@pytest.mark.django_db
+def test_a_basket_paid_on_the_reader_is_recorded_whatever_the_catalogue_did_since(
+    till, event, ticket, reader_till, sumup
+):
+    """
+    Switched off and taken off the till's channel in the moment between the
+    card and the checkout. The server priced this basket itself, from the grid
+    it served; a card has paid for it. Nothing is refused.
+    """
+    take_payment(till, [{"item": ticket.pk, "count": 1}], sumup=sumup)
+    ticket.active = False
+    ticket.save(update_fields=["active"])
+    ticket.limit_sales_channels.clear()
+
+    response = sell(
+        till, [{"item": ticket.pk, "count": 1}], payment_type="card", idempotency_key=KEY
+    )
+
+    assert response.status_code == 201, response.content
+    assert response.json()["order"]["total"] == "10.00"
+
+
+@pytest.mark.django_db
+def test_a_free_amount_paid_on_the_reader_is_reported_once_its_product_is_not_the_one(
+    till, event, misc, beer, reader_till, sumup
+):
+    """
+    A reason on a line hides nothing from the tariff comparison, except on the
+    product set aside for free amounts. The organiser named another one between
+    the card and the checkout: the line is recorded — the card paid for it —
+    and reported as off the tariff, like any other line priced by the till.
+    """
+    start(till, [{"item": misc.pk, "count": 1, "price": "4.50", "description": "Tombola"}])
+    sumup.pay()
+    status(till)
+    event.settings.set("openpos_custom_item", str(beer.pk))
+
+    response = sell(
+        till, [{"item": misc.pk, "count": 1, "price": "4.50", "description": "Tombola"}],
+        payment_type="card", idempotency_key=KEY,
+    )
+
+    assert response.status_code == 201, response.content
+    assert response.json()["off_tariff"] == [
+        {
+            "item": misc.pk,
+            "item_name": "Divers",
+            "variation": None,
+            "variation_name": None,
+            "charged": "4.50",
+            "tariff": "0.00",
+        }
+    ]
 
 
 @pytest.mark.django_db

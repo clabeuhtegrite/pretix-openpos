@@ -1,5 +1,45 @@
 # Publishing the production image to ghcr.io.
 #
+# ONLY WHAT MAIN CARRIES, AND ONLY ONCE CI HAS PASSED ON IT.
+#
+# The channel below is what the cluster deploys from, which makes this workflow
+# the last thing between a commit and the till. The rules around it used to be a
+# habit: a dispatch ran from whatever branch was picked in the form, any v* tag
+# published whatever commit it named, and nothing tied the image to a green CI
+# run. They are checked now, before anything is built:
+#
+#   - Where from. A dispatch from main, or a v* tag, and in both cases the
+#     commit has to be on main. A tag can name any commit at all, including one
+#     on a branch that was never merged.
+#   - CI. The CI workflow (ci.yml) has to have concluded `success` on that exact
+#     commit, in the run for its push to main. The usual gesture is to merge and
+#     dispatch at once, while that run is still going, so the gate waits for it:
+#     up to 45 minutes, CI's two slowest jobs giving up at 30. A failed or
+#     cancelled run fails the gate with its link, and so do a wait that runs out
+#     and a commit CI never ran on.
+#   - Who holds the token. The waiting is done by a job that can read and do
+#     nothing else. The job that can push only starts once the gate has passed,
+#     and it checks out the commit the gate checked, not whatever the ref points
+#     at by then.
+#   - No third-party code near it. An action pinned by tag (`@v3`) runs whatever
+#     its owner points that tag at today, with this job's token, and here that
+#     token can push to the channel. So the login is a plain `docker login` with
+#     the runner's own CLI, and the one action left is actions/checkout, which is
+#     GitHub's own and asks for no more trust than the runner it executes on.
+#     The other workflows keep their tag pins: their tokens can read the tree
+#     and, for the site, publish Pages, and nothing of theirs reaches the image.
+#   - Nothing pasted into a shell. Form inputs and the github context reach the
+#     scripts as environment variables, never spliced into their text, and a
+#     base typed into the form has to look like a pretix version before it goes
+#     anywhere near a tag.
+#
+# What this file cannot enforce is itself. A workflow runs as it stands on the
+# ref it was started from, so anyone who can push a branch can push one without
+# these checks, then dispatch it or tag it. The checks catch mistakes. Stopping
+# the rest is the repository's job (Settings -> Rules): a ruleset that keeps the
+# creation of v* tags to maintainers, and main protected so that only a pull
+# request with CI green reaches it.
+#
 # TWO TAGS, AND THEY ARE NOT INTERCHANGEABLE.
 #
 #   <version>-pretix<base>   immutable, one per build, never moved. This is the
@@ -27,8 +67,8 @@
 name: Publish production image
 
 on:
-  # The ordinary path. Fired by hand, or through the API, once main carries the
-  # version to ship.
+  # The ordinary path. Fired by hand, or through the API, from main once it
+  # carries the version to ship.
   workflow_dispatch:
     inputs:
       base:
@@ -40,64 +80,227 @@ on:
         required: false
         type: boolean
         default: false
-  # A release tag ships itself.
+  # A release tag ships itself, if its commit is on main.
   push:
     tags: ["v*"]
 
-# Least privilege: the build needs to write packages and read the tree, nothing
-# else. GITHUB_TOKEN covers both, so this workflow adds no secret to the repo.
+# Read-only unless a job says otherwise, and each job below says: the gate reads
+# the tree and CI's runs, and only the job that pushes can write — to packages,
+# and nothing else.
 permissions:
   contents: read
-  packages: write
 
 concurrency:
   # Two builds pushing the same channel tag would race for which one it ends
-  # up pointing at.
+  # up pointing at. The whole run is serialised, gate included, so that the
+  # channel ends on the last run started rather than on whichever CI run
+  # happened to finish last.
   group: publish-image
   cancel-in-progress: false
 
 jobs:
-  publish:
-    name: "Build and push to ghcr.io"
+  gate:
+    name: "From main, and green on CI"
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # The wait below gives up by itself at 45 minutes, with a message saying
+    # so; this is only the backstop.
+    timeout-minutes: 55
+    permissions:
+      contents: read
+      # Listing CI's runs through the API.
+      actions: read
+    outputs:
+      sha: ${{ steps.id.outputs.sha }}
+      version: ${{ steps.id.outputs.version }}
+      base: ${{ steps.id.outputs.base }}
+      immutable: ${{ steps.id.outputs.immutable }}
+      channel: ${{ steps.id.outputs.channel }}
+      ci_run: ${{ steps.ci.outputs.run }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The whole history, main's included, to tell whether the commit
+          # being published is on main. The repository is small enough that
+          # this costs seconds.
+          fetch-depth: 0
+          # Nothing after the checkout talks to git's remote, so the token
+          # has no reason to be left in .git/config.
+          persist-credentials: false
 
       # Both numbers come from the tree being built, never from a hand-typed
       # input, so the tag cannot disagree with what is inside the image. The
       # base is overridable because a base bump is a rebuild of unchanged
       # plugin code — the one case where nothing in the tree moves.
-      - name: Work out the version, the base and the tags
+      # Worked out before the wait for CI, so that a mistyped base or a run
+      # from the wrong branch fails in seconds rather than after it.
+      - name: Work out what is being published, and check where from
         id: id
+        env:
+          BASE_INPUT: ${{ inputs.base }}
         run: |
           set -euo pipefail
+
+          # The commit checked out, whatever kind of ref led to it: what CI
+          # ran on, and what the other job will build.
+          sha=$(git rev-parse HEAD)
+
+          case "$GITHUB_REF" in
+            refs/heads/main | refs/tags/v*) ;;
+            *)
+              echo "::error::$GITHUB_REF is neither main nor a v* tag. An image is published from main, or from a release tag on main."
+              exit 1
+              ;;
+          esac
+
+          # On main for a tag, which can name any commit; and for a dispatch
+          # from main too, which it no longer is if main was rewritten since.
+          git rev-parse --verify --quiet refs/remotes/origin/main > /dev/null \
+            || { echo "::error::main was not fetched, so there is no telling whether $sha is on it"; exit 1; }
+          if ! git merge-base --is-ancestor "$sha" refs/remotes/origin/main; then
+            echo "::error::$sha ($GITHUB_REF) is not on main. Only what main carries is published."
+            exit 1
+          fi
+
           version=$(sed -n 's/^__version__ = "\(.*\)"$/\1/p' pretix_openpos/__init__.py)
           [ -n "$version" ] || { echo "::error::no __version__ in pretix_openpos/__init__.py"; exit 1; }
 
-          base='${{ inputs.base }}'
+          base=$BASE_INPUT
           if [ -z "$base" ]; then
             base=$(sed -n 's/^ARG PRETIX_VERSION=\(.*\)$/\1/p' deploy/Dockerfile)
           fi
           [ -n "$base" ] || { echo "::error::no ARG PRETIX_VERSION in deploy/Dockerfile"; exit 1; }
+          # It becomes part of two tags and a build argument. Matched as one
+          # string, not line by line, so that a second line cannot ride in
+          # behind a valid first one; and not echoed back, so that whatever
+          # was typed stays out of the log's workflow commands.
+          version_shape='^[0-9]+(\.[0-9]+)+$'
+          if ! [[ $base =~ $version_shape ]]; then
+            echo "::error::the base is not a pretix version: digits and dots, such as 2026.7 or 2026.7.1"
+            exit 1
+          fi
 
           # Lowercase: ghcr.io rejects an uppercase path, and the owner's login
           # is not guaranteed to be lowercase.
-          repo=$(echo "ghcr.io/${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          repo=$(printf '%s' "ghcr.io/$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
 
           {
+            echo "sha=$sha"
             echo "version=$version"
             echo "base=$base"
-            echo "repo=$repo"
             echo "immutable=$repo:$version-pretix$base"
             echo "channel=$repo:pretix$base"
           } >> "$GITHUB_OUTPUT"
+          echo "$version on pretix $base, from $sha ($GITHUB_REF)."
 
-      - uses: docker/login-action@v3
+      # The conclusion of CI's workflow run, which is its verdict as a whole,
+      # rather than the commit's check runs, which are one per job: a job
+      # that never started leaves no check behind to fail.
+      # The run for the push to main, not a pull request's: that one tested
+      # the branch merged into main as main stood then, which is not this
+      # tree once anything else has been merged in between.
+      # A run that has not appeared after ten minutes is not coming — the
+      # commit was pushed with [skip ci], or arrived as one of several at once
+      # and was never itself the tip of a push — and is not worth waiting 45
+      # for.
+      # Referred to by file name, ci.yml: renaming that file makes this step
+      # fail on the API's 404, loudly, rather than wait on nothing.
+      - name: CI passed on this very commit
+        id: ci
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ steps.id.outputs.sha }}
+        run: |
+          set -euo pipefail
+
+          api="${GITHUB_API_URL:-https://api.github.com}"
+          url="$api/repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SHA&event=push&exclude_pull_requests=true&per_page=100"
+          wait_for_ci=$((45 * 60))
+          wait_for_a_run=$((10 * 60))
+          body=$(mktemp)
+
+          start=$(date +%s)
+          while :; do
+            status=$(curl -sS --max-time 30 --retry 3 -o "$body" -w '%{http_code}' \
+                       -H "Authorization: Bearer $GITHUB_TOKEN" \
+                       -H "Accept: application/vnd.github+json" \
+                       -H "X-GitHub-Api-Version: 2022-11-28" \
+                       "$url") || status=000
+            elapsed=$(( $(date +%s) - start ))
+
+            case "$status" in
+              200)
+                # The query already asks for this commit's push runs; asked
+                # again here so that a filter the API ignored cannot let
+                # another commit's run vouch for this one.
+                runs=$(jq -c --arg sha "$SHA" \
+                         '[.workflow_runs[]? | select(.head_sha == $sha and .event == "push")]' "$body") \
+                  || { echo "::error::GitHub's API answered with something that is not a list of runs:"; cat "$body"; exit 1; }
+                passed=$(jq -r '[.[] | select(.status == "completed" and .conclusion == "success")][0].html_url // empty' <<< "$runs")
+                if [ -n "$passed" ]; then
+                  echo "CI passed on $SHA: $passed"
+                  echo "run=$passed" >> "$GITHUB_OUTPUT"
+                  exit 0
+                fi
+                count=$(jq 'length' <<< "$runs")
+                running=$(jq -r '[.[] | select(.status != "completed")][0].html_url // empty' <<< "$runs")
+                if [ "$count" -gt 0 ] && [ -z "$running" ]; then
+                  echo "::error::CI did not pass on $SHA, so it is not published:"
+                  jq -r '.[] | "  \(.conclusion // "no conclusion")  \(.html_url)"' <<< "$runs"
+                  exit 1
+                fi
+                if [ "$count" -eq 0 ] && [ "$elapsed" -ge "$wait_for_a_run" ]; then
+                  echo "::error::CI has no run for the push of $SHA to main after $((wait_for_a_run / 60)) minutes. Was it pushed with [skip ci], or together with later commits? Only a commit CI ran on is published."
+                  exit 1
+                fi
+                where=${running:-no run yet}
+                ;;
+              000 | 5??)
+                # GitHub having a bad minute is not CI failing: ask again.
+                echo "::warning::GitHub's API did not answer (HTTP $status), asking again"
+                where="API unavailable"
+                ;;
+              *)
+                echo "::error::GitHub's API refused to list CI's runs (HTTP $status):"
+                cat "$body"
+                exit 1
+                ;;
+            esac
+
+            if [ "$elapsed" -ge "$wait_for_ci" ]; then
+              echo "::error::CI has not finished on $SHA after $((wait_for_ci / 60)) minutes ($where). Re-run this workflow once it has."
+              exit 1
+            fi
+            echo "Waiting for CI on $SHA: $where ($((elapsed / 60)) min so far)"
+            sleep 30
+          done
+
+  publish:
+    name: "Build and push to ghcr.io"
+    needs: gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
+    env:
+      VERSION: ${{ needs.gate.outputs.version }}
+      BASE: ${{ needs.gate.outputs.base }}
+      IMMUTABLE: ${{ needs.gate.outputs.immutable }}
+      CHANNEL: ${{ needs.gate.outputs.channel }}
+    steps:
+      - uses: actions/checkout@v4
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
+          # The commit the gate checked, by hash.
+          ref: ${{ needs.gate.outputs.sha }}
+          # This job's token can push packages: it is not left lying in
+          # .git/config for the build to find.
+          persist-credentials: false
+
+      - name: Log in to ghcr.io
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$ACTOR" --password-stdin
 
       # An immutable tag that gets overwritten is not immutable, and the
       # cluster pins digests against the promise that it is not. A rebuild of
@@ -107,11 +310,11 @@ jobs:
         if: ${{ !inputs.force }}
         run: |
           set -euo pipefail
-          if docker manifest inspect '${{ steps.id.outputs.immutable }}' > /dev/null 2>&1; then
-            echo "::error::${{ steps.id.outputs.immutable }} already exists. Bump __version__, or re-run with force."
+          if docker manifest inspect "$IMMUTABLE" > /dev/null 2>&1; then
+            echo "::error::$IMMUTABLE already exists. Bump __version__, or re-run with force."
             exit 1
           fi
-          echo "${{ steps.id.outputs.immutable }} is free."
+          echo "$IMMUTABLE is free."
 
       # --platform linux/amd64 is the cluster's architecture and the runner's,
       # but naming it keeps the manifest single-platform and predictable.
@@ -124,11 +327,12 @@ jobs:
       # the push both read.
       - name: Build
         run: |
+          set -euo pipefail
           docker buildx build --platform linux/amd64 --provenance=false --sbom=false --load \
             -f deploy/Dockerfile \
-            --build-arg PRETIX_VERSION='${{ steps.id.outputs.base }}' \
-            -t '${{ steps.id.outputs.immutable }}' \
-            -t '${{ steps.id.outputs.channel }}' \
+            --build-arg PRETIX_VERSION="$BASE" \
+            -t "$IMMUTABLE" \
+            -t "$CHANNEL" \
             .
 
       # The same assertion the CI image job makes, for the same reason: a
@@ -137,7 +341,7 @@ jobs:
       # image never reaches a tag the cluster reads.
       - name: The till's own JavaScript is in the image
         run: |
-          docker run --rm --entrypoint sh '${{ steps.id.outputs.immutable }}' -c \
+          docker run --rm --entrypoint sh "$IMMUTABLE" -c \
             'ls /pretix/src/pretix/static.dist/pretix_openpos/pwa/app.js'
 
       # And that the two versions in there agree. A bundle older than the
@@ -148,16 +352,18 @@ jobs:
       # which chunk vite bakes the version into is its business, and pinning
       # this check to one filename would turn a chunking change into a failed
       # release.
+      # The version goes into the container as a variable too, rather than
+      # spliced into the command it runs there.
       - name: The plugin and the bundle are the same version
         run: |
           set -euo pipefail
-          found=$(docker run --rm --entrypoint sh '${{ steps.id.outputs.immutable }}' -c \
-            "grep -rlF '\"${{ steps.id.outputs.version }}\"' /pretix/src/pretix/static.dist/pretix_openpos/pwa/ | head -1" || true)
+          found=$(docker run --rm -e VERSION --entrypoint sh "$IMMUTABLE" -c \
+            'grep -rlF "\"$VERSION\"" /pretix/src/pretix/static.dist/pretix_openpos/pwa/ | head -1' || true)
           if [ -z "$found" ]; then
-            echo "::error::no file in the bundle carries ${{ steps.id.outputs.version }} — the image would ship a bundle older than the plugin installed beside it"
+            echo "::error::no file in the bundle carries $VERSION — the image would ship a bundle older than the plugin installed beside it"
             exit 1
           fi
-          echo "bundle and plugin both at ${{ steps.id.outputs.version }} (${found})."
+          echo "bundle and plugin both at $VERSION (${found})."
 
       # The immutable tag first: if the push of the channel fails, the record
       # of this build still exists and the channel still points at the last
@@ -166,44 +372,50 @@ jobs:
         id: push
         run: |
           set -euo pipefail
-          docker push '${{ steps.id.outputs.immutable }}'
-          docker push '${{ steps.id.outputs.channel }}'
-          digest=$(docker buildx imagetools inspect '${{ steps.id.outputs.immutable }}' \
-                     --format '{{.Manifest.Digest}}')
+          docker push "$IMMUTABLE"
+          docker push "$CHANNEL"
+          digest=$(docker buildx imagetools inspect "$IMMUTABLE" --format '{{.Manifest.Digest}}')
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
       # The channel has to resolve to this build, or the cluster will pre-seed
       # the wrong image and nobody will notice until a rollout.
       - name: The channel points at this build
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
         run: |
           set -euo pipefail
-          channel=$(docker buildx imagetools inspect '${{ steps.id.outputs.channel }}' \
-                      --format '{{.Manifest.Digest}}')
-          if [ "$channel" != '${{ steps.push.outputs.digest }}' ]; then
-            echo "::error::channel resolves to $channel, expected ${{ steps.push.outputs.digest }}"
+          channel=$(docker buildx imagetools inspect "$CHANNEL" --format '{{.Manifest.Digest}}')
+          if [ "$channel" != "$DIGEST" ]; then
+            echo "::error::channel resolves to $channel, expected $DIGEST"
             exit 1
           fi
-          echo "channel at ${{ steps.push.outputs.digest }}."
+          echo "channel at $DIGEST."
 
       # What a human needs next, in the form they need it. The manifest line is
       # printed whole because it gets pasted into a deployment manifest by hand,
-      # and a mistyped digest is an outage rather than a typo.
+      # and a mistyped digest is an outage rather than a typo. The CI run is
+      # there because it is what vouched for this image.
       - name: Summary
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
+          CI_RUN: ${{ needs.gate.outputs.ci_run }}
+          MIRROR: ${{ vars.MIRROR_REGISTRY }}
         run: |
           {
-            echo "## \`${{ steps.id.outputs.version }}\` on pretix \`${{ steps.id.outputs.base }}\`"
+            echo "## \`$VERSION\` on pretix \`$BASE\`"
             echo
             echo "| | |"
             echo "|---|---|"
-            echo "| immutable | \`${{ steps.id.outputs.immutable }}\` |"
-            echo "| channel | \`${{ steps.id.outputs.channel }}\` |"
-            echo "| digest | \`${{ steps.push.outputs.digest }}\` |"
+            echo "| immutable | \`$IMMUTABLE\` |"
+            echo "| channel | \`$CHANNEL\` |"
+            echo "| digest | \`$DIGEST\` |"
+            echo "| CI | $CI_RUN |"
             echo
             if [ -n "$MIRROR" ]; then
               echo "Once your mirror has copied the channel, pin this digest:"
               echo
               echo '```yaml'
-              echo "          image: $MIRROR/pretix-openpos:pretix${{ steps.id.outputs.base }}@${{ steps.push.outputs.digest }} # mirror: ${{ steps.id.outputs.channel }}"
+              echo "          image: $MIRROR/pretix-openpos:pretix$BASE@$DIGEST # mirror: $CHANNEL"
               echo '```'
               echo
               echo "> Pin it only once the digest is actually in the mirror."
@@ -212,5 +424,3 @@ jobs:
               echo "> rather than a rollout that waits."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
-        env:
-          MIRROR: ${{ vars.MIRROR_REGISTRY }}

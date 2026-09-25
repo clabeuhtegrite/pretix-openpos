@@ -6,7 +6,8 @@
 # failure on a laptop is the failure CI saw.
 services:
   db:
-    image: postgres:16-alpine
+    # 18, the major version production runs.
+    image: postgres:18-alpine
     environment:
       POSTGRES_DB: pretix
       POSTGRES_USER: pretix
@@ -21,7 +22,13 @@ services:
     tmpfs:
       # Nothing here outlives the run, and this makes the migrations a good
       # deal faster than they are on a disk-backed volume.
-      - /var/lib/postgresql/data
+      # /var/lib/postgresql rather than .../data: from 18 on, the official
+      # image keeps its data one level further down, PGDATA being
+      # /var/lib/postgresql/18/docker, and declares /var/lib/postgresql as its
+      # volume. Left on the old path, the tmpfs would be worse than useless:
+      # the entrypoint takes any mount at /var/lib/postgresql/data, empty or
+      # not, for a pre-18 database nobody upgraded, and refuses to start.
+      - /var/lib/postgresql
 
   pretix:
     build:

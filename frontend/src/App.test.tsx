@@ -3,7 +3,13 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { apiMock, sound } = vi.hoisted(() => ({
-  sound: { play: vi.fn(), unlock: vi.fn(), setSoundEnabled: vi.fn(), soundEnabled: vi.fn(() => true) },
+  sound: {
+    play: vi.fn(),
+    unlock: vi.fn(),
+    keepSoundReady: vi.fn(() => vi.fn()),
+    setSoundEnabled: vi.fn(),
+    soundEnabled: vi.fn(() => true),
+  },
   apiMock: {
     config: vi.fn(),
     catalog: vi.fn(),
@@ -27,6 +33,7 @@ const { apiMock, sound } = vi.hoisted(() => ({
     drawerMovement: vi.fn(),
     drawerCount: vi.fn(),
     drawerClose: vi.fn(),
+    deviceStatus: vi.fn(),
   },
 }));
 
@@ -40,14 +47,18 @@ vi.mock("./api", async (importOriginal) => {
 vi.mock("./sound", () => sound);
 
 // No camera in jsdom, and the door has its own tests. What is kept is the
-// way out, so a test can close the door again.
+// way out, so a test can close the door again; the strip over the picture,
+// where the door shows the update bar; and a ticket to hold up to it.
 vi.mock("./components/QrScanner", () => ({
-  default: ({ title, footer, children, onClose }: {
-    title: string; footer?: React.ReactNode; children?: React.ReactNode; onClose: () => void;
+  default: ({ title, footer, children, banner, onClose, onDecode }: {
+    title: string; footer?: React.ReactNode; children?: React.ReactNode;
+    banner?: React.ReactNode; onClose: () => void; onDecode: (text: string) => void;
   }) => (
     <div>
       <h2>{title}</h2>
       <button onClick={onClose}>close-scanner</button>
+      {banner}
+      <button onClick={() => onDecode("secret-alice")}>scan-ticket</button>
       {footer}
       {children}
     </div>
@@ -56,16 +67,31 @@ vi.mock("./components/QrScanner", () => ({
 
 import App from "./App";
 import { ApiError, deviceDescription } from "./api";
+import { cancellationKeys, loadCancellationResult, saveCancellationResult } from "./cancellation";
+import { noteServerTime } from "./clock";
 import { markReachable, markUnreachable } from "./connectivity";
-import { t } from "./i18n";
+import { moment } from "./drawer";
+import { describeError } from "./errors";
+import { t, tn } from "./i18n";
 import { formatMoney } from "./money";
 import {
-  clearBasket, loadBasket, loadCashier, loadDeviceReport, loadPairing, loadQueue, loadRevocations,
-  savePairing, saveBasket, saveDeviceReport, saveFailures, saveQueue,
+  addOrphan, clearBasket, loadAdmissions, loadBasket, loadCashier, loadDeviceReport,
+  loadDoorResume, loadFailures, loadOrphans, loadPairing, loadPendingPayment, loadQueue,
+  loadRevocations, loadSnapshot, saveAdmissions, saveBasket, saveDeviceReport, saveDoorList,
+  saveDoorResume, saveFailures, savePairing, savePendingPayment, saveQueue, saveSnapshot,
 } from "./storage";
 import { fillStorage } from "./test/setup";
 import { noTakings } from "./test/takings";
-import type { Catalog, DrawerState, JournalLine, PosConfig, SaleResult } from "./types";
+import type {
+  Catalog, DrawerState, JournalLine, PendingPayment, PosConfig, QueuedSale, RedeemResult,
+  SaleResult,
+} from "./types";
+import {
+  DOOR_IDLE_UPDATE_MS, PREPARE_UPDATE, TILL_IDLE_UPDATE_MS, UPDATE_RETRY_MS,
+} from "./update";
+import { STATUS_SETTLE_MS } from "./useDeviceStatus";
+import { ORPHAN_CHECK_MS } from "./useOrphanPayments";
+import { TERMINAL_POLL_MS, TERMINAL_UNANSWERED_MS } from "./useTerminal";
 
 /**
  * The till as a whole.
@@ -126,7 +152,7 @@ const catalog: Catalog = {
 
 function sold(overrides: Partial<SaleResult> = {}): SaleResult {
   return {
-    order: { code: "POS01", total: "3.00", url: null },
+    order: { code: "POS01", total: "3.00" },
     journal_seq: 1,
     payment_type: "cash",
     cash_given: null,
@@ -212,6 +238,7 @@ beforeEach(() => {
     list: { id: 7, name: "Porte" }, generated: "2026-08-16T20:00:00.000Z",
     tickets: [], truncated: false,
   });
+  apiMock.deviceStatus.mockResolvedValue({ server_time: new Date().toISOString() });
 });
 
 afterEach(() => {
@@ -284,6 +311,24 @@ describe("getting to the till", () => {
     expect(
       await screen.findByText(t("error.refused", { detail: "Unknown device." })),
     ).toBeDefined();
+    expect(loadPairing()).not.toBeNull();
+  });
+
+  it("says a refusal pretix did not write is not pretix refusing the till", async () => {
+    // A CDN's challenge page: no JSON, so the API layer can only call it by
+    // its status. "The server refused this till: HTTP 403" read like a
+    // revocation and sent people to the unpair button; the next retry is what
+    // usually gets past it.
+    const page = new ApiError(403, "HTTP 403", "<!DOCTYPE html><title>Just a moment…</title>");
+    apiMock.config.mockRejectedValue(page);
+    apiMock.catalog.mockRejectedValue(page);
+    show();
+
+    expect(await screen.findByText(t("error.denied", { status: 403 }))).toBeDefined();
+    expect(screen.queryByText(/HTTP 403 /)).toBeNull();
+    // Still a refusal: the way out stays next to it, and the pairing stays.
+    expect(screen.getByRole("button", { name: t("error.retry") })).toBeDefined();
+    expect(screen.getByRole("button", { name: t("settings.unpair") })).toBeDefined();
     expect(loadPairing()).not.toBeNull();
   });
 
@@ -534,16 +579,24 @@ describe("hearing the till", () => {
     expect(sound.play).toHaveBeenCalledWith("add");
   });
 
-  it("starts the audio on the first tap, whatever that tap was", async () => {
+  it("keeps the audio ready for as long as the app runs, and lets go after", async () => {
     // No browser will open an audio context outside a gesture, and a refused
-    // ticket at the door arrives on a camera frame rather than a tap.
-    sound.unlock.mockClear();
-    const { user } = show();
+    // ticket at the door arrives on a camera frame rather than a tap. What
+    // the gestures do is sound.ts's to prove; here, that it is held from the
+    // start and released once, not re-armed on every render.
+    const release = vi.fn();
+    sound.keepSoundReady.mockClear();
+    sound.keepSoundReady.mockReturnValue(release);
+    const { unmount } = render(<App />);
     await ready();
+    await userEvent.setup().click(screen.getByRole("tab", { name: "Bar" }));
 
-    await user.click(screen.getByRole("tab", { name: "Bar" }));
+    expect(sound.keepSoundReady).toHaveBeenCalledTimes(1);
+    expect(release).not.toHaveBeenCalled();
 
-    expect(sound.unlock).toHaveBeenCalled();
+    unmount();
+
+    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("remembers being told to keep quiet", async () => {
@@ -878,7 +931,7 @@ describe("the two buttons that are not products", () => {
     apiMock.config.mockResolvedValue(withExtras());
     apiMock.checkout.mockResolvedValue(
       sold({
-        order: { code: "", total: "0.00", url: null },
+        order: { code: "", total: "0.00" },
         deposit_refund: "2.00",
         net_total: "-2.00",
       }),
@@ -1194,6 +1247,45 @@ describe("the queue", () => {
 });
 
 describe("a new build on the server", () => {
+  let reload: ReturnType<typeof vi.fn>;
+  let location: PropertyDescriptor | undefined;
+
+  beforeEach(() => {
+    reload = vi.fn();
+    location = Object.getOwnPropertyDescriptor(window, "location");
+    Object.defineProperty(window, "location", {
+      configurable: true, value: { ...window.location, reload, search: "" },
+    });
+  });
+
+  afterEach(() => {
+    if (location) Object.defineProperty(window, "location", location);
+    Reflect.deleteProperty(navigator, "serviceWorker");
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  /**
+   * A service worker that answers the update handshake (sw.js) with these
+   * states, in this order. Returns what the page asked it.
+   */
+  function worker(...states: string[]) {
+    const postMessage = vi.fn((_message: unknown, transfer: MessagePort[]) => {
+      for (const state of states) transfer[0].postMessage({ state });
+    });
+    Object.defineProperty(navigator, "serviceWorker", {
+      configurable: true, value: { controller: { postMessage } },
+    });
+    return postMessage;
+  }
+
+  /** Let fake time run, the page's effects and answers with it. */
+  async function wait(ms: number) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
   it("is offered between customers", async () => {
     apiMock.config.mockResolvedValue(config({ version: "99.0.0" }));
     show();
@@ -1232,13 +1324,13 @@ describe("a new build on the server", () => {
     expect(screen.queryByRole("button", { name: t("update.reload") })).toBeNull();
   });
 
-  it("drops the caches before reloading, or the reload serves the old bundle", async () => {
+  it("is fetched before the reload, and the copy the till has is never thrown away", async () => {
+    // Every cache used to be wiped first. The reload was then the only way
+    // back to a working till, and a reload that met a dropped wifi or a
+    // server mid-restart left one that could not open at all.
     const remove = vi.fn().mockResolvedValue(true);
-    vi.stubGlobal("caches", { keys: vi.fn().mockResolvedValue(["v1"]), delete: remove });
-    const reload = vi.fn();
-    Object.defineProperty(window, "location", {
-      configurable: true, value: { ...window.location, reload, search: "" },
-    });
+    vi.stubGlobal("caches", { keys: vi.fn().mockResolvedValue(["openpos-shell-v2"]), delete: remove });
+    const asked = worker("preparing", "ready");
     apiMock.config.mockResolvedValue(config({ version: "99.0.0" }));
     const { user } = show();
     await ready();
@@ -1251,10 +1343,235 @@ describe("a new build on the server", () => {
     expect(updating).toHaveProperty("disabled", true);
     expect(updating.getAttribute("aria-busy")).toBe("true");
     await waitFor(() => expect(reload).toHaveBeenCalled());
-    expect(remove).toHaveBeenCalledWith("v1");
+    expect(asked).toHaveBeenCalledWith({ type: PREPARE_UPDATE }, expect.any(Array));
+    expect(remove).not.toHaveBeenCalled();
     // Written before the reload: whatever comes back has to know it tried.
     expect(localStorage.getItem("openpos.updateTried.v1")).toBe("99.0.0");
-    vi.unstubAllGlobals();
+  });
+
+  it("stays on the build it has when the new one cannot be fetched, and says so", async () => {
+    const asked = worker("preparing", "failed");
+    apiMock.config.mockResolvedValue(config({ version: "99.0.0" }));
+    const { user } = show();
+    await ready();
+
+    await user.click(screen.getByRole("button", { name: t("update.reload") }));
+
+    const failed = await screen.findByRole("button", { name: t("update.failed") });
+    expect(reload).not.toHaveBeenCalled();
+    // Not spent: the offer stands, and the next press is a real attempt.
+    expect(localStorage.getItem("openpos.updateTried.v1")).toBeNull();
+    await user.click(failed);
+    await waitFor(() => expect(asked).toHaveBeenCalledTimes(2));
+  });
+
+  describe("at a till", () => {
+    it("installs itself after a quiet minute", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      apiMock.config.mockResolvedValue(config({ version: "99.0.0" }));
+      show();
+      await ready();
+
+      await wait(TILL_IDLE_UPDATE_MS - 5_000);
+      expect(reload).not.toHaveBeenCalled();
+      await wait(10_000);
+
+      expect(reload).toHaveBeenCalled();
+      // A till goes back to its grid: there is no door to reopen.
+      expect(loadDoorResume()).toBe(false);
+    });
+
+    it("never under a basket", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      apiMock.config.mockResolvedValue(config({ version: "99.0.0" }));
+      const { user } = show();
+      await ready();
+      await user.click(tile(/Bière/));
+
+      await wait(10 * 60_000);
+
+      expect(reload).not.toHaveBeenCalled();
+    });
+
+    it("never with a panel open", async () => {
+      // A cashier's name half typed, a count half entered, a cancellation's
+      // amount still to hand back.
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      apiMock.config.mockResolvedValue(config({ version: "99.0.0" }));
+      const { user } = show();
+      await ready();
+      await user.click(screen.getByRole("button", { name: "settings" }));
+
+      await wait(10 * 60_000);
+
+      expect(reload).not.toHaveBeenCalled();
+    });
+
+    it("never without a network, which the new build would have to come through", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      apiMock.config.mockResolvedValue(config({ version: "99.0.0" }));
+      show();
+      await ready();
+      act(() => markUnreachable());
+
+      await wait(10 * 60_000);
+
+      expect(reload).not.toHaveBeenCalled();
+    });
+
+    it("waits again from every touch", async () => {
+      // Somebody reading the grid out to a customer has not put anything in
+      // the basket yet.
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      apiMock.config.mockResolvedValue(config({ version: "99.0.0" }));
+      show();
+      await ready();
+
+      await wait(TILL_IDLE_UPDATE_MS - 10_000);
+      act(() => {
+        window.dispatchEvent(new Event("pointerdown"));
+      });
+      await wait(TILL_IDLE_UPDATE_MS - 10_000);
+      expect(reload).not.toHaveBeenCalled();
+      await wait(20_000);
+
+      expect(reload).toHaveBeenCalled();
+    });
+
+    it("tries again by itself only after a pause, once an attempt has failed", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const asked = worker("preparing", "failed");
+      apiMock.config.mockResolvedValue(config({ version: "99.0.0" }));
+      show();
+      await ready();
+
+      await wait(TILL_IDLE_UPDATE_MS + 1_000);
+      await waitFor(() => expect(screen.getByRole("button", { name: t("update.failed") })).toBeDefined());
+      expect(asked).toHaveBeenCalledTimes(1);
+      await wait(TILL_IDLE_UPDATE_MS * 2);
+      expect(asked).toHaveBeenCalledTimes(1);
+      await wait(UPDATE_RETRY_MS);
+
+      await waitFor(() => expect(asked).toHaveBeenCalledTimes(2));
+      expect(reload).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("at the door", () => {
+    const door = (version = "99.0.0") =>
+      config({ version, device: { serial: "TILL1", name: "Porte", role: "door" } });
+
+    it("is offered on the scanner, which covers the bar under the top one", async () => {
+      apiMock.config.mockResolvedValue(door());
+      show();
+      await screen.findByRole("heading", { name: t("checkin.title") });
+
+      expect(screen.getByRole("button", { name: t("update.reload") })).toBeDefined();
+    });
+
+    it("is learnt while the scanner is up, without anyone relaunching it", async () => {
+      // A door never leaves its scanner, and it used to read the server's
+      // version only when it was opened — so every door phone had to be
+      // closed and reopened by hand after every release.
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      apiMock.config.mockResolvedValue(door(__APP_VERSION__));
+      show();
+      await screen.findByRole("heading", { name: t("checkin.title") });
+      apiMock.config.mockResolvedValue(door());
+      apiMock.catalog.mockClear();
+
+      await wait(61_000);
+
+      expect(screen.getByRole("button", { name: t("update.reload") })).toBeDefined();
+      // Only the config: the grid is out of sight, and read on the way out.
+      expect(apiMock.catalog).not.toHaveBeenCalled();
+    });
+
+    it("installs itself once nobody has held a ticket up for a while", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      apiMock.config.mockResolvedValue(door());
+      show();
+      await screen.findByRole("heading", { name: t("checkin.title") });
+
+      await wait(DOOR_IDLE_UPDATE_MS - 5_000);
+      expect(reload).not.toHaveBeenCalled();
+      await wait(10_000);
+
+      expect(reload).toHaveBeenCalled();
+      // And asks the new build to open where this one was.
+      expect(loadDoorResume()).toBe(true);
+    });
+
+    it("waits out a verdict before it installs itself", async () => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      apiMock.redeem.mockResolvedValue({ status: "ok" });
+      apiMock.config.mockResolvedValue(door());
+      const { user } = show();
+      await screen.findByRole("heading", { name: t("checkin.title") });
+
+      await wait(DOOR_IDLE_UPDATE_MS - 5_000);
+      await user.click(screen.getByRole("button", { name: "scan-ticket" }));
+      await wait(10_000);
+      // The verdict held its few seconds, and the wait started again after.
+      expect(reload).not.toHaveBeenCalled();
+      await wait(DOOR_IDLE_UPDATE_MS);
+
+      expect(reload).toHaveBeenCalled();
+    });
+
+    it("lets the ticket in hand finish before an update pressed meanwhile", async () => {
+      // Reloading under a scan pretix has taken but not answered would lose
+      // the verdict, and make the guest's next try "already used".
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const answer = later<RedeemResult>();
+      apiMock.redeem.mockReturnValue(answer.promise);
+      apiMock.config.mockResolvedValue(door());
+      const { user } = show();
+      await screen.findByRole("heading", { name: t("checkin.title") });
+
+      await user.click(screen.getByRole("button", { name: "scan-ticket" }));
+      await user.click(screen.getByRole("button", { name: t("update.reload") }));
+
+      // Said at once, all the same.
+      expect(screen.getByRole("button", { name: t("update.reloading") })).toBeDefined();
+      await wait(1_000);
+      expect(reload).not.toHaveBeenCalled();
+      await act(async () => answer.resolve({ status: "ok" }));
+      expect(reload).not.toHaveBeenCalled();
+      await wait(10_000);
+
+      expect(reload).toHaveBeenCalled();
+    });
+  });
+
+  describe("once the new build has started", () => {
+    it("puts a device that does both back on the door it was scanning at", async () => {
+      saveDoorResume();
+      show();
+
+      expect(await screen.findByRole("heading", { name: t("checkin.title") })).toBeDefined();
+      // Once: the next launch is somebody opening the app.
+      expect(loadDoorResume()).toBe(false);
+    });
+
+    it("leaves a device that was selling on its grid", async () => {
+      show();
+      await ready();
+
+      expect(screen.queryByRole("heading", { name: t("checkin.title") })).toBeNull();
+    });
+
+    it("does not open a door the device no longer has", async () => {
+      saveDoorResume();
+      apiMock.config.mockResolvedValue(config({
+        device: { serial: "TILL1", name: "Caisse bar", role: "pos" },
+      }));
+      show();
+      await ready();
+
+      expect(screen.queryByRole("heading", { name: t("checkin.title") })).toBeNull();
+      expect(loadDoorResume()).toBe(false);
+    });
   });
 });
 
@@ -1482,6 +1799,30 @@ describe("the settings", () => {
     confirmed.mockRestore();
   });
 
+  it("forgets the cancellations it was still waiting on when it is unpaired", async () => {
+    // Their keys and the answer left on screen are this pairing's: the next
+    // one is a new till, whose sale #12 is another sale.
+    cancellationKeys("TILL1:festival").for(12);
+    saveCancellationResult("TILL1:festival", {
+      cancellation: {
+        seq: 13, kind: "cancellation", datetime: "2026-08-16T22:02:00.000Z", order: "POS01",
+        total: "-12.00", payment_type: "cash", cashier: "", testmode: false, positions: [],
+        reason: "", cancels_seq: 12, cancelled: false, can_cancel: false,
+      },
+      sale: null, replayed: false, credit_note: null, refunded: true,
+    });
+    const confirmed = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const { user } = show();
+    await ready();
+
+    await user.click(screen.getByRole("button", { name: "settings" }));
+    await user.click(await screen.findByRole("button", { name: new RegExp(t("settings.unpair")) }));
+
+    expect(cancellationKeys("TILL1:festival").pending(12)).toBe(false);
+    expect(loadCancellationResult("TILL1:festival")).toBeNull();
+    confirmed.mockRestore();
+  });
+
   it("tells pretix the unpaired till is gone, so it reads revoked there", async () => {
     // Forgetting the token was all unpairing did: the device went on reading
     // "active" in the back office, with a token that still worked.
@@ -1626,6 +1967,77 @@ describe("the door", () => {
     expect(apiMock.catalog).not.toHaveBeenCalled();
     vi.useRealTimers();
   });
+
+  it("reads the config again while it is open, for the lists and the version", async () => {
+    // A door that never leaves its scanner used to read neither all evening.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { user } = show();
+    await ready();
+    await user.click(screen.getByRole("button", { name: t("checkin.open") }));
+    apiMock.config.mockClear();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+
+    expect(apiMock.config).toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  describe("and the list it scans on", () => {
+    const twoLists = () =>
+      config({
+        checkin: {
+          enabled: true, list_id: 7, list_name: "Porte",
+          lists: [
+            { id: 7, name: "Porte", all_products: true, include_pending: false },
+            { id: 8, name: "VIP", all_products: false, include_pending: false },
+          ],
+        },
+      });
+
+    it("is the one it was switched to, after a relaunch", async () => {
+      // Forgotten at every relaunch — iOS reclaiming the app, an update — and
+      // nobody notices until somebody is turned away at the wrong list.
+      apiMock.config.mockResolvedValue(twoLists());
+      const first = render(<App />);
+      const user = userEvent.setup();
+      await ready();
+      await user.click(screen.getByRole("button", { name: t("checkin.open") }));
+      await user.selectOptions(screen.getByLabelText(t("checkin.list")), "8");
+      first.unmount();
+
+      show();
+      await ready();
+      await user.click(screen.getByRole("button", { name: t("checkin.open") }));
+
+      expect((screen.getByLabelText(t("checkin.list")) as HTMLSelectElement).value).toBe("8");
+    });
+
+    it("is the event's own again when the one chosen has since been deleted", async () => {
+      saveDoorList("festival", 99);
+      apiMock.config.mockResolvedValue(twoLists());
+      const { user } = show();
+      await ready();
+
+      await user.click(screen.getByRole("button", { name: t("checkin.open") }));
+
+      expect((screen.getByLabelText(t("checkin.list")) as HTMLSelectElement).value).toBe("7");
+    });
+
+    it("is forgotten when the till is unpaired", async () => {
+      saveDoorList("festival", 8);
+      const confirmed = vi.spyOn(window, "confirm").mockReturnValue(true);
+      const { user } = show();
+      await ready();
+
+      await user.click(screen.getByRole("button", { name: "settings" }));
+      await user.click(await screen.findByRole("button", { name: new RegExp(t("settings.unpair")) }));
+
+      expect(localStorage.getItem("openpos.doorList.v1.festival")).toBeNull();
+      confirmed.mockRestore();
+    });
+  });
 });
 
 describe("the guest list carried for a dropout", () => {
@@ -1672,37 +2084,112 @@ describe("the guest list carried for a dropout", () => {
     expect(apiMock.offlineSnapshot).not.toHaveBeenCalled();
   });
 
-  it("is left to the door screen while that is open", async () => {
+  it("is left to the door screen while that is open, which does not pull it again", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const { user } = show();
     await ready();
     await waitFor(() => expect(apiMock.offlineSnapshot).toHaveBeenCalledOnce());
     apiMock.offlineSnapshot.mockClear();
 
+    // Pulled a moment ago by the app: the door has the same list already.
     await user.click(screen.getByRole("button", { name: t("checkin.open") }));
-    await waitFor(() => expect(apiMock.offlineSnapshot).toHaveBeenCalledOnce());
+    expect(apiMock.offlineSnapshot).not.toHaveBeenCalled();
     await act(async () => {
       await vi.advanceTimersByTimeAsync(300_000);
     });
 
     // One fetcher at a time: the door's own refresh, not the app's on top of it.
-    expect(apiMock.offlineSnapshot).toHaveBeenCalledTimes(2);
+    expect(apiMock.offlineSnapshot).toHaveBeenCalledOnce();
     vi.useRealTimers();
   });
 
+  it("is not pulled again at every step out of the door and back", async () => {
+    // A door selling a ticket at the grid and going straight back used to
+    // download the whole guest list at every round trip.
+    const { user } = show();
+    await ready();
+    await waitFor(() => expect(apiMock.offlineSnapshot).toHaveBeenCalledOnce());
+
+    for (let i = 0; i < 3; i++) {
+      await user.click(screen.getByRole("button", { name: t("checkin.open") }));
+      await user.click(await screen.findByRole("button", { name: "close-scanner" }));
+    }
+
+    expect(apiMock.offlineSnapshot).toHaveBeenCalledOnce();
+  });
+
   it("follows the door to the list it was switched to, and reopens on it", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
     apiMock.config.mockResolvedValue(twoDoors());
     const { user } = show();
     await ready();
     await user.click(screen.getByRole("button", { name: t("checkin.open") }));
     await user.selectOptions(screen.getByLabelText(t("checkin.list")), "8");
+    await waitFor(() => expect(apiMock.offlineSnapshot).toHaveBeenCalledWith(pairing, 8));
     apiMock.offlineSnapshot.mockClear();
 
+    // The door pulled list 8 a moment ago; the app carries on refreshing that
+    // one rather than going back to the default list.
     await user.click(screen.getByRole("button", { name: "close-scanner" }));
-    await waitFor(() => expect(apiMock.offlineSnapshot).toHaveBeenCalledWith(pairing, 8));
+    expect(apiMock.offlineSnapshot).not.toHaveBeenCalled();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(300_000);
+    });
+    expect(apiMock.offlineSnapshot).toHaveBeenCalledWith(pairing, 8);
+    expect(apiMock.offlineSnapshot).not.toHaveBeenCalledWith(pairing, 7);
     await user.click(screen.getByRole("button", { name: t("checkin.open") }));
 
     expect(screen.getByLabelText(t("checkin.list"))).toHaveProperty("value", "8");
+    vi.useRealTimers();
+  });
+
+  it("is never pulled by a bar till, and one it carried from before is dropped", async () => {
+    // Every guest's name and ticket secret, every five minutes, on a till
+    // with no door button.
+    saveSnapshot({
+      list: { id: 7, name: "Porte" }, generated: "2026-08-16T20:00:00.000Z",
+      tickets: [{ secret: "alice", item: 20, name: "Alice", used: false }], truncated: false,
+    });
+    saveAdmissions("festival", { 7: { alice: Date.now() } });
+    apiMock.config.mockResolvedValue(config({
+      device: { serial: "TILL1", name: "Caisse bar", role: "pos" },
+    }));
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    show();
+    await ready();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3_600_000);
+    });
+
+    expect(apiMock.offlineSnapshot).not.toHaveBeenCalled();
+    expect(loadSnapshot()).toBeNull();
+    expect(loadAdmissions("festival")).toEqual({});
+    vi.useRealTimers();
+  });
+
+  it("is pulled by a door, and by a device nobody has given a role", async () => {
+    apiMock.config.mockResolvedValue(config({
+      device: { serial: "TILL1", name: "Porte", role: "door" },
+    }));
+    show();
+
+    await waitFor(() => expect(apiMock.offlineSnapshot).toHaveBeenCalledWith(pairing, 7));
+  });
+
+  it("is forgotten when the till is unpaired, with who the door let in", async () => {
+    saveAdmissions("festival", { 7: { alice: Date.now() } });
+    const { user } = show();
+    await ready();
+    await waitFor(() => expect(loadSnapshot()).not.toBeNull());
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+
+    await user.click(screen.getByRole("button", { name: "settings" }));
+    await user.click(await screen.findByRole("button", { name: new RegExp(t("settings.unpair")) }));
+
+    expect(loadSnapshot()).toBeNull();
+    expect(loadAdmissions("festival")).toEqual({});
+    vi.restoreAllMocks();
   });
 
   it("forgets the door's list when the till is switched to another event", async () => {
@@ -1731,11 +2218,29 @@ describe("the guest list carried for a dropout", () => {
     await user.click(screen.getByRole("button", { name: "close-scanner" }));
 
     await user.click(screen.getByRole("button", { name: "settings" }));
+    saveAdmissions("festival", { 8: { alice: Date.now() } });
+    let heldAtSwitch: unknown = "unread";
+    let admittedAtSwitch: unknown = "unread";
+    apiMock.config.mockImplementationOnce(async () => {
+      heldAtSwitch = loadSnapshot();
+      admittedAtSwitch = loadAdmissions("festival");
+      return config({
+        event: { ...config().event, slug: "gala", name: "Gala" },
+        checkin: {
+          enabled: true, list_id: 21, list_name: "Gala",
+          lists: [{ id: 21, name: "Gala", all_products: true, include_pending: false }],
+        },
+      });
+    });
     await user.selectOptions(await screen.findByLabelText(t("settings.event")), "gala");
 
     await waitFor(() =>
       expect(apiMock.offlineSnapshot).toHaveBeenCalledWith({ ...pairing, event: "gala" }, 21),
     );
+    // The festival's guest list was gone before the gala's was asked for,
+    // and so was the record of who its door let in.
+    expect(heldAtSwitch).toBeNull();
+    expect(admittedAtSwitch).toEqual({});
   });
 });
 
@@ -2245,5 +2750,703 @@ describe("the cash drawer", () => {
 
     expect(screen.queryByRole("button", { name: t("drawer.title", { name: "Bar" }) })).toBeNull();
     expect(apiMock.drawer).not.toHaveBeenCalled();
+  });
+});
+
+
+/** A till whose card payments go through the reader on the counter. */
+function terminalTill(): PosConfig {
+  return config({ device: { serial: "TILL1", name: "Caisse bar", role: "pos", card: "terminal" } });
+}
+
+/** What the server answers about a reader payment. */
+function onReader(status: "pending" | "successful" | "failed", amount = "3.00", failure = "") {
+  return { status, amount, currency: "EUR", failure };
+}
+
+/** A request that went and never came back, as the real client reports one. */
+function unreachable(): Promise<never> {
+  markUnreachable();
+  return Promise.reject(new ApiError(0, "network"));
+}
+
+/** Ring up one beer and answer the panel's question with the card. */
+async function payByCard(user: ReturnType<typeof userEvent.setup>) {
+  await ringUp(user);
+  await user.click(screen.getByRole("button", { name: t("payment.card") }));
+}
+
+/** The key the basket went on the reader under, the n-th time. */
+const readerKey = (n = 0) => apiMock.terminalStart.mock.calls[n][1].idempotency_key as string;
+
+/** A payment written down as on its way, the way the till writes it. */
+function pendingPayment(over: Partial<PendingPayment> = {}): PendingPayment {
+  return {
+    event: "festival",
+    key: "k-pending",
+    stage: "sale",
+    paymentType: "cash",
+    cashGiven: null,
+    charged: null,
+    cart: [{
+      key: "10:", itemId: 10, variationId: null, label: "Bière",
+      unitPrice: 300, count: 1, available: null,
+    }],
+    credit: null,
+    cashier: "",
+    admits: false,
+    currency: "EUR",
+    at: new Date(Date.now() - 60_000).toISOString(),
+    ...over,
+  };
+}
+
+/** A sale rung up with no network, waiting in the queue. */
+function queuedSale(id: string, at = "2026-08-16T21:00:00.000Z"): QueuedSale {
+  return {
+    kind: "sale", id, at, event: "festival",
+    positions: [{ item: 10, variation: null, count: 1, price: "3.00" }],
+    chargedTotal: "3.00", paymentType: "cash", cashGiven: "5.00", cashChange: "2.00",
+    cashier: "", admits: false, label: "1× Bière",
+  };
+}
+
+describe("a card payment on the reader", () => {
+  beforeEach(() => {
+    apiMock.config.mockResolvedValue(terminalTill());
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    clearBasket();
+  });
+
+  it("records the sale once when a stop and the tapped card cross", async () => {
+    // The customer taps as the cashier presses stop: the poll says paid, and
+    // so does the answer to the stop, a moment later. Both used to record
+    // the sale, and the second landed while the first was still on its way.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    apiMock.terminalStart.mockResolvedValue(onReader("pending"));
+    const poll = later<ReturnType<typeof onReader>>();
+    apiMock.terminalStatus.mockReturnValue(poll.promise);
+    const stop = later<ReturnType<typeof onReader>>();
+    apiMock.terminalCancel.mockReturnValue(stop.promise);
+    const recorded = later<SaleResult>();
+    apiMock.checkout.mockReturnValue(recorded.promise);
+    const { user } = show();
+    await ready();
+    await payByCard(user);
+    await screen.findByText(t("payment.readerPrompt"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(TERMINAL_POLL_MS);
+    });
+    expect(apiMock.terminalStatus).toHaveBeenCalledOnce();
+
+    await user.click(screen.getByRole("button", { name: t("payment.readerStop") }));
+    await act(async () => poll.resolve(onReader("successful")));
+    await waitFor(() => expect(apiMock.checkout).toHaveBeenCalledOnce());
+    await act(async () => stop.resolve(onReader("successful")));
+    await act(async () => recorded.resolve(sold({ payment_type: "card" })));
+
+    expect(await screen.findByRole("button", { name: t("done.next") })).toBeDefined();
+    expect(apiMock.checkout).toHaveBeenCalledOnce();
+    expect(apiMock.checkout.mock.calls[0][1].idempotency_key).toBe(readerKey());
+  });
+
+  it("sends a stop pressed while the basket is on its way only once the server has it", async () => {
+    // Sent at once, the stop could overtake the start, be told there was
+    // nothing to stop, and hand the cashier the cash button while the start
+    // put the basket on the reader a second later.
+    const start = later<ReturnType<typeof onReader>>();
+    apiMock.terminalStart.mockReturnValue(start.promise);
+    apiMock.terminalCancel.mockResolvedValue(onReader("failed", "3.00", "CANCELLED"));
+    const { user } = show();
+    await ready();
+    await payByCard(user);
+
+    await user.click(screen.getByRole("button", { name: t("payment.readerStop") }));
+
+    expect(apiMock.terminalCancel).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: t("payment.cash") })).toHaveProperty("disabled", true);
+    await act(async () => start.resolve(onReader("pending")));
+    await waitFor(() => expect(apiMock.terminalCancel).toHaveBeenCalledOnce());
+    expect(apiMock.terminalCancel.mock.calls[0][1]).toBe(readerKey());
+    expect(await screen.findByText(t("payment.readerCancelled"))).toBeDefined();
+  });
+
+  it("puts nothing on the reader with no network, and keeps cash one tap away", async () => {
+    const { user } = show();
+    await ready();
+    act(() => markUnreachable());
+
+    await payByCard(user);
+
+    expect(await screen.findByText(t("payment.readerOffline"))).toBeDefined();
+    expect(apiMock.terminalStart).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: t("payment.cash") })).toHaveProperty("disabled", false);
+    expect(screen.getByRole("button", { name: t("payment.back") })).toHaveProperty("disabled", false);
+  });
+
+  it("puts the basket on the reader once the network is back, when asked", async () => {
+    apiMock.terminalStart.mockResolvedValue(onReader("pending"));
+    const { user } = show();
+    await ready();
+    act(() => markUnreachable());
+    await payByCard(user);
+
+    await act(async () => markReachable());
+
+    expect(await screen.findByText(t("payment.readerBack"))).toBeDefined();
+    expect(apiMock.terminalStart).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: t("payment.readerRetry") }));
+    expect(await screen.findByText(t("payment.readerPrompt"))).toBeDefined();
+    expect(apiMock.terminalStart).toHaveBeenCalledOnce();
+  });
+
+  it("offers a way out once the server has gone quiet, and takes the cash under the sale's own key", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    apiMock.terminalStart.mockResolvedValue(onReader("pending"));
+    apiMock.terminalStatus.mockImplementation(unreachable);
+    const { user } = show();
+    await ready();
+    await payByCard(user);
+    await screen.findByText(t("payment.readerPrompt"));
+    // Until then the rule holds: a payment the till cannot see is a payment
+    // still running.
+    expect(screen.getByRole("button", { name: t("payment.cash") })).toHaveProperty("disabled", true);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(TERMINAL_UNANSWERED_MS + 1000);
+    });
+
+    expect(await screen.findByText(t("payment.readerUnanswered"))).toBeDefined();
+    await user.click(screen.getByRole("button", { name: t("payment.cash") }));
+    await user.click(screen.getByRole("button", { name: t("payment.confirm") }));
+    await screen.findByText(/kept on this till/);
+    const [entry] = loadQueue();
+    expect(entry).toMatchObject({ kind: "sale", paymentType: "cash" });
+    // Never the reader's key: had that payment gone through, the replay would
+    // find it and record a card sale for money taken in cash.
+    expect(entry.id).not.toBe(readerKey());
+    // The reader payment is kept aside, to be asked about.
+    expect(loadOrphans()).toEqual([expect.objectContaining({ key: readerKey(), amount: "3.00" })]);
+  });
+
+  it("keeps waiting, cash locked, through a till turned away or asked to slow down", async () => {
+    // Neither says anything about the payment, which the reader may still be
+    // asking a customer for.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    apiMock.terminalStart.mockResolvedValue(onReader("pending"));
+    apiMock.terminalStatus
+      .mockRejectedValueOnce(new ApiError(429, "Too many requests."))
+      .mockRejectedValueOnce(new ApiError(403, "Forbidden."))
+      .mockResolvedValue(onReader("pending"));
+    const { user } = show();
+    await ready();
+    await payByCard(user);
+    await screen.findByText(t("payment.readerPrompt"));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3 * TERMINAL_POLL_MS + 500);
+    });
+
+    expect(apiMock.terminalStatus).toHaveBeenCalledTimes(3);
+    expect(screen.getByText(t("payment.readerPrompt"))).toBeDefined();
+    expect(screen.getByRole("button", { name: t("payment.cash") })).toHaveProperty("disabled", true);
+    expect(apiMock.checkout).not.toHaveBeenCalled();
+  });
+
+  it("queues a card sale it could not record with its lines' own sum beside the reader's figure", async () => {
+    // The server priced the basket at 3.50 when it put it on the reader; the
+    // lines here say 3.00, a tariff refresh behind. Checked against 3.50 on
+    // replay, they did not add up and the sale was refused.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    apiMock.terminalStart.mockResolvedValue(onReader("pending", "3.50"));
+    apiMock.terminalStatus.mockResolvedValue(onReader("successful", "3.50"));
+    apiMock.checkout.mockImplementation(unreachable);
+    const { user } = show();
+    await ready();
+    await payByCard(user);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(TERMINAL_POLL_MS + 500);
+    });
+
+    await waitFor(() => expect(loadQueue()).toHaveLength(1));
+    expect(loadQueue()[0]).toMatchObject({
+      id: readerKey(), paymentType: "card", chargedTotal: "3.50", linesTotal: "3.00",
+    });
+  });
+
+  it("takes cash after a refused card under the sale's key, never the reader's", async () => {
+    apiMock.terminalStart.mockResolvedValue(onReader("failed", "3.00", "FAILED"));
+    const { user } = show();
+    await ready();
+    await payByCard(user);
+    await screen.findByText(t("payment.readerRefused"));
+
+    await user.click(screen.getByRole("button", { name: t("payment.cash") }));
+    await user.click(screen.getByRole("button", { name: t("payment.confirm") }));
+
+    await waitFor(() => expect(apiMock.checkout).toHaveBeenCalledOnce());
+    const sale = apiMock.checkout.mock.calls[0][1];
+    expect(sale.payment_type).toBe("cash");
+    expect(sale.idempotency_key).not.toBe(readerKey());
+  });
+
+  it("asks nothing more about the reader once the panel has closed", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    apiMock.terminalStart.mockResolvedValue(onReader("pending"));
+    apiMock.terminalStatus.mockResolvedValue(onReader("successful"));
+    apiMock.checkout.mockResolvedValue(sold({ payment_type: "card" }));
+    const { user } = show();
+    await ready();
+    await payByCard(user);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(TERMINAL_POLL_MS + 500);
+    });
+    expect(await screen.findByRole("button", { name: t("done.next") })).toBeDefined();
+    const asked = apiMock.terminalStatus.mock.calls.length;
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10 * TERMINAL_POLL_MS);
+    });
+
+    expect(apiMock.terminalStatus).toHaveBeenCalledTimes(asked);
+  });
+});
+
+describe("a card payment left aside", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("is taken off the reader once the server answers, while it is still recent", async () => {
+    addOrphan({
+      event: "festival", key: "k-aside", at: new Date(Date.now() - 60_000).toISOString(),
+      amount: "3.00", currency: "EUR",
+    });
+    apiMock.terminalStatus.mockResolvedValue(onReader("pending"));
+    apiMock.terminalCancel.mockResolvedValue(onReader("failed", "3.00", "CANCELLED"));
+    show();
+    await ready();
+
+    await waitFor(() => expect(apiMock.terminalCancel).toHaveBeenCalledOnce());
+    expect(apiMock.terminalCancel.mock.calls[0][1]).toBe("k-aside");
+    await waitFor(() => expect(loadOrphans()).toEqual([]));
+  });
+
+  it("is shown, until somebody has read it, when the card went through after all", async () => {
+    const at = new Date(Date.now() - 10 * 60_000).toISOString();
+    addOrphan({ event: "festival", key: "k-aside", at, amount: "3.00", currency: "EUR" });
+    apiMock.terminalStatus.mockResolvedValue(onReader("successful"));
+    const { user } = show();
+    await ready();
+    const warning = t("payment.latePaid", { amount: formatMoney(300, "EUR"), time: moment(at) });
+
+    expect(await screen.findByText(warning)).toBeDefined();
+    // Too old to be taken off a reader that may have moved on to somebody else.
+    expect(apiMock.terminalCancel).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: t("payment.latePaidOk") }));
+
+    expect(screen.queryByText(warning)).toBeNull();
+    expect(loadOrphans()).toEqual([]);
+  });
+
+  it("is waited for while the network is gone, and asked about once it is back", async () => {
+    addOrphan({
+      event: "festival", key: "k-aside", at: new Date(Date.now() - 10 * 60_000).toISOString(),
+      amount: "3.00", currency: "EUR",
+    });
+    apiMock.terminalStatus.mockResolvedValue(onReader("failed", "3.00", "TIMEOUT"));
+    act(() => markUnreachable());
+    show();
+    await ready();
+    expect(apiMock.terminalStatus).not.toHaveBeenCalled();
+
+    await act(async () => markReachable());
+
+    await waitFor(() => expect(loadOrphans()).toEqual([]));
+    expect(apiMock.terminalStatus).toHaveBeenCalledWith(expect.anything(), "k-aside");
+  });
+});
+
+describe("a payment the till was in the middle of when it stopped", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    clearBasket();
+  });
+
+  /** Take the card payment as far as the reader, then kill the till. */
+  async function killedAtTheReader() {
+    apiMock.config.mockResolvedValue(terminalTill());
+    apiMock.terminalStart.mockResolvedValue(onReader("pending"));
+    apiMock.terminalStatus.mockResolvedValue(onReader("pending"));
+    const user = userEvent.setup();
+    const first = render(<App />);
+    await ready();
+    await payByCard(user);
+    await screen.findByText(t("payment.readerPrompt"));
+    // iOS reclaims the app while the customer holds their card.
+    first.unmount();
+    apiMock.terminalStatus.mockClear();
+    return readerKey();
+  }
+
+  it("asks how the reader payment ended rather than putting the basket on the reader again", async () => {
+    const key = await killedAtTheReader();
+
+    render(<App />);
+
+    await waitFor(() => expect(apiMock.terminalStatus).toHaveBeenCalledWith(expect.anything(), key));
+    expect(await screen.findByText(t("payment.resumed"))).toBeDefined();
+    expect(await screen.findByText(t("payment.readerPrompt"))).toBeDefined();
+    expect(apiMock.terminalStart).toHaveBeenCalledOnce();
+  });
+
+  it("records the sale the customer paid for while the till was away, under the reader's key", async () => {
+    const key = await killedAtTheReader();
+    apiMock.terminalStatus.mockResolvedValue(onReader("successful"));
+
+    render(<App />);
+
+    await waitFor(() => expect(apiMock.checkout).toHaveBeenCalledOnce());
+    expect(apiMock.checkout.mock.calls[0][1]).toMatchObject({
+      idempotency_key: key, payment_type: "card", expected_total: "3.00",
+    });
+    expect(await screen.findByRole("button", { name: t("done.next") })).toBeDefined();
+    expect(loadPendingPayment()).toBeNull();
+  });
+
+  it("gives the basket back, saying why, when the card was refused meanwhile", async () => {
+    await killedAtTheReader();
+    apiMock.terminalStatus.mockResolvedValue(onReader("failed", "3.00", "FAILED"));
+
+    render(<App />);
+
+    expect(await screen.findByText(t("payment.readerRefused"))).toBeDefined();
+    expect(apiMock.checkout).not.toHaveBeenCalled();
+    await waitFor(() => expect(loadPendingPayment()).toBeNull());
+  });
+
+  it("offers the way out at once when the server cannot be asked", async () => {
+    // Nobody knows how long ago the server last answered: the till was not
+    // running to hear it.
+    await killedAtTheReader();
+    apiMock.terminalStatus.mockImplementation(unreachable);
+
+    render(<App />);
+
+    expect(await screen.findByText(t("payment.readerUnanswered"))).toBeDefined();
+    expect(screen.getByRole("button", { name: t("payment.cash") })).toHaveProperty("disabled", false);
+  });
+
+  it("sends a sale that was on its way again, under the same key, and says why", async () => {
+    // Killed while "Recording…" spun. The next try used to carry a new key,
+    // and a request that had in fact arrived became a second sale.
+    apiMock.checkout.mockReturnValueOnce(new Promise(() => {}));
+    const user = userEvent.setup();
+    const first = render(<App />);
+    await ready();
+    await ringUp(user);
+    await confirm(user);
+    await waitFor(() => expect(apiMock.checkout).toHaveBeenCalledOnce());
+    const key = apiMock.checkout.mock.calls[0][1].idempotency_key;
+    first.unmount();
+    apiMock.checkout.mockResolvedValue(sold({ replayed: true }));
+
+    render(<App />);
+
+    await waitFor(() => expect(apiMock.checkout).toHaveBeenCalledTimes(2));
+    expect(apiMock.checkout.mock.calls[1][1].idempotency_key).toBe(key);
+    expect(await screen.findByText(t("done.resumed"))).toBeDefined();
+    expect(loadPendingPayment()).toBeNull();
+  });
+
+  it("queues it under that key when the network is gone", async () => {
+    apiMock.checkout.mockReturnValueOnce(new Promise(() => {}));
+    const user = userEvent.setup();
+    const first = render(<App />);
+    await ready();
+    await ringUp(user);
+    await confirm(user);
+    await waitFor(() => expect(apiMock.checkout).toHaveBeenCalledOnce());
+    const key = apiMock.checkout.mock.calls[0][1].idempotency_key;
+    first.unmount();
+    act(() => markUnreachable());
+
+    render(<App />);
+
+    expect(await screen.findByText(t("done.resumed"))).toBeDefined();
+    expect(loadQueue()).toEqual([expect.objectContaining({ kind: "sale", id: key })]);
+    expect(apiMock.checkout).toHaveBeenCalledOnce();
+  });
+
+  it("picks up a card sale that was being recorded, locked on it until it is", async () => {
+    // The reader had taken the money: only the sale is left, and a cash tap
+    // meanwhile would record the same money twice.
+    apiMock.config.mockResolvedValue(terminalTill());
+    savePendingPayment(pendingPayment({ key: "k-card", paymentType: "card", charged: "3.50" }));
+    const recorded = later<SaleResult>();
+    apiMock.checkout.mockReturnValue(recorded.promise);
+    show();
+
+    await waitFor(() => expect(apiMock.checkout).toHaveBeenCalledOnce());
+    expect(apiMock.checkout.mock.calls[0][1]).toMatchObject({
+      idempotency_key: "k-card", payment_type: "card", expected_total: "3.50",
+    });
+    expect(screen.getByText(t("payment.readerPaid"))).toBeDefined();
+    expect(screen.getByRole("button", { name: t("payment.cash") })).toHaveProperty("disabled", true);
+    await act(async () => recorded.resolve(sold({ payment_type: "card" })));
+    expect(await screen.findByText(t("done.resumed"))).toBeDefined();
+    expect(apiMock.terminalStatus).not.toHaveBeenCalled();
+  });
+
+  it("files a sale left from an earlier evening in the queue, under its key, with nothing on screen", async () => {
+    const at = new Date(Date.now() - 3 * 3600_000).toISOString();
+    savePendingPayment(pendingPayment({ key: "k-old", at }));
+    apiMock.checkout.mockResolvedValue(sold({ replayed: true }));
+    show();
+    await ready();
+
+    await waitFor(() => expect(apiMock.checkout).toHaveBeenCalledWith(pairing, expect.objectContaining({
+      idempotency_key: "k-old", offline: expect.objectContaining({ recorded_at: at }),
+    })));
+    expect(screen.queryByRole("heading", { name: t("payment.title") })).toBeNull();
+    expect(loadPendingPayment()).toBeNull();
+  });
+
+  it("keeps a sale from an earlier evening where it is when the queue cannot take it", async () => {
+    // Tried again at the next launch: dropped, it would exist nowhere.
+    savePendingPayment(pendingPayment({ key: "k-old", at: new Date(Date.now() - 3 * 3600_000).toISOString() }));
+    fillStorage();
+    show();
+    await ready();
+
+    expect(loadPendingPayment()).toMatchObject({ key: "k-old" });
+    expect(loadQueue()).toEqual([]);
+  });
+
+  it("sets a reader payment from an earlier evening aside, to be asked about", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    savePendingPayment(pendingPayment({
+      key: "k-old", stage: "reader", paymentType: "card",
+      at: new Date(Date.now() - 3 * 3600_000).toISOString(),
+    }));
+    apiMock.terminalStatus.mockResolvedValue(onReader("failed", "3.00", "TIMEOUT"));
+    show();
+    await ready();
+    expect(loadOrphans()).toEqual([expect.objectContaining({ key: "k-old", amount: "3.00" })]);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ORPHAN_CHECK_MS);
+    });
+
+    await waitFor(() => expect(loadOrphans()).toEqual([]));
+    expect(apiMock.terminalStatus).toHaveBeenCalledWith(expect.anything(), "k-old");
+    expect(apiMock.terminalCancel).not.toHaveBeenCalled();
+    expect(screen.queryByRole("heading", { name: t("payment.title") })).toBeNull();
+  });
+
+  it("keeps the sale on its way through a request to wait, and sends it again under the same key", async () => {
+    const wait = new ApiError(429, "Too many requests.");
+    apiMock.checkout.mockRejectedValueOnce(wait).mockResolvedValueOnce(sold());
+    const { user } = show();
+    await ready();
+    await ringUp(user);
+    await confirm(user);
+
+    expect(await screen.findByText(describeError(wait))).toBeDefined();
+    const key = apiMock.checkout.mock.calls[0][1].idempotency_key;
+    expect(loadPendingPayment()).toMatchObject({ key, stage: "sale" });
+    expect(loadQueue()).toEqual([]);
+    await user.click(screen.getByRole("button", { name: t("payment.confirm") }));
+
+    await waitFor(() => expect(apiMock.checkout).toHaveBeenCalledTimes(2));
+    expect(apiMock.checkout.mock.calls[1][1].idempotency_key).toBe(key);
+    expect(await screen.findByRole("button", { name: t("done.next") })).toBeDefined();
+  });
+
+  it("forgets the payment on its way when the cashier goes back", async () => {
+    apiMock.checkout.mockRejectedValue(new ApiError(429, "Too many requests."));
+    const { user } = show();
+    await ready();
+    await ringUp(user);
+    await confirm(user);
+    await waitFor(() => expect(loadPendingPayment()).not.toBeNull());
+
+    await user.click(screen.getByRole("button", { name: t("payment.back") }));
+
+    expect(loadPendingPayment()).toBeNull();
+  });
+
+  it("lets go of a card payment the server refuses to record for good", async () => {
+    // Sending it again would only be refused again; the payment is in the back
+    // office's list of card payments with no sale.
+    apiMock.config.mockResolvedValue(terminalTill());
+    apiMock.terminalStart.mockResolvedValue(onReader("successful"));
+    apiMock.checkout.mockRejectedValue(new ApiError(400, "Sold out.", { detail: "Sold out." }));
+    const { user } = show();
+    await ready();
+    await payByCard(user);
+
+    expect(await screen.findByText(`${t("payment.readerPaidNotRecorded")} Sold out.`)).toBeDefined();
+    expect(loadPendingPayment()).toMatchObject({ stage: "sale", charged: "3.00" });
+    await user.click(screen.getByRole("button", { name: t("payment.back") }));
+
+    expect(loadPendingPayment()).toBeNull();
+    expect(screen.queryByRole("heading", { name: t("payment.title") })).toBeNull();
+  });
+});
+
+describe("a till the server turns away", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("keeps every sale it holds for when it is paired again, and says so", async () => {
+    // A revoked till used to file each of them as refused, one after the
+    // other, and have nothing left to send once it was paired again.
+    saveQueue([queuedSale("k-1"), queuedSale("k-2"), queuedSale("k-3")]);
+    const refused = new ApiError(403, "Invalid token.");
+    apiMock.config.mockRejectedValue(refused);
+    apiMock.catalog.mockRejectedValue(refused);
+    apiMock.checkout.mockRejectedValue(refused);
+    show();
+
+    expect(await screen.findByText(tn("error.keptForRepair", 3))).toBeDefined();
+    await waitFor(() => expect(apiMock.checkout).toHaveBeenCalledOnce());
+    expect(loadQueue().map((entry) => entry.id)).toEqual(["k-1", "k-2", "k-3"]);
+    expect(loadFailures()).toEqual([]);
+  });
+
+  it("waits as long as the server asked before sending again, unless somebody asks", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    saveQueue([queuedSale("k-1")]);
+    apiMock.checkout
+      .mockRejectedValueOnce(new ApiError(429, "Too many requests.", null, 60_000))
+      .mockResolvedValue(sold());
+    const { user } = show();
+    await ready();
+    await waitFor(() => expect(apiMock.checkout).toHaveBeenCalledOnce());
+
+    // Two of the till's own retries go by without a request.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+    expect(apiMock.checkout).toHaveBeenCalledOnce();
+
+    await user.click(screen.getByRole("button", { name: t("offline.badgePending", { n: 1 }) }));
+    await user.click(screen.getByRole("button", { name: t("offline.sync") }));
+
+    await waitFor(() => expect(loadQueue()).toEqual([]));
+    expect(apiMock.checkout).toHaveBeenCalledTimes(2);
+  });
+
+  it("sends again by itself once the wait is over", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    saveQueue([queuedSale("k-1")]);
+    apiMock.checkout
+      .mockRejectedValueOnce(new ApiError(429, "Too many requests.", null, 20_000))
+      .mockResolvedValue(sold());
+    show();
+    await ready();
+    await waitFor(() => expect(apiMock.checkout).toHaveBeenCalledOnce());
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+
+    await waitFor(() => expect(loadQueue()).toEqual([]));
+  });
+});
+
+describe("what the back office is told about this device", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("hears what it holds as soon as it opens", async () => {
+    saveQueue([queuedSale("k-1", "2026-08-16T21:00:00.000Z"), queuedSale("k-2", "2026-08-16T21:30:00.000Z")]);
+    apiMock.checkout.mockRejectedValue(new ApiError(0, "network"));
+    show();
+    await ready();
+
+    await waitFor(() => expect(apiMock.deviceStatus).toHaveBeenCalled());
+    expect(apiMock.deviceStatus.mock.calls[0]).toEqual([pairing, {
+      pending_sales: 2,
+      oldest_pending_at: "2026-08-16T21:00:00.000Z",
+      last_sync_at: null,
+      version: __APP_VERSION__,
+    }]);
+  });
+
+  it("hears again a few seconds after the queue has moved", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    apiMock.checkout.mockRejectedValue(new ApiError(0, "network"));
+    const { user } = show();
+    await ready();
+    await waitFor(() => expect(apiMock.deviceStatus).toHaveBeenCalledOnce());
+    await ringUp(user);
+    await confirm(user);
+    await screen.findByText(/kept on this till/);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(STATUS_SETTLE_MS + 500);
+    });
+
+    await waitFor(() => expect(apiMock.deviceStatus).toHaveBeenCalledTimes(2));
+    expect(apiMock.deviceStatus.mock.calls[1][1]).toMatchObject({ pending_sales: 1 });
+  });
+
+  it("is not something the cashier hears about when it fails", async () => {
+    apiMock.deviceStatus.mockRejectedValue(new ApiError(502, "Bad gateway"));
+    show();
+    await ready();
+
+    await waitFor(() => expect(apiMock.deviceStatus).toHaveBeenCalled());
+    expect(screen.queryByText("Bad gateway")).toBeNull();
+    expect(screen.queryByRole("button", { name: t("offline.badgeOffline", { n: 0 }) })).toBeNull();
+  });
+});
+
+describe("a device whose clock is off", () => {
+  afterEach(() => {
+    // Module state: set back to a clock that agrees, for the next test.
+    const now = Date.now();
+    act(() => noteServerTime(new Date(now).toISOString(), now, now));
+  });
+
+  /** One reading of the server's clock, `offMs` behind this device's. */
+  function serverBehindBy(offMs: number) {
+    const now = Date.now();
+    act(() => noteServerTime(new Date(now - offMs).toISOString(), now, now));
+  }
+
+  it("says it is ahead, by how much, and where to set it", async () => {
+    show();
+    await ready();
+
+    serverBehindBy(7 * 60_000);
+
+    expect(await screen.findByText(t("clock.ahead", { drift: "7 min" }))).toBeDefined();
+  });
+
+  it("says it is behind, in hours past an hour", async () => {
+    show();
+    await ready();
+
+    serverBehindBy(-(2 * 60 + 5) * 60_000);
+
+    expect(await screen.findByText(t("clock.behind", { drift: "2 h 05" }))).toBeDefined();
+  });
+
+  it("says nothing of a minute or so, which is only the network", async () => {
+    show();
+    await ready();
+
+    serverBehindBy(90_000);
+
+    expect(screen.queryByText(/Set Automatically/)).toBeNull();
   });
 });

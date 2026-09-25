@@ -12,8 +12,8 @@ import pytest
 import requests
 
 from pretix_openpos.sumup import (
-    ERR_BUSY, ERR_CONFLICT, ERR_NOT_FOUND, ERR_OFFLINE, ERR_REFUSED, ERR_UNAVAILABLE, SumUpAccount, SumUpError,
-    given_back, minor_units, still_running, succeeded,
+    ERR_BUSY, ERR_CONFLICT, ERR_NOT_FOUND, ERR_OFFLINE, ERR_RATE_LIMITED, ERR_REFUSED, ERR_UNAVAILABLE, SumUpAccount,
+    SumUpError, given_back, minor_units, still_running, succeeded,
 )
 
 from .sumup_stub import NOT_REFUNDABLE, FakeResponse, reader_busy, reader_offline
@@ -379,6 +379,10 @@ def test_not_yet_is_recognised_by_code_and_never_by_wording(account, sumup, monk
         # same answer — but a caller refunding waits and asks again later.
         (409, ERR_CONFLICT, False),
         (422, ERR_REFUSED, False),
+        # Too many requests: SumUp did nothing with this one. Not retryable
+        # either — a payment it was asked to start is not on the reader — but
+        # never a refusal of the payment or refund it was about.
+        (429, ERR_RATE_LIMITED, False),
         (503, ERR_UNAVAILABLE, True),
     ],
 )
@@ -865,3 +869,113 @@ def test_the_history_stops_after_so_many_pages(account, sumup):
 )
 def test_how_much_went_back_is_read_from_what_sumup_says(transaction, expected):
     assert given_back(transaction) == expected
+
+
+# -- what goes into a path ------------------------------------------------------
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "forged",
+    [
+        "rdr_A/../../../v1.0/merchants/MERCH1/payments/tx_1/refunds",
+        "rdr_A/terminate",
+        "rdr_A?x=1",
+        "rdr_A#x",
+        "..",
+        "",
+        None,
+    ],
+)
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda account, reader: account.forget_reader(reader),
+        lambda account, reader: account.terminate_checkout(reader),
+        lambda account, reader: account.start_checkout(
+            reader, amount=Decimal("10.00"), currency="EUR", description="Bar"
+        ),
+    ],
+)
+def test_the_client_refuses_a_reader_id_that_is_not_one(account, sumup, forged, call):
+    """Whoever calls it, from a form or from a row: the check is in the client."""
+    from pretix_openpos.sumup import ERR_INVALID
+
+    with pytest.raises(SumUpError) as caught:
+        call(account, forged)
+
+    assert caught.value.code == ERR_INVALID
+    assert caught.value.retryable is False
+    assert sumup.calls == []
+
+
+@pytest.mark.django_db
+def test_the_questions_that_answer_none_answer_none_without_asking(account, sumup):
+    assert account.reader_status("rdr_A/../x") is None
+    assert account.reader_checkout("rdr_A?x", "chk_1") is None
+    assert sumup.calls == []
+
+
+@pytest.mark.django_db
+def test_every_id_in_a_path_stays_one_segment(organizer, account, sumup):
+    sumup.add_reader("rdr_A")
+
+    account.reader_checkout("rdr_A", "chk/../../x?y=1#z")
+    # SumUp has no such transaction; what matters is what it was asked.
+    with pytest.raises(SumUpError):
+        account.refund("tx/../1?y#z")
+
+    paths = [path for _method, path, _body in sumup.calls]
+    assert paths == [
+        "/v0.1/merchants/MERCH1/readers/rdr_A/checkout/chk%2F..%2F..%2Fx%3Fy%3D1%23z",
+        "/v1.0/merchants/MERCH1/payments/tx%2F..%2F1%3Fy%23z/refunds",
+    ]
+
+
+@pytest.mark.django_db
+def test_a_merchant_code_is_one_segment_too(organizer, sumup):
+    organizer.settings.set("openpos_sumup_merchant_code", "M/../../v1.0")
+
+    with pytest.raises(SumUpError):
+        SumUpAccount(organizer).readers()
+
+    assert sumup.call_paths() == ["/v0.1/merchants/M%2F..%2F..%2Fv1.0/readers"]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("value", ["..", "."])
+def test_a_segment_that_climbs_is_refused_outright(account, sumup, value):
+    """Quoting leaves these two as they are, and each climbs on its own."""
+    from pretix_openpos.sumup import ERR_INVALID
+
+    with pytest.raises(SumUpError) as caught:
+        account.refund(value)
+
+    assert caught.value.code == ERR_INVALID
+    assert sumup.calls == []
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "path",
+    ["/v0.1/merchants/M/../x", "/v0.1/merchants/M/./x", "/v0.1/merchants/M?x", "v0.1", "//x"],
+)
+def test_a_path_built_some_other_way_is_refused_before_the_key_goes_out(account, sumup, path):
+    from pretix_openpos.sumup import ERR_INVALID
+
+    with pytest.raises(SumUpError) as caught:
+        account._call("GET", path)
+
+    assert caught.value.code == ERR_INVALID
+    assert sumup.calls == []
+
+
+def test_a_reader_id_has_sumup_s_shape():
+    from pretix_openpos.sumup import is_reader_id
+
+    assert is_reader_id("rdr_3MSAFM23CK82VSTT4BN6RWSQ65")
+    assert is_reader_id("rdr_ONE")
+    assert not is_reader_id("rdr_A/..")
+    assert not is_reader_id("rdr_" + "A" * 65)
+    assert not is_reader_id(None)
+    assert not is_reader_id("rdr_A\n")

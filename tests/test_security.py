@@ -10,6 +10,7 @@ import pathlib
 import re
 
 import pytest
+from django.utils.timezone import now
 from pretix.base.models import Device
 from pretix.base.models.devices import generate_api_token
 
@@ -97,6 +98,80 @@ def test_the_till_may_look_a_ticket_up_by_name(till, event, checkin_list):
 
     # Tickets carry a QR and nothing a human could retype; when the code will
     # not scan this is the only way through.
+    assert response.status_code == 200
+
+
+def search(till, event, checkin_list, query):
+    """pretix' own name search, as the door calls it, with a raw query string."""
+    return till.client.get(
+        f"/api/v1/organizers/{event.organizer.slug}/checkinrpc/search/"
+        f"?list={checkin_list.pk}&{query}",
+        HTTP_AUTHORIZATION=f"Device {till.device.api_token}",
+    )
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "query",
+    [
+        # No term at all: pretix answers a device — which may read every order
+        # of the lists it asks about — with every ticket on them, names,
+        # e-mail addresses and secrets included.
+        "",
+        "search=",
+        "search=du",
+        # Spaces are not characters of a name.
+        "search=%20%20%20",
+        "search=d%20u%20",
+        # A short copy next to a long one: which of the two a filter reads is
+        # pretix' business, so both must be long enough.
+        "search=dupont&search=d",
+        "search=d&search=dupont",
+    ],
+)
+def test_the_name_search_needs_three_characters(till, event, checkin_list, query):
+    response = search(till, event, checkin_list, query)
+
+    assert response.status_code == 403
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("query", ["search=dup", "search=%20dup%20", "search=d%20u%20p", "search=dupont&search=durand"])
+def test_three_characters_are_a_search(till, event, checkin_list, query):
+    assert search(till, event, checkin_list, query).status_code == 200
+
+
+@pytest.mark.django_db
+def test_a_short_search_used_to_hand_over_the_guest_list(till, event, ticket, checkin_list):
+    """
+    What the minimum is for, shown on the answer rather than on the status: a
+    device's search with no term listed every ticket of the list. A term the
+    door would actually type still finds the one holder it is looking for.
+    """
+    from .test_offline_snapshot import admit
+
+    admit(event, ticket, ["Alice Martin", "Bob Durand"])
+
+    assert search(till, event, checkin_list, "search=").status_code == 403
+    found = search(till, event, checkin_list, "search=alice").json()["results"]
+    assert [row["attendee_name"] for row in found] == ["Alice Martin"]
+
+
+@pytest.mark.django_db
+def test_a_device_on_pretix_own_profile_is_not_held_to_it(organizer, event, checkin_list):
+    """The minimum is this profile's; pretixSCAN's own is left as pretix wrote it."""
+    from django.test import Client
+
+    scanner = Device.objects.create(
+        organizer=organizer, name="pretixSCAN", all_events=True,
+        security_profile="pretixscan", api_token=generate_api_token(), initialized=now(),
+    )
+
+    response = Client().get(
+        f"/api/v1/organizers/{organizer.slug}/checkinrpc/search/?list={checkin_list.pk}&search=",
+        HTTP_AUTHORIZATION=f"Device {scanner.api_token}",
+    )
+
     assert response.status_code == 200
 
 

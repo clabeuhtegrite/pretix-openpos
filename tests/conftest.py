@@ -13,6 +13,7 @@ from datetime import timedelta
 import pytest
 from django.core.cache import cache
 from django.test import Client
+from django.utils import translation
 from django.utils.timezone import now
 from django_scopes import scopes_disabled
 from pretix.base.models import Device, Event, Item, ItemVariation, Order, Organizer, Quota, Team, User
@@ -37,6 +38,19 @@ def _clean_cache():
     cache.clear()
     yield
     cache.clear()
+
+
+@pytest.fixture(autouse=True)
+def _default_language():
+    """
+    Nor the language a test left active.
+
+    A request picks its language and leaves it active on the thread when it is
+    done, so one test asking in French had the tests after it read French —
+    passing or failing by the order they ran in.
+    """
+    yield
+    translation.deactivate()
 
 
 @pytest.fixture

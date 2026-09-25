@@ -19,8 +19,10 @@ createRoot(container).render(
 );
 
 // Registered from /openpos/sw.js rather than the static bundle so the worker's
-// scope covers the app URL. Failure is non-fatal: the till is online-only by
-// design and the worker only buys a faster cold start.
+// scope covers the app URL. It is what lets a till start with no network, or
+// while the server restarts, and what brings a new build in before the page
+// reloads onto it (update.ts). Failure is still non-fatal: without it the till
+// starts only when the server answers, and an update is a plain reload.
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
     navigator.serviceWorker.register("/openpos/sw.js", { scope: "/openpos/" }).catch(() => {});

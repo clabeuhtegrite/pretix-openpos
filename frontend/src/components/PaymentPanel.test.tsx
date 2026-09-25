@@ -519,6 +519,7 @@ describe("when the server refuses", () => {
 describe("on a till with a card reader of its own", () => {
   /** What the hook reports while the customer has the reader in front of them. */
   const waiting = {
+    key: "reader-1", unanswered: false, asking: false, notice: null,
     phase: "waiting" as const, amount: "12.34", currency: "EUR", message: null, stalled: false,
     cancelling: false,
   };
@@ -544,6 +545,7 @@ describe("on a till with a card reader of its own", () => {
   });
 
   const paid = {
+    key: "reader-1", unanswered: false, asking: false, notice: null,
     phase: "paid" as const, amount: "12.34", currency: "EUR", message: null, stalled: false,
     cancelling: false,
   };
@@ -636,6 +638,7 @@ describe("on a till with a card reader of its own", () => {
 
   it("says why a card was refused, and offers another go", async () => {
     const failed = {
+      key: "reader-1", unanswered: false, asking: false, notice: null,
       phase: "failed" as const, amount: null, currency: null,
       message: t("payment.readerRefused"), stalled: false, cancelling: false,
     };
@@ -754,11 +757,12 @@ describe("on a till with a card reader of its own", () => {
     // total is not re-checked — but a cashier reading "not recorded" would
     // otherwise assume nothing was charged.
     const paid = {
+      key: "reader-1", unanswered: false, asking: false, notice: null,
       phase: "paid" as const, amount: "12.34", currency: "EUR", message: null, stalled: false,
       cancelling: false,
     };
     const { user } = show(
-      { cardMode: "terminal", terminal: paid, error: "Something went wrong." },
+      { cardMode: "terminal", terminal: paid, error: "Something went wrong.", refused: true },
       null,
     );
 
@@ -767,6 +771,35 @@ describe("on a till with a card reader of its own", () => {
     expect(
       screen.getByText(`${t("payment.readerPaidNotRecorded")} Something went wrong.`),
     ).toBeDefined();
+  });
+
+  it("lets go of a charged card once the server has refused the sale for good", async () => {
+    // Sending it again would only be refused again; the payment is in the
+    // back office's list of card payments with no sale.
+    const { user, onCancel } = show(
+      { cardMode: "terminal", terminal: paid, error: "Refused.", refused: true },
+      null,
+    );
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+
+    await user.click(screen.getByRole("button", { name: t("payment.back") }));
+
+    expect(onCancel).toHaveBeenCalled();
+    // ...and cash stays locked all the same: the money is on the card.
+    expect(screen.getByRole("button", { name: t("payment.cash") })).toHaveProperty("disabled", true);
+  });
+
+  it("does not call a charged card unrecorded while the server only asks to wait", async () => {
+    const { user } = show(
+      { cardMode: "terminal", terminal: paid, error: "Try again in a moment." },
+      null,
+    );
+
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+
+    expect(screen.queryByText(t("payment.readerPaidNotRecorded"), { exact: false })).toBeNull();
+    expect(screen.getByText("Try again in a moment.")).toBeDefined();
+    expect(screen.getByRole("button", { name: t("payment.back") })).toHaveProperty("disabled", true);
   });
 
   it("does not say that about an ordinary refusal, before any card is charged", async () => {
@@ -877,5 +910,208 @@ describe("on a till whose cash drawer is not open", () => {
 
     expect(screen.getByRole("button", { name: "1" })).toBeDefined();
     expect(screen.getByRole("button", { name: t("payment.confirm") })).toBeDefined();
+  });
+});
+
+describe("a reader till that cannot reach the server", () => {
+  /** A reader payment in progress, as the hook reports it. */
+  const waiting = {
+    key: "reader-1", phase: "waiting" as const, amount: "12.34", currency: "EUR", message: null,
+    stalled: true, cancelling: false, unanswered: false, asking: false, notice: null,
+  };
+
+  /** The panel with every prop it takes, re-rendered as a test changes them. */
+  function reader(props: Partial<Parameters<typeof PaymentPanel>[0]> = {}) {
+    const handlers = {
+      onTerminalStart: vi.fn(),
+      onTerminalStop: vi.fn(),
+      onTerminalRetry: vi.fn(),
+      onTerminalAbandon: vi.fn(),
+      onConfirm: vi.fn(),
+      onCancel: vi.fn(),
+    };
+    const panel = (extra: Partial<Parameters<typeof PaymentPanel>[0]>) => (
+      <PaymentPanel
+        totalCents={1234}
+        currency="EUR"
+        denominations={DENOMINATIONS}
+        cardMode="terminal"
+        terminal={null}
+        busy={false}
+        error={null}
+        {...handlers}
+        {...props}
+        {...extra}
+      />
+    );
+    const view = render(panel({}));
+    return { ...handlers, update: (extra: Partial<Parameters<typeof PaymentPanel>[0]>) => view.rerender(panel(extra)) };
+  }
+
+  it("does not start the reader with no network, says so, and leaves cash on offer", async () => {
+    const user = userEvent.setup();
+    const { onTerminalStart } = reader({ online: false });
+
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+
+    expect(onTerminalStart).not.toHaveBeenCalled();
+    expect(screen.getByText(t("payment.readerOffline"))).toBeDefined();
+    expect(screen.getByRole("button", { name: t("payment.readerRetry") })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: t("payment.cash") })).toHaveProperty("disabled", false);
+    // Nothing is on the reader, so leaving is leaving.
+    expect(screen.getByRole("button", { name: t("payment.back") })).toHaveProperty("disabled", false);
+  });
+
+  it("offers the reader again once the network is back", async () => {
+    const user = userEvent.setup();
+    const { onTerminalStart, update } = reader({ online: false });
+    await user.click(screen.getByRole("button", { name: t("payment.card") }));
+
+    update({ online: true });
+    expect(screen.getByText(t("payment.readerBack"))).toBeDefined();
+    await user.click(screen.getByRole("button", { name: t("payment.readerRetry") }));
+
+    expect(onTerminalStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not offer another go after a refusal while there is no network", async () => {
+    const user = userEvent.setup();
+    const failed = { ...waiting, phase: "failed" as const, stalled: false, message: "Refused." };
+    reader({ online: false, terminal: failed, initialMethod: "card" });
+
+    expect(screen.getByRole("button", { name: t("payment.readerRetry") })).toHaveProperty("disabled", true);
+    expect(screen.getByText(t("payment.readerOffline"))).toBeDefined();
+    await user.click(screen.getByRole("button", { name: t("payment.readerRetry") }));
+  });
+
+  it("keeps the cash button locked while the server may still answer", () => {
+    reader({ terminal: waiting, initialMethod: "card" });
+
+    expect(screen.getByText(t("payment.readerStalled"))).toBeDefined();
+    expect(screen.getByRole("button", { name: t("payment.cash") })).toHaveProperty("disabled", true);
+  });
+
+  it("sends the cashier to the reader's own screen once the server has gone quiet", () => {
+    reader({ terminal: { ...waiting, unanswered: true }, initialMethod: "card" });
+
+    expect(screen.getByText(t("payment.readerUnanswered"))).toBeDefined();
+    expect(screen.queryByText(t("payment.readerPrompt"))).toBeNull();
+  });
+
+  it("says it is SumUp that has gone quiet when the server says so", () => {
+    reader({ terminal: { ...waiting, unanswered: true, unansweredBy: "sumup" }, initialMethod: "card" });
+
+    expect(screen.getByText(t("payment.readerSumupUnanswered"))).toBeDefined();
+    expect(screen.queryByText(t("payment.readerUnanswered"))).toBeNull();
+    expect(screen.getByRole("button", { name: t("payment.cash") })).toHaveProperty("disabled", false);
+  });
+
+  it("says the reader has moved on, and still lets the sale be taken in cash", () => {
+    reader({ terminal: { ...waiting, unanswered: true, unansweredBy: "reader" }, initialMethod: "card" });
+
+    expect(screen.getByText(t("payment.readerMovedOn"))).toBeDefined();
+    expect(screen.getByRole("button", { name: t("payment.cash") })).toHaveProperty("disabled", false);
+    expect(screen.getByRole("button", { name: t("payment.card") })).toHaveProperty("disabled", true);
+  });
+
+  it("asks again under the same payment from there", async () => {
+    const user = userEvent.setup();
+    const { onTerminalRetry, onTerminalStart } = reader({
+      terminal: { ...waiting, unanswered: true }, initialMethod: "card",
+    });
+
+    await user.click(screen.getByRole("button", { name: t("payment.readerRetry") }));
+
+    expect(onTerminalRetry).toHaveBeenCalled();
+    expect(onTerminalStart).not.toHaveBeenCalled();
+  });
+
+  it("shows that question on its way, and takes no second tap", () => {
+    reader({ terminal: { ...waiting, unanswered: true, asking: true }, initialMethod: "card" });
+
+    const again = screen.getByRole("button", { name: t("error.retrying") });
+    expect(again).toHaveProperty("disabled", true);
+    expect(again.getAttribute("aria-busy")).toBe("true");
+  });
+
+  it("lets the sale be taken in cash from there, leaving the reader payment behind", async () => {
+    const user = userEvent.setup();
+    const { onTerminalAbandon, onConfirm, update } = reader({
+      terminal: { ...waiting, unanswered: true }, initialMethod: "card",
+    });
+    // Card stays locked: a second card payment over one that may be live is
+    // the double charge this panel exists to prevent.
+    expect(screen.getByRole("button", { name: t("payment.card") })).toHaveProperty("disabled", true);
+
+    await user.click(screen.getByRole("button", { name: t("payment.cash") }));
+    expect(onTerminalAbandon).toHaveBeenCalledTimes(1);
+    // What the till does next: the payment is left aside, the reader is off screen.
+    update({ terminal: null });
+    await user.click(screen.getByRole("button", { name: t("payment.exact") }));
+    await user.click(screen.getByRole("button", { name: t("payment.confirm") }));
+
+    expect(onConfirm).toHaveBeenCalledWith("cash", "12.34");
+  });
+
+  it("says what a stop could not do yet, beside the wait", () => {
+    reader({ terminal: { ...waiting, stalled: false, notice: "Wait a few seconds." }, initialMethod: "card" });
+
+    expect(screen.getByText("Wait a few seconds.")).toBeDefined();
+    expect(screen.getByText(t("payment.readerPrompt"))).toBeDefined();
+  });
+});
+
+describe("a payment picked up after a reload", () => {
+  it("opens on the method already chosen, and says why the panel is there", () => {
+    render(
+      <PaymentPanel
+        totalCents={1234}
+        currency="EUR"
+        denominations={DENOMINATIONS}
+        cardMode="declared"
+        terminal={null}
+        onTerminalStart={vi.fn()}
+        onTerminalStop={vi.fn()}
+        busy
+        error={null}
+        initialMethod="cash"
+        resumed
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(t("payment.resumed"))).toBeDefined();
+    expect(screen.getByRole("button", { name: t("payment.cash") }).getAttribute("aria-pressed")).toBe("true");
+    expect(screen.queryByText(t("payment.chooseMethod"))).toBeNull();
+  });
+
+  it("asks nothing of the reader while it finds out how the payment stands", () => {
+    const checking = {
+      key: "reader-1", phase: "checking" as const, amount: null, currency: null, message: null,
+      stalled: false, cancelling: false, unanswered: false, asking: false, notice: null,
+    };
+    render(
+      <PaymentPanel
+        totalCents={1234}
+        currency="EUR"
+        denominations={DENOMINATIONS}
+        cardMode="terminal"
+        terminal={checking}
+        onTerminalStart={vi.fn()}
+        onTerminalStop={vi.fn()}
+        busy={false}
+        error={null}
+        initialMethod="card"
+        resumed
+        onConfirm={vi.fn()}
+        onCancel={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText(t("payment.readerChecking"))).toBeDefined();
+    // Still a live payment as far as anybody knows: stop, not back.
+    expect(screen.getByRole("button", { name: t("payment.readerStop") })).toBeDefined();
+    expect(screen.getByRole("button", { name: t("payment.cash") })).toHaveProperty("disabled", true);
   });
 });

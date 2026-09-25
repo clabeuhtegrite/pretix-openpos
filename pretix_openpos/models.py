@@ -406,11 +406,27 @@ class PosSale(models.Model):
 
     # -- writing -----------------------------------------------------------
 
+    class AlreadyRecorded(Exception):
+        """
+        Another transaction wrote a row under this idempotency key first.
+
+        Raised by :meth:`record` instead of handing that row back, when the
+        caller says a row of somebody else's is not an answer it can use.
+        ``sale`` is the row that was there.
+        """
+
+        def __init__(self, sale):
+            super().__init__(
+                f"Journal entry #{sale.seq} of {sale.event_id} already holds "
+                f"the key {sale.idempotency_key!r}."
+            )
+            self.sale = sale
+
     @classmethod
     def record(cls, *, event, order, device, cashier, payment_type, total, positions,
                idempotency_key, cash_given=None, cash_change=None, testmode=False,
                kind=KIND_SALE, cancels_seq=None, reason="", offline=False,
-               recorded_at=None, drawer_session=None, attempts=5):
+               recorded_at=None, drawer_session=None, attempts=5, existing_ok=True):
         """
         Append a row to the journal, chaining it onto the current tail.
 
@@ -424,6 +440,15 @@ class PosSale(models.Model):
 
         ``drawer_session`` is the drawer opening the money belongs to, when the
         till has a drawer — see :attr:`drawer_session`.
+
+        ``existing_ok`` decides what a row already holding this idempotency key
+        means. By default it is the answer: the back office writes reversals
+        under keys derived from what they reverse, and finding one there means
+        the work is done. The till's checkout says ``False``, because by the
+        time it writes here it has already created an order, and a row written
+        by *another* request is not that order's journal line — handing it
+        back is how one sale became two orders and one line. It then gets
+        :class:`AlreadyRecorded`, and rolls its order back with it.
         """
         for _attempt in range(attempts):
             last = cls.objects.filter(event=event).order_by("-seq").first()
@@ -464,12 +489,15 @@ class PosSale(models.Model):
                 return sale
             except IntegrityError:
                 # Either another till claimed our sequence number, or this exact
-                # sale was already recorded. The latter is the idempotency case
-                # and is a success, not a retry.
+                # sale was already recorded. The latter is the idempotency case:
+                # a success for a caller that wrote nothing else on the strength
+                # of this row, and a conflict for one that did.
                 existing = cls.objects.filter(
                     event=event, idempotency_key=idempotency_key
                 ).first()
                 if existing:
+                    if not existing_ok:
+                        raise cls.AlreadyRecorded(existing)
                     return existing
                 continue
 
@@ -554,6 +582,43 @@ class PosDevice(models.Model):
         related_name="devices", verbose_name=_("Cash drawer"),
     )
 
+    # -- what the device was last heard saying ------------------------------
+    #
+    # pretix keeps a device's creation and pairing dates and nothing after
+    # that, so the back office could not tell a tablet that has been quiet
+    # since 21:14 from one that sold a round a minute ago — nor that a quiet
+    # one is sitting on fifteen cash sales it has not managed to send. That
+    # second fact is the one that matters before counting a drawer: the
+    # amount the server expects in it is computed from the sales it has, and
+    # a sale still on the tablet is not one of them.
+    #
+    # Two sources, kept apart on purpose. ``last_seen_at`` is the server's
+    # own observation and cannot be wrong about when; the rest is what the
+    # app said about itself, on its own clock, at ``status_reported_at``, and
+    # is shown as such. A device that never reported keeps these at their
+    # defaults, which read as "nothing known", not as "nothing pending".
+    #
+    # Every one of them is nullable or has its default in the database as well
+    # as in Python, and that is for going back: Django drops a Python-only
+    # default from the column once it has added it, so a 0.24 put back after
+    # this migration — which writes a row without these columns when a
+    # device is first given a role — would hit a NOT NULL on PostgreSQL.
+
+    #: Server time of this device's last authenticated call to an Open POS
+    #: endpoint. Written at most once a minute: see ``note_contact`` in
+    #: ``api/views.py``.
+    last_seen_at = models.DateTimeField(null=True, blank=True)
+    #: Server time at which the app last sent its status report.
+    status_reported_at = models.DateTimeField(null=True, blank=True)
+    #: How many sales the app said it was still holding, not yet sent.
+    pending_sales = models.PositiveIntegerField(default=0, db_default=0)
+    #: When the oldest of those was recorded, on the tablet's clock.
+    oldest_pending_at = models.DateTimeField(null=True, blank=True)
+    #: When the app last got its queue through to the server, on its clock.
+    last_sync_at = models.DateTimeField(null=True, blank=True)
+    #: The build the app said it was running.
+    app_version = models.CharField(max_length=64, blank=True, default="", db_default="")
+
     class Meta:
         verbose_name = _("Till device")
         verbose_name_plural = _("Till devices")
@@ -565,6 +630,21 @@ class PosDevice(models.Model):
     def drives_terminal(self) -> bool:
         """Whether a card payment on this device has to come from its terminal."""
         return bool(self.sumup_reader_id)
+
+    @property
+    def serves_door(self) -> bool:
+        """
+        Whether this device works at the door, alone or with the till.
+
+        An unassigned device does both, as it always has; only a device the
+        organizer made the bar till has no door.
+        """
+        return self.role != self.ROLE_TILL
+
+    @property
+    def holds_sales(self) -> bool:
+        """Whether the app last said it had sales it had not sent yet."""
+        return self.status_reported_at is not None and self.pending_sales > 0
 
     @classmethod
     def for_device(cls, device):

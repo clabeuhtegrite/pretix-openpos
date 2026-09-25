@@ -5,15 +5,39 @@ from django.utils.timezone import now
 from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
-from ..models import PosSale
+from ..models import PosSale, refund_key
 
 #: Guard against a runaway client turning one tap into a thousand-line order.
 MAX_LINES = 100
+
+#: The most items one sale may hold, all its lines together.
+#:
+#: A line may count up to 999 and a sale may hold a hundred lines, which let
+#: one request ask for a hundred thousand tickets — each one an order position
+#: to write, a ticket to render and, for an admission, a check-in to make, all
+#: inside one request holding one worker. Five hundred is more than any counter
+#: sells in one go: a bar round is a dozen, a group at the door a few dozen, and
+#: a school trip a couple of hundred at most. Anything larger is a mistake, or a
+#: tablet in the wrong hands, and is better split into several sales anyway.
+MAX_ITEMS = 500
 
 
 #: How stale a queued sale may be before it looks like a mistake rather than a
 #: dropout. A night is hours; a week is somebody replaying an old backup.
 MAX_OFFLINE_AGE = timedelta(days=7)
+
+#: How far ahead of the server a queued sale may be dated: a till clock a few
+#: minutes out, which no correction has caught.
+MAX_OFFLINE_LEAD = timedelta(minutes=5)
+
+#: How far a till's clock may be from the server's before the times it wrote
+#: down are corrected by the difference.
+#:
+#: Wide enough that the time a request spends in flight, and the drift of any
+#: clock that is set by the network, never count as a wrong clock; narrow
+#: enough that one wrong by minutes — an iPad set by hand, one whose battery
+#: ran flat — is corrected rather than refused.
+CLOCK_TOLERANCE = timedelta(seconds=60)
 
 
 class CheckoutPositionSerializer(serializers.Serializer):
@@ -51,19 +75,47 @@ class OfflineSerializer(serializers.Serializer):
     quietly rewriting either one.
     """
 
-    #: When the customer actually paid.
+    #: When the customer actually paid, by the till's clock.
     recorded_at = serializers.DateTimeField()
     #: What the till took, as a checksum against a queue corrupted in storage.
     charged_total = serializers.DecimalField(max_digits=13, decimal_places=2)
+    #: The till's clock at the moment it sent this attempt.
+    #:
+    #: Optional, because a till running an older build does not send it. Sent,
+    #: it is what makes ``recorded_at`` readable: the difference between the
+    #: two clocks is known at this instant, and it is the same difference that
+    #: was in ``recorded_at`` when the sale was rung up.
+    sent_at = serializers.DateTimeField(required=False, allow_null=True, default=None)
 
-    def validate_recorded_at(self, value):
-        if value > now() + timedelta(minutes=5):
-            raise serializers.ValidationError(_("This sale is dated in the future."))
-        if value < now() - MAX_OFFLINE_AGE:
+    def validate(self, data):
+        moment = now()
+        sent_at = data.get("sent_at")
+        # The time the sale says, put on the server's clock. A till whose
+        # clock ran six minutes fast dated every sale it queued six minutes
+        # into the future, and every one of them was refused on replay as
+        # "dated in the future" — for a customer who had paid and walked in.
+        # Corrected before it is judged or stored, so the window below and
+        # the journal both see the moment the money actually moved.
+        correction = timedelta(0)
+        if sent_at is not None and abs(sent_at - moment) > CLOCK_TOLERANCE:
+            correction = moment - sent_at
+        recorded_at = data["recorded_at"] + correction
+
+        if recorded_at > moment + MAX_OFFLINE_LEAD:
             raise serializers.ValidationError(
-                _("This sale is too old to be replayed automatically.")
+                {"recorded_at": [_("This sale is dated in the future.")]}
             )
-        return value
+        if recorded_at < moment - MAX_OFFLINE_AGE:
+            raise serializers.ValidationError(
+                {"recorded_at": [_("This sale is too old to be replayed automatically.")]}
+            )
+        # What the till said is kept beside what is stored, for the trace the
+        # checkout leaves on the order: a corrected date is a fact about the
+        # till as much as about the sale.
+        data["claimed_at"] = data["recorded_at"]
+        data["recorded_at"] = recorded_at
+        data["clock_correction"] = correction
+        return data
 
 
 class TerminalStartSerializer(serializers.Serializer):
@@ -82,13 +134,18 @@ class TerminalStartSerializer(serializers.Serializer):
     positions = CheckoutPositionSerializer(many=True, allow_empty=False, max_length=MAX_LINES)
 
 
-class CheckoutSerializer(serializers.Serializer):
-    """
-    Note what this deliberately does *not* accept: a price.
+#: What :func:`refund_key` adds to a sale's key for the payout that goes with it.
+REFUND_SUFFIX = refund_key("")
 
-    The till only ever names products and quantities. Prices are resolved
-    server-side from the on-site tariff, so a tampered-with or simply outdated
-    app cannot sell a 40 EUR ticket for 4 EUR.
+
+class KeySerializer(serializers.Serializer):
+    """
+    The one part of a checkout read before anything is judged: its key.
+
+    A checkout whose key is already in the journal is answered with the sale
+    recorded under it, whatever the rest of the request says, so the key is
+    all that has to be valid for that — and a missing or malformed one is
+    still refused, because there is then nothing to look up.
     """
 
     #: Generated by the app before its first attempt and reused for every retry,
@@ -99,6 +156,28 @@ class CheckoutSerializer(serializers.Serializer):
     #: journal row that records the payout. The app's own keys are a couple of
     #: dozen characters.
     idempotency_key = serializers.CharField(max_length=180, min_length=8)
+
+    def validate_idempotency_key(self, value):
+        # That ending is how the payout row of a sale is keyed. A till's key
+        # ending with it would name another sale's payout: a retry would be
+        # answered with somebody else's refund, and a sale of its own would
+        # find its payout's key already taken.
+        if value.endswith(REFUND_SUFFIX):
+            raise serializers.ValidationError(
+                _("This key is reserved for the deposit half of another sale.")
+            )
+        return value
+
+
+class CheckoutSerializer(KeySerializer):
+    """
+    Note what this deliberately does *not* accept: a price.
+
+    The till only ever names products and quantities. Prices are resolved
+    server-side from the on-site tariff, so a tampered-with or simply outdated
+    app cannot sell a 40 EUR ticket for 4 EUR.
+    """
+
     positions = serializers.ListField(
         child=CheckoutPositionSerializer(), allow_empty=False, max_length=MAX_LINES
     )
@@ -146,17 +225,34 @@ class CheckoutSerializer(serializers.Serializer):
                     {"positions": [_("A deposit refund cannot be a positive amount.")]}
                 )
 
+        # A card payment the till's reader has already taken, for this very
+        # key: the checkout books it from the basket the server priced when it
+        # put the amount on the reader, and the lines sent now are not read.
+        pinned = (
+            self.context.get("pinned", False)
+            and data["payment_type"] == PosSale.PAYMENT_CARD
+        )
+
         if offline:
             # All or nothing: a partly priced basket means the queue is damaged,
             # and guessing the missing half is the one thing not to do with money.
-            if len(priced) != len(data["positions"]):
+            #
+            # Except over a basket the reader has been paid for. The network
+            # died between the reader's "paid" and the checkout, so the till
+            # queued the sale — priced from its own cached tariff, while the
+            # card was charged what the server had priced a moment before. The
+            # two disagree whenever a price moved in between, and checking one
+            # against the other refused the replay: a card charged, and no
+            # order behind it. The pinned basket is what gets booked, so there
+            # is nothing here to check.
+            if not pinned and len(priced) != len(data["positions"]):
                 raise serializers.ValidationError(
                     {"positions": [_("Every line of an offline sale must carry the price charged.")]}
                 )
             charged = sum(
-                (p["price"] * p["count"] for p in data["positions"]), Decimal("0.00")
+                (p["price"] * p["count"] for p in priced), Decimal("0.00")
             )
-            if charged != offline["charged_total"]:
+            if not pinned and charged != offline["charged_total"]:
                 raise serializers.ValidationError(
                     {"offline": [_("The lines do not add up to the total charged.")]}
                 )
@@ -215,6 +311,25 @@ class CancelSerializer(serializers.Serializer):
     reason = serializers.CharField(
         max_length=190, required=False, allow_blank=True, default=""
     )
+
+
+class DeviceStatusSerializer(serializers.Serializer):
+    """
+    What a till says about itself: the sales it has not managed to send yet.
+
+    Its own account, on its own clock, and stored as such — the server has no
+    way to count sales that never reached it, which is the whole point of
+    asking. Strict all the same: a report that does not parse is an app bug
+    worth a 400, not a number to show an organizer.
+    """
+
+    #: The column's own limit; a queue anywhere near it is a bug, not a night.
+    pending_sales = serializers.IntegerField(min_value=0, max_value=2147483647)
+    #: When the oldest unsent sale was rung up. ``null`` when nothing waits.
+    oldest_pending_at = serializers.DateTimeField(allow_null=True, required=False, default=None)
+    #: When the queue last went through, whole. ``null`` before it ever did.
+    last_sync_at = serializers.DateTimeField(allow_null=True, required=False, default=None)
+    version = serializers.CharField(max_length=64, allow_blank=True)
 
 
 class DrawerCountSerializer(serializers.Serializer):

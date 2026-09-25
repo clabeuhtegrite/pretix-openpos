@@ -2,10 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 /**
  * The replay of what a till did while cut off. These tests pin the rule the
- * whole queue's safety rests on — 4xx is a refusal, everything else means
- * "not now" — because an early version got it wrong and took two paid sales
- * out of the queue on a 500. They must never come back as plausible-looking
- * code.
+ * whole queue's safety rests on — a 400 with the server's reasons is a
+ * refusal of that entry, everything else means "not now" — because early
+ * versions got it wrong twice: one took two paid sales out of the queue on a
+ * 500, the next emptied a revoked tablet's whole queue into the refusals on a
+ * 403. They must never come back as plausible-looking code.
  */
 
 const { checkout, redeem, reportRefusal } = vi.hoisted(() => ({
@@ -20,10 +21,12 @@ vi.mock("./api", async (importOriginal) => {
 });
 
 import { ApiError } from "./api";
+import { describeError } from "./errors";
+import { t } from "./i18n";
 import {
-  enqueue, loadDoorScans, loadFailures, loadQueue, saveDoorScans, saveQueue,
+  enqueue, loadDoorScans, loadFailures, loadLastSync, loadQueue, saveDoorScans, saveQueue,
 } from "./storage";
-import { drainQueue, sendable } from "./sync";
+import { drainQueue, sendable, THROTTLED_WAIT_MS } from "./sync";
 import type { DoorScans, Pairing, QueuedCheckin, QueuedSale } from "./types";
 
 const pairing: Pairing = {
@@ -66,6 +69,11 @@ function checkin(id: string, secret: string, overrides: Partial<QueuedCheckin> =
 
 const sold = { order: { code: "POS01" } };
 
+/** A refusal as the server sends one: a 400 with its reasons. */
+function refusal(message: string) {
+  return new ApiError(400, message, { positions: [message] });
+}
+
 beforeEach(() => {
   localStorage.clear();
   checkout.mockReset();
@@ -89,9 +97,43 @@ describe("drainQueue", () => {
         idempotency_key: "a",
         // The offline block is what authorises the client-sent price; a
         // replay without it would be refused as tampering.
-        offline: { recorded_at: "2026-08-16T22:02:21.000Z", charged_total: "4.00" },
+        offline: {
+          recorded_at: "2026-08-16T22:02:21.000Z",
+          charged_total: "4.00",
+          sent_at: expect.any(String),
+        },
       }),
     );
+    expect(report.halted).toBeUndefined();
+  });
+
+  it("sends this device's clock at the moment of sending with every replay", async () => {
+    // What lets the server correct a sale dated by a tablet whose clock is
+    // wrong, instead of refusing it as dated in the future.
+    vi.useFakeTimers({ now: new Date("2026-08-17T01:00:00.000Z") });
+    try {
+      saveQueue([sale("a")]);
+      checkout.mockResolvedValue(sold);
+
+      await drainQueue(pairing);
+
+      expect(checkout.mock.calls[0][1].offline.sent_at).toBe("2026-08-17T01:00:00.000Z");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("checks a reader sale's lines against their own sum, not against the card's", async () => {
+    // The server priced that basket when it put it on the reader, and builds
+    // the order from what it pinned then. The lines here carry this till's
+    // prices, a refresh behind: checked against the reader's figure they did
+    // not add up, and the sale was refused on replay.
+    saveQueue([{ ...sale("a"), paymentType: "card" as const, chargedTotal: "4.50", linesTotal: "4.00" }]);
+    checkout.mockResolvedValue(sold);
+
+    await drainQueue(pairing);
+
+    expect(checkout.mock.calls[0][1].offline.charged_total).toBe("4.00");
   });
 
   it("keeps an entry in line on a transport failure", async () => {
@@ -119,10 +161,10 @@ describe("drainQueue", () => {
     expect(loadFailures()).toEqual([]);
   });
 
-  it("moves a 4xx refusal to the failures list and carries on", async () => {
+  it("moves a refusal to the failures list and carries on", async () => {
     saveQueue([sale("a"), sale("b")]);
     checkout
-      .mockRejectedValueOnce(new ApiError(400, "not on sale at the till"))
+      .mockRejectedValueOnce(refusal("not on sale at the till"))
       .mockResolvedValueOnce(sold);
 
     const report = await drainQueue(pairing);
@@ -151,6 +193,7 @@ describe("drainQueue", () => {
     // device has since left, sitting in front of the night's real sales. The
     // badge counted them, "send now" sent nothing, and nothing said why.
     saveQueue([sale("a", "other-event"), sale("b"), sale("c")]);
+    checkout.mockResolvedValue(sold);
 
     const report = await drainQueue(pairing);
 
@@ -163,6 +206,7 @@ describe("drainQueue", () => {
 
   it("keeps this event's entries in order across a foreign one", async () => {
     saveQueue([sale("first"), sale("skipped", "other-event"), sale("second")]);
+    checkout.mockResolvedValue(sold);
 
     await drainQueue(pairing);
 
@@ -173,6 +217,7 @@ describe("drainQueue", () => {
 
   it("reports nothing stranded when the whole queue is this event's", async () => {
     saveQueue([sale("a"), sale("b")]);
+    checkout.mockResolvedValue(sold);
 
     const report = await drainQueue(pairing);
 
@@ -283,6 +328,173 @@ describe("drainQueue", () => {
       { name: "Alice", secret: "alice-secret", reason: "already_redeemed" },
     ]);
     expect(loadQueue()).toEqual([]);
+  });
+
+  it.each([
+    [401, "device"],
+    [403, "device"],
+    [404, "other"],
+    [409, "other"],
+    [408, "wait"],
+    [429, "wait"],
+  ] as const)("keeps the whole queue on a %i and says why it stopped", async (status, kind) => {
+    // The device refused, an address gone, "not now": none of them is about
+    // the sale in hand, and every sale behind it would get the same answer.
+    // A revoked tablet used to file its whole queue as refused this way, one
+    // sale after the other, with nothing left to send once paired again.
+    saveQueue([sale("a"), sale("b"), sale("c")]);
+    const error = new ApiError(status, `HTTP ${status}`, { detail: "no" });
+    checkout.mockRejectedValue(error);
+
+    const report = await drainQueue(pairing);
+
+    expect(checkout).toHaveBeenCalledTimes(1);
+    expect(report.failed).toBe(0);
+    expect(report.halted?.kind).toBe(kind);
+    expect(report.halted?.message).toBe(describeError(error));
+    expect(loadQueue().map((entry) => entry.id)).toEqual(["a", "b", "c"]);
+    expect(loadFailures()).toEqual([]);
+  });
+
+  it("keeps it on a 400 that carries no reasons, which is a proxy talking", async () => {
+    saveQueue([sale("a")]);
+    checkout.mockRejectedValue(new ApiError(400, "HTTP 400", "<html>Bad Request</html>"));
+
+    const report = await drainQueue(pairing);
+
+    expect(report.halted?.kind).toBe("other");
+    expect(loadQueue().map((entry) => entry.id)).toEqual(["a"]);
+  });
+
+  it("waits as long as a rate limit asks before the next automatic run", async () => {
+    vi.useFakeTimers({ now: new Date("2026-08-17T01:00:00.000Z") });
+    try {
+      saveQueue([sale("a")]);
+      checkout.mockRejectedValue(new ApiError(429, "HTTP 429", null, 90_000));
+
+      const report = await drainQueue(pairing);
+
+      expect(report.halted?.retryAt).toBe(Date.now() + 90_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits a quarter of a minute when the rate limit does not say", async () => {
+    vi.useFakeTimers({ now: new Date("2026-08-17T01:00:00.000Z") });
+    try {
+      saveQueue([sale("a")]);
+      checkout.mockRejectedValue(new ApiError(429, "HTTP 429"));
+
+      const report = await drainQueue(pairing);
+
+      expect(report.halted?.retryAt).toBe(Date.now() + THROTTLED_WAIT_MS);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says a network failure is one, with no wait of its own", async () => {
+    saveQueue([sale("a")]);
+    checkout.mockRejectedValue(new ApiError(0, "network"));
+
+    const report = await drainQueue(pairing);
+
+    expect(report.halted).toEqual({
+      kind: "unreachable", message: describeError(new ApiError(0, "network")), retryAt: null,
+    });
+  });
+
+  it("files a sale the server says is dated in the future as refused, like any refusal", async () => {
+    // With sent_at the server corrects the date itself; one it still refuses
+    // is a refusal with its reasons, and it is shown rather than retried.
+    saveQueue([sale("a")]);
+    checkout.mockRejectedValue(
+      new ApiError(400, "This sale is dated in the future.", {
+        offline: { recorded_at: ["This sale is dated in the future."] },
+      }),
+    );
+
+    const report = await drainQueue(pairing);
+
+    expect(report.failed).toBe(1);
+    expect(loadFailures()[0].message).toBe("This sale is dated in the future.");
+  });
+
+  it("keeps a refused sale in the queue when its refusal cannot be written down", async () => {
+    // It used to leave the queue all the same, and then existed nowhere.
+    saveQueue([sale("a")]);
+    checkout.mockRejectedValue(refusal("refused"));
+    const write = localStorage.setItem.bind(localStorage);
+    const spy = vi.spyOn(localStorage, "setItem").mockImplementation((key: string, value: string) => {
+      if (key === "openpos.failures.v1") throw new Error("QuotaExceededError");
+      write(key, value);
+    });
+    try {
+      const report = await drainQueue(pairing);
+
+      expect(report.failed).toBe(0);
+      expect(report.halted).toEqual({
+        kind: "other", message: t("offline.storageFull"), retryAt: null,
+      });
+      expect(loadQueue().map((entry) => entry.id)).toEqual(["a"]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("files a refusal once, however many runs meet the same entry", async () => {
+    saveQueue([sale("a")]);
+    checkout.mockRejectedValue(refusal("refused"));
+    const write = localStorage.setItem.bind(localStorage);
+    let refuseQueue = true;
+    const spy = vi.spyOn(localStorage, "setItem").mockImplementation((key: string, value: string) => {
+      if (key === "openpos.queue.v1" && refuseQueue) throw new Error("QuotaExceededError");
+      write(key, value);
+    });
+    try {
+      await drainQueue(pairing);
+      refuseQueue = false;
+      await drainQueue(pairing);
+
+      expect(loadFailures()).toHaveLength(1);
+      expect(loadQueue()).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("stops without throwing when the queue cannot be rewritten after a send", async () => {
+    // The sale went: sent again at the next run, the server answers it as the
+    // replay it is. This used to escape as an unhandled rejection.
+    saveQueue([sale("a"), sale("b")]);
+    checkout.mockResolvedValue(sold);
+    const write = localStorage.setItem.bind(localStorage);
+    const spy = vi.spyOn(localStorage, "setItem").mockImplementation((key: string, value: string) => {
+      if (key === "openpos.queue.v1") throw new Error("QuotaExceededError");
+      write(key, value);
+    });
+    try {
+      const report = await drainQueue(pairing);
+
+      expect(report.halted?.kind).toBe("other");
+      expect(checkout).toHaveBeenCalledTimes(1);
+      expect(loadQueue().map((entry) => entry.id)).toEqual(["a", "b"]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it("notes when it last sent everything it could, and not when it stopped short", async () => {
+    saveQueue([sale("a")]);
+    checkout.mockRejectedValueOnce(new ApiError(0, "network"));
+
+    await drainQueue(pairing);
+    expect(loadLastSync()).toBeNull();
+
+    checkout.mockResolvedValue(sold);
+    await drainQueue(pairing);
+    expect(loadLastSync()).not.toBeNull();
   });
 
   it("does not lose a sale queued while the drain was running", async () => {

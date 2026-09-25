@@ -5,8 +5,9 @@ End-to-end check of the POS API against the local development stack.
     docker compose exec pretix python -m pretix shell < dev/seed.py   # prints an init token
     python3 dev/smoke_test.py <init-token>
 
-Pairs a device, reads the catalogue, sells something for cash, replays the exact
-same request to prove idempotency, and prints the takings. Standard library only.
+Pairs a device, reports its status, reads the catalogue, sells something for
+cash, replays the exact same request to prove idempotency, and prints the
+takings. Standard library only.
 """
 import json
 import os
@@ -74,6 +75,24 @@ def main():
     serial = body["unique_serial"]
     print(f"        serial {serial}")
 
+    print("\n-- état de l'appareil ---------------------------------------")
+    # What the till says about the sales it holds, for the back office. At the
+    # organizer's level: a queue belongs to the tablet, not to an evening.
+    status, reported = call("POST", f"/organizers/{ORG}/openpos/status/", {
+        "pending_sales": 0, "oldest_pending_at": None, "last_sync_at": None,
+        "version": "smoke-test",
+    }, token)
+    check("status report accepted", status == 200, f"HTTP {status}: {reported}")
+    if status == 200:
+        # UTC, in the shape of JavaScript's toISOString().
+        check("the answer is the server's clock, in UTC",
+              isinstance(reported.get("server_time"), str) and reported["server_time"].endswith("Z"),
+              str(reported))
+    status, garbled = call("POST", f"/organizers/{ORG}/openpos/status/", {
+        "pending_sales": -1, "version": "smoke-test",
+    }, token)
+    check("a report that does not parse is refused", status == 400, f"HTTP {status}: {garbled}")
+
     print("\n-- config --------------------------------------------------")
     status, config = call("GET", f"/organizers/{ORG}/events/{EVENT}/openpos/config/", token=token)
     check("config reachable", status == 200, f"HTTP {status}: {config}")
@@ -81,6 +100,13 @@ def main():
         check("currency present", config.get("event", {}).get("currency") == "EUR", str(config))
         # What lets a till that stays open across a deploy notice it is stale.
         check("plugin version announced", bool(config.get("version")), str(config.get("version")))
+        # And what lets it notice its own clock is wrong.
+        server_time = config.get("server_time") or ""
+        check("server clock announced, in UTC",
+              server_time.endswith("+00:00")
+              and abs(datetime.fromisoformat(server_time) - datetime.now(timezone.utc))
+              < timedelta(minutes=2),
+              server_time)
         check("check-in configured", config.get("checkin", {}).get("enabled") is True, str(config.get("checkin")))
         # The scanning screen needs these to tell an entry from a T-shirt, and
         # they must cover the whole event, not just what the till may sell.
@@ -139,6 +165,9 @@ def main():
           f"got {sale['order']['total']}, expected {expected_total:.2f}")
     check("change correct", float(sale["cash_change"]) == 50.00 - expected_total,
           f"got {sale['cash_change']}")
+    # The order's secret opens the customer's own page; a till never needed it.
+    check("no link to the order in the answer", set(sale["order"]) == {"code", "total"},
+          f"order carries {sorted(sale['order'])}")
     # Two admission tickets and three beers: only the tickets are an entry.
     # Checking in the beers would put merch on the door list and make the till
     # announce "let them in" after a pure shop sale.
@@ -168,6 +197,18 @@ def main():
     check("replay is the same order", replay.get("order", {}).get("code") == sale["order"]["code"],
           f"{replay.get('order', {}).get('code')} vs {sale['order']['code']}")
 
+    print("\n-- a sale has a size limit ---------------------------------")
+    # Five hundred items at most, all lines together: one request used to be
+    # able to ask for a hundred lines of 999 tickets each.
+    status, huge = call("POST", f"/organizers/{ORG}/events/{EVENT}/openpos/checkout/", {
+        "idempotency_key": str(uuid.uuid4()),
+        "positions": [{"item": beer["id"], "count": 300}, {"item": beer["id"], "count": 201}],
+        "payment_type": "cash",
+        "cash_given": "5000.00",
+    }, token)
+    check("a basket of 501 items is refused", status == 400 and huge.get("code") == "too_many_items",
+          f"HTTP {status}: {huge}")
+
     print("\n-- price is not client-controlled --------------------------")
     # A price sent without declaring the sale offline is refused outright. It
     # used to be silently ignored, which was safe but said nothing; a 400 tells
@@ -190,6 +231,9 @@ def main():
           f"HTTP {status}: total {card_sale.get('order', {}).get('total')} vs {full['price']}")
 
     print("\n-- hors ligne : liste embarquée -----------------------------")
+    # The seeded device has no role, so it keeps the door as well as the till
+    # and is given the list. A device set up as a till is refused it, with
+    # door_role_required, which tests/test_offline_snapshot.py covers.
     status, snapshot = call("GET", f"/organizers/{ORG}/events/{EVENT}/openpos/offline/", token=token)
     check("offline snapshot reachable", status == 200, f"HTTP {status}: {str(snapshot)[:200]}")
     if status == 200:
@@ -200,11 +244,33 @@ def main():
         check("and says whether it is complete", snapshot.get("truncated") is False,
               str(snapshot.get("truncated")))
 
+    print("\n-- recherche par nom à la porte -----------------------------")
+    # pretix's own search. The Open POS profile only lets it through with a
+    # term of three characters or more: shorter, pretix would hand a device
+    # every ticket of the lists asked for.
+    list_id = (config.get("checkin") or {}).get("list_id") if isinstance(config, dict) else None
+    if list_id:
+        status, found = call("GET", f"/organizers/{ORG}/checkinrpc/search/?list={list_id}&search=Ali", token=token)
+        check("a search of three characters goes through", status == 200, f"HTTP {status}: {str(found)[:200]}")
+        for short in ("", "Al", "%20%20A%20%20"):
+            status, refused = call("GET", f"/organizers/{ORG}/checkinrpc/search/?list={list_id}&search={short}",
+                                   token=token)
+            check(f"a search of {short!r} is refused", status == 403, f"HTTP {status}: {str(refused)[:200]}")
+        status, refused = call("GET", f"/organizers/{ORG}/checkinrpc/search/?list={list_id}", token=token)
+        check("a search with no term is refused", status == 403, f"HTTP {status}: {str(refused)[:200]}")
+
     print("\n-- hors ligne : rejeu d'une vente ---------------------------")
     # Une vente encaissée pendant la coupure : elle porte son heure réelle et le
     # prix effectivement payé — ici volontairement à côté du tarif, ce qui doit
     # être signalé plutôt que lissé.
-    sold_at = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat()
+    #
+    # Et l'horloge de cette tablette avance d'une demi-heure, comme celle d'un
+    # iPad réglé à la main : la vente d'il y a vingt minutes y est datée de dans
+    # dix minutes. La caisse dit l'heure de son horloge en envoyant (sent_at),
+    # et le serveur remet la vente à son heure au lieu de la refuser comme datée
+    # dans le futur.
+    skew = timedelta(minutes=30)
+    sold_at = (datetime.now(timezone.utc) - timedelta(minutes=20) + skew).isoformat()
     off_price = round(float(full["price"]) - 1.00, 2)
     offline_key = str(uuid.uuid4())
     offline_body = {
@@ -213,11 +279,18 @@ def main():
         "payment_type": "cash",
         "cash_given": f"{off_price:.2f}",
         "cashier": "Alice",
-        "offline": {"recorded_at": sold_at, "charged_total": f"{off_price:.2f}"},
+        "offline": {
+            "recorded_at": sold_at,
+            "charged_total": f"{off_price:.2f}",
+            "sent_at": (datetime.now(timezone.utc) + skew).isoformat(),
+        },
     }
     status, offline_sale = call("POST", f"/organizers/{ORG}/events/{EVENT}/openpos/checkout/", offline_body, token)
     check("offline sale accepted", status == 201, f"HTTP {status}: {offline_sale}")
     if status == 201:
+        check("and put back on the server's clock",
+              -1810 <= offline_sale.get("clock_correction_seconds", 0) <= -1790,
+              str(offline_sale.get("clock_correction_seconds")))
         check("it is recorded at the price actually charged",
               float(offline_sale["order"]["total"]) == off_price,
               f"{offline_sale['order']['total']} vs {off_price:.2f}")
@@ -286,18 +359,40 @@ def main():
         cancelled_cash = merch_total
         print(f"        avoir {cancelled['credit_note']}, écriture #{cancelled['cancellation']['seq']}")
 
+        check("a fresh cancellation says so",
+              (cancelled.get("replayed"), cancelled.get("already_cancelled"),
+               cancelled.get("by_back_office")) == (False, False, False),
+              str(cancelled))
+
         # Replaying the exact same request must not cancel a second time.
         status, replayed = call("POST", f"/organizers/{ORG}/events/{EVENT}/openpos/cancel/", cancel_body, token)
         check("replayed cancellation returns the first one", status == 200
               and replayed["replayed"] is True
-              and replayed["cancellation"]["seq"] == cancelled["cancellation"]["seq"],
+              and replayed["already_cancelled"] is False
+              and replayed["cancellation"]["seq"] == cancelled["cancellation"]["seq"]
+              and replayed["credit_note"] == cancelled["credit_note"],
               f"HTTP {status}: {replayed}")
 
-        # And a second, genuinely new attempt must be refused.
+        # A second attempt under a new key — a till that reloaded and could no
+        # longer tell it was the same — gets the cancellation that stands,
+        # rather than a refusal that lost the credit note. Nothing is written
+        # twice: the takings below count one cancellation.
         status, again = call("POST", f"/organizers/{ORG}/events/{EVENT}/openpos/cancel/", {
             "seq": merch_seq, "idempotency_key": str(uuid.uuid4()),
         }, token)
-        check("cancelling twice is refused", status == 400, f"HTTP {status}: {again}")
+        check("cancelling twice answers with the cancellation that stands", status == 200
+              and (again["replayed"], again["already_cancelled"], again["by_back_office"]) == (True, True, False)
+              and again["cancellation"]["seq"] == cancelled["cancellation"]["seq"]
+              and again["credit_note"] == cancelled["credit_note"],
+              f"HTTP {status}: {again}")
+
+        # A key that names somebody else's entry is not replayed: here, the
+        # cash sale's own key.
+        status, borrowed = call("POST", f"/organizers/{ORG}/events/{EVENT}/openpos/cancel/", {
+            "seq": merch_seq, "idempotency_key": key,
+        }, token)
+        check("a key naming another entry is refused",
+              status == 400 and "idempotency_key" in (borrowed or {}), f"HTTP {status}: {borrowed}")
 
         status, history2 = call("GET", f"/organizers/{ORG}/events/{EVENT}/openpos/history/", token=token)
         line = next((li for li in history2["results"] if li["seq"] == merch_seq), None)

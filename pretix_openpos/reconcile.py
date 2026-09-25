@@ -37,9 +37,12 @@ second time.
 """
 import json
 import logging
+import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from decimal import Decimal
 
+from django.core.cache import cache
 from django.db import transaction
 from django.utils.timezone import now
 from django.utils.translation import gettext_lazy as _
@@ -50,7 +53,7 @@ from pretix.base.models.orders import OrderPayment, OrderRefund
 
 from .models import PosSale, PosTerminalPayment
 from .payment import CARD
-from .sumup import ERR_CONFLICT, SumUpAccount, SumUpError, given_back
+from .sumup import ERR_CONFLICT, ERR_RATE_LIMITED, SumUpAccount, SumUpError, given_back
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +77,95 @@ SUMUP = "SumUp"
 #: screen that the task runs at all: pretix leaves its pace to the server's
 #: cron, anywhere from every minute to every hour.
 LAST_COMPARED = "openpos_sumup_compared"
+#: The first words of every line logged when this work fails, for an alert to
+#: look for. Untranslated and stable on purpose: pretix' ``runperiodic``
+#: catches whatever a periodic task raises, prints it, and exits 0, so a pass
+#: that has failed every five minutes for a week shows nowhere but in the
+#: logs — and the card refunds owed to customers wait on it. The alert on the
+#: cluster reads this string: never reword it without changing the alert.
+FAILED = "Open POS periodic task failed"
+
+
+def log_failure(step, detail, *, exc_info=False):
+    """
+    One ERROR line saying which part of the work failed, and on what.
+
+    ``Open POS periodic task failed: <step>: <detail>``, where ``step`` is one
+    of a few fixed words — ``reconcile``, ``compare_organizer``,
+    ``read_history``, ``absorb_transaction``, ``cancel_order``,
+    ``ask_again_refund``, ``refund_given_up``, ``compare_now`` — and
+    ``detail`` names what it failed on, then why. ``exc_info`` keeps the
+    traceback, after that line, for a crash nobody expected; a refusal from
+    SumUp has none worth reading.
+
+    ``detail`` is folded onto the one line: it carries SumUp's own answer or a
+    database's error, either of which may run over several, and a line that
+    starts with the marker should be the only one that does.
+    """
+    logger.error("%s: %s: %s", FAILED, step, " ".join(str(detail).split()), exc_info=exc_info)
+
+
+def describe(exc):
+    """An exception on one line, for :func:`log_failure`."""
+    return f"{type(exc).__name__}: {exc}"
+
+
+#: How long a request refunding a reader payment keeps it from the others, at
+#: most: longer than the two questions the periodic task asks SumUp while it
+#: holds one may take to be answered (``sumup.TIMEOUT`` each), so that only a
+#: worker that died holding it ever reaches the end of it.
+REFUND_HELD_FOR = 60
+
+#: How long a till's request that found the payment being refunded waits for
+#: the answer before saying "not yet": long enough for SumUp's usual second or
+#: two, and no longer — a web worker waiting here serves nobody else, and the
+#: server has two of them.
+REFUND_WAIT = 3
+
+#: Cache key marking a reader payment whose refund SumUp is being asked for.
+REFUNDING_KEY = "pretix_openpos:refunding:{}"
+
+
+@contextmanager
+def refund_in_hand(terminal):
+    """
+    Whether this is the one request asking SumUp to refund ``terminal`` now.
+
+    SumUp refunds a transaction each time it is asked, up to its amount, and
+    four things here ask: a till's cancellation; that same cancellation retried
+    by a till whose first answer was lost while SumUp was still being asked;
+    pretix' refund dialog; and the periodic task, for a refund SumUp put off.
+    Two of them at once both found the payment not refunded yet, both asked,
+    and the answer SumUp gave the second — no, it is refunded already — was
+    written down as a failed refund over the one that went through.
+
+    So one at a time for each reader payment: a mark in the shared cache, taken
+    with ``cache.add`` and let go once SumUp's answer is written down. Yields
+    whether it was taken; a request that did not get it leaves SumUp alone. Like
+    the other marks of its kind here, it needs the cache the workers share —
+    pretix' Redis; on a cache that keeps nothing, every request gets it.
+    """
+    key = REFUNDING_KEY.format(terminal.pk)
+    mine = cache.add(key, True, timeout=REFUND_HELD_FOR)
+    try:
+        yield mine
+    finally:
+        if mine:
+            cache.delete(key)
+
+
+def wait_for_refund(terminal):
+    """
+    Until whoever is refunding ``terminal`` has let go of it, for ``REFUND_WAIT``
+    seconds at most. Whether they did.
+    """
+    key = REFUNDING_KEY.format(terminal.pk)
+    deadline = time.monotonic() + REFUND_WAIT
+    while cache.get(key):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.25)
+    return True
 
 
 def mark_pending(refund, answer, *, transaction_id="", user=None, auth=None):
@@ -154,8 +246,10 @@ def reconcile_all():
                 continue
             try:
                 done[organizer.slug] = reconcile_organizer(organizer, account)
-            except Exception:
-                logger.exception("Open POS could not compare %s with SumUp", organizer.slug)
+            except Exception as exc:
+                log_failure(
+                    "compare_organizer", f"organizer {organizer.slug}: {describe(exc)}", exc_info=True
+                )
                 remember(organizer, {**_nothing_yet(), "crashed": True})
         return done
 
@@ -221,9 +315,9 @@ def reconcile_organizer(organizer, account=None, *, event=None):
     ):
         try:
             _ask_again(refund, account, done)
-        except Exception:
-            logger.exception(
-                "Open POS could not ask SumUp again for refund %s", refund.full_id
+        except Exception as exc:
+            log_failure(
+                "ask_again_refund", f"refund {refund.full_id}: {describe(exc)}", exc_info=True
             )
     if event is None:
         remember(organizer, done)
@@ -271,7 +365,12 @@ def _compare(organizer, account, done, *, event=None):
         items = list(account.given_back_payments(oldest))
     except SumUpError as exc:
         # Asked again on the next pass; nothing here has changed meanwhile.
-        logger.warning("SumUp's history could not be read for %s: %s", organizer.slug, exc.detail)
+        # But said as a failure all the same: a key revoked in SumUp's
+        # dashboard fails every pass from then on, and nothing else would say
+        # so before somebody wonders why a refund never arrived.
+        log_failure(
+            "read_history", f"organizer {organizer.slug}: {exc.code}: {exc.detail or exc.message}"
+        )
         done["error"] = exc.reason or str(exc.message)
         return
     done["compared"] = True
@@ -295,10 +394,11 @@ def _compare(organizer, account, done, *, event=None):
         try:
             if absorb(terminal, item, account=account):
                 done["given_back"] += 1
-        except Exception:
-            logger.exception(
-                "Open POS could not bring SumUp transaction %s into pretix",
-                terminal.transaction_id,
+        except Exception as exc:
+            log_failure(
+                "absorb_transaction",
+                f"transaction {terminal.transaction_id}: {describe(exc)}",
+                exc_info=True,
             )
 
 
@@ -496,8 +596,10 @@ def _cancel(order, status):
             )
     except OrderError as exc:
         # The refund is still recorded, and pretix offers to process it on the
-        # order page — which is where somebody decides what else to do.
-        logger.warning("Open POS could not cancel %s after SumUp gave it back: %s", order.code, exc)
+        # order page — which is where somebody decides what else to do. Said
+        # as a failure: until then the tickets of an order the customer has
+        # had back in full still let them in.
+        log_failure("cancel_order", f"order {order.code}: {describe(exc)}")
         return False
     return True
 
@@ -509,6 +611,19 @@ def _ask_again(refund, account, done):
         # Nothing to name to SumUp. It cannot happen to a refund this module
         # left waiting, which named a transaction to be left waiting at all.
         return
+    with refund_in_hand(terminal) as mine:
+        if not mine:
+            # A till or pretix' refund dialog is asking SumUp for this very
+            # refund right now. The next pass finds out how that went.
+            return
+        # Read again now that nobody else is at it: whoever just was may have
+        # been given the money back.
+        terminal.refresh_from_db()
+        _ask_again_holding(refund, terminal, account, done)
+
+
+def _ask_again_holding(refund, terminal, account, done):
+    """:func:`_ask_again`, for the request holding the payment."""
     if terminal.refunded is not None:
         # Given back already, and written on the reader payment by whatever
         # sent it: this refund is only what pretix is still waiting on.
@@ -539,7 +654,7 @@ def _ask_again(refund, account, done):
         account.refund(terminal.transaction_id)
     except SumUpError as exc:
         answer = exc.reason or str(exc.message)
-        if exc.code == ERR_CONFLICT or exc.retryable:
+        if exc.code in (ERR_CONFLICT, ERR_RATE_LIMITED) or exc.retryable:
             _still_waiting(refund, answer, done)
         else:
             _give_up(refund, answer, done)
@@ -637,4 +752,7 @@ def _give_up(refund, answer, done):
         "pretix_openpos.order.refund.gave_up",
         data={"local_id": refund.local_id, "answer": answer, "since": since},
     )
+    # The end of the retries, and money a customer is still owed: the order
+    # page says so, but nobody is looking at an order page three days on.
+    log_failure("refund_given_up", f"refund {refund.full_id}: SumUp answered: {answer}")
     done["failed"] += 1

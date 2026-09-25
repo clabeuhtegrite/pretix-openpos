@@ -20,7 +20,11 @@ type Connectivity = typeof import("./connectivity");
 let api: Api["api"];
 let ApiError: Api["ApiError"];
 let isRetryable: Api["isRetryable"];
+let isRefusal: Api["isRefusal"];
+let isThrottled: Api["isThrottled"];
+let parseRetryAfter: Api["parseRetryAfter"];
 let connectivity: Connectivity;
+let clock: typeof import("./clock");
 let fetchMock: ReturnType<typeof vi.fn>;
 
 const pairing: Pairing = {
@@ -68,7 +72,11 @@ beforeEach(async () => {
   api = module.api;
   ApiError = module.ApiError;
   isRetryable = module.isRetryable;
+  isRefusal = module.isRefusal;
+  isThrottled = module.isThrottled;
+  parseRetryAfter = module.parseRetryAfter;
   connectivity = await import("./connectivity");
+  clock = await import("./clock");
 });
 
 afterEach(() => {
@@ -304,6 +312,78 @@ describe("isRetryable", () => {
   });
 });
 
+describe("isRefusal", () => {
+  it("says yes to a 400 carrying the server's reasons", () => {
+    // The shape every Open POS refusal takes: this sale, this payment, and
+    // sending it again will be refused again.
+    expect(isRefusal(new ApiError(400, "Sold out.", { positions: ["Sold out."] }))).toBe(true);
+  });
+
+  it("says no to a 400 with nothing but a page behind it", () => {
+    expect(isRefusal(new ApiError(400, "HTTP 400", "<html>Bad Request</html>"))).toBe(false);
+    expect(isRefusal(new ApiError(400, "HTTP 400", null))).toBe(false);
+  });
+
+  it.each([401, 403, 404, 408, 409, 429, 500, 0])("says no to a %i, which is not about the request", (status) => {
+    // The device refused, an address not there, "not now", no network: none
+    // of them a reason to give up on a sale that was paid for.
+    expect(isRefusal(new ApiError(status, "no", { detail: "no" }))).toBe(false);
+  });
+
+  it("says no to something that is not an API error at all", () => {
+    expect(isRefusal(new TypeError("bug in the app"))).toBe(false);
+  });
+});
+
+describe("isThrottled", () => {
+  it.each([429, 408])("says yes to a %i", (status) => {
+    expect(isThrottled(new ApiError(status, "slow down"))).toBe(true);
+  });
+
+  it.each([400, 403, 500, 0])("says no to a %i", (status) => {
+    expect(isThrottled(new ApiError(status, "other"))).toBe(false);
+  });
+});
+
+describe("how long the server asks to be left alone", () => {
+  it("reads Retry-After in seconds", async () => {
+    fetchMock.mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ detail: "Slow down.", code: "rate_limited" }), {
+          status: 429,
+          headers: { "Content-Type": "application/json", "Retry-After": "30" },
+        }),
+    );
+
+    const error = await api.summary(pairing).catch((e: unknown) => e);
+
+    expect((error as InstanceType<Api["ApiError"]>).status).toBe(429);
+    expect((error as InstanceType<Api["ApiError"]>).retryAfterMs).toBe(30_000);
+  });
+
+  it("reads it as a date, too", () => {
+    const now = Date.parse("2026-09-25T20:00:00Z");
+    expect(parseRetryAfter("Fri, 25 Sep 2026 20:01:00 GMT", now)).toBe(60_000);
+    // A date already past is no wait at all, not a negative one.
+    expect(parseRetryAfter("Fri, 25 Sep 2026 19:00:00 GMT", now)).toBe(0);
+  });
+
+  it("takes anything else as no answer rather than a guess", () => {
+    expect(parseRetryAfter(null)).toBeNull();
+    expect(parseRetryAfter("soon")).toBeNull();
+  });
+
+  it("leaves it unset when the server did not say", async () => {
+    respondWith({ detail: "Slow down." }, 429);
+
+    const error = await api.summary(pairing).catch((e: unknown) => e);
+
+    expect((error as InstanceType<Api["ApiError"]>).retryAfterMs).toBeNull();
+    // A rate limit is an answer: the server is there.
+    expect(connectivity.isOnline()).toBe(true);
+  });
+});
+
 describe("the endpoints", () => {
   it("pairs by exchanging the one-shot code, and says which build it is", async () => {
     await api.initialize("init-code");
@@ -363,6 +443,71 @@ describe("the endpoints", () => {
     await api.config(pairing);
 
     expect(callArgs()[0]).toBe("/api/v1/organizers/demo/events/festival/openpos/config/");
+  });
+
+  it("notes the server's clock the configuration carries", async () => {
+    vi.useFakeTimers({ now: new Date("2026-09-25T20:10:00.000Z") });
+    try {
+      respondWith({ server_time: "2026-09-25T20:00:00.000Z" });
+
+      await api.config(pairing);
+
+      // This device reads ten minutes past the server.
+      expect(clock.clockSkew()).toBe(10 * 60_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("takes a configuration without a clock as no reading at all", async () => {
+    respondWith({ version: "1.0" });
+
+    await api.config(pairing);
+
+    expect(clock.clockSkew()).toBeNull();
+  });
+
+  it("tells the back office what the device holds, signed as the device", async () => {
+    const status = {
+      pending_sales: 3,
+      oldest_pending_at: "2026-09-25T19:00:00.000Z",
+      last_sync_at: null,
+      version: "1.2.3",
+    };
+    respondWith({ server_time: new Date().toISOString() });
+
+    await api.deviceStatus(pairing, status);
+
+    const [url, options] = callArgs();
+    // At the organizer's level: the queue spans every event the device sold for.
+    expect(url).toBe("/api/v1/organizers/demo/openpos/status/");
+    expect(options.method).toBe("POST");
+    expect(options.headers).toMatchObject({ Authorization: "Device tok" });
+    expect(JSON.parse(String(options.body))).toEqual(status);
+    expect(clock.clockSkew()).not.toBeNull();
+  });
+
+  it("does not take the till offline when that report alone fails", async () => {
+    // Nobody is waiting on it: going offline over it would stop the sales.
+    fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));
+    const status = { pending_sales: 0, oldest_pending_at: null, last_sync_at: null, version: "1" };
+
+    await expect(api.deviceStatus(pairing, status)).rejects.toThrow(ApiError);
+    expect(connectivity.isOnline()).toBe(true);
+
+    respondWith({ detail: "boom" }, 502);
+    await expect(api.deviceStatus(pairing, status)).rejects.toThrow(ApiError);
+    expect(connectivity.isOnline()).toBe(true);
+  });
+
+  it("nor bring it back online on the strength of a fault", async () => {
+    connectivity.markUnreachable();
+    respondWith({ detail: "boom" }, 503);
+    const status = { pending_sales: 0, oldest_pending_at: null, last_sync_at: null, version: "1" };
+
+    await api.deviceStatus(pairing, status).catch(() => undefined);
+
+    expect(connectivity.isOnline()).toBe(false);
   });
 
   it("reads the catalogue", async () => {

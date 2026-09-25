@@ -72,6 +72,23 @@ export const MESSAGES = {
     "payment.readerTimeout": "The reader waited too long for the card.",
     "payment.readerTaken":
       "The reader is taking a payment on the other till. Wait for it to finish, or take this sale in cash.",
+    "payment.readerHeldHere":
+      "The reader is still holding the payment left aside at {time} ({amount}). Cancel it on the reader, or try again in a moment.",
+    "payment.readerChecking": "Asking the server where the card payment in progress has got to…",
+    "payment.readerUnanswered":
+      "No answer from the server. Look at the reader’s screen: if it is still asking for the card, wait or cancel on the reader; if it shows the payment accepted, keep this basket and try again; otherwise, take the payment in cash.",
+    "payment.readerSumupUnanswered":
+      "SumUp is not answering the server. Look at the reader’s screen: if it is still asking for the card, wait or cancel on the reader; if it shows the payment accepted, keep this basket and try again; otherwise, take the payment in cash.",
+    "payment.readerMovedOn":
+      "This payment no longer holds the reader — another payment took it, or it waited more than five minutes — so the till did not stop it. If the customer has not paid, take the payment in cash: the till keeps an eye on this one and will say if it goes through after all.",
+    "payment.readerOffline":
+      "No network: the card reader cannot be used. Take the payment in cash, or wait for the network to come back.",
+    "payment.readerBack": "The network is back: the card reader can be used again.",
+    "payment.resumed":
+      "The till restarted during this payment: it picks up where it was, with no risk of it being counted twice.",
+    "payment.latePaid":
+      "Card payment of {amount} ({time}) went through on the reader after it was left aside: no sale on this till matches it. If the customer paid another way, they paid twice — refund it from the back office, under “Card payments with no sale”.",
+    "payment.latePaidOk": "Understood",
     "payment.readerRetry": "Try again",
     "payment.readerStop": "Cancel the payment",
     "payment.readerStopping": "Taking the payment off the reader…",
@@ -89,6 +106,7 @@ export const MESSAGES = {
     "done.order": "Order",
     "done.next": "Next customer",
     "done.checkinFailed": "Check-in failed — let the customer in manually.",
+    "done.resumed": "The till restarted while recording: the sale was kept, once.",
     "summary.title": "Takings for the event",
     "summary.thisTill": "This device",
     "summary.allTills": "All devices",
@@ -120,9 +138,23 @@ export const MESSAGES = {
       "A short click on each product, and two low notes when a ticket is refused at the door. iPhones cannot vibrate in a browser, so sound is the only way to hear a refusal without looking up. It plays even with the ringer switch off.",
     "update.reload": "New version — reload",
     "update.reloading": "Loading the new version…",
+    "clock.ahead":
+      "This device’s clock is {drift} ahead: offline sales would be misdated. Settings › General › Date & Time › Set Automatically.",
+    "clock.behind":
+      "This device’s clock is {drift} behind: offline sales would be misdated. Settings › General › Date & Time › Set Automatically.",
+    "update.failed": "The new version could not be downloaded — tap to try again",
     "error.offline": "No connection to the server.",
+    "error.server": "The server is having trouble (HTTP {status}). Try again in a moment.",
+    "error.tooMany": "Too many requests at once. Wait a few seconds, then try again.",
+    "error.timeout": "The request took too long to reach the server (HTTP 408). Try again in a moment.",
+    "error.denied":
+      "Access refused by the server (HTTP {status}) — possibly a firewall in front of pretix rather than pretix itself. Try again in a moment; if it keeps refusing, tell the organizer.",
     "error.refused":
       "The server refused this till: {detail} Try again; if the till has been revoked, unpair it and pair it again with a new code.",
+    "error.keptForRepair.one":
+      "{n} sale is waiting on this device. It stays here: pair the device again on this event and it will be sent, with no duplicate.",
+    "error.keptForRepair.other":
+      "{n} sales are waiting on this device. They stay here: pair the device again on this event and they will be sent, with no duplicates.",
     "error.retry": "Retry",
     "error.retrying": "Trying again…",
     "error.title": "Something went wrong",
@@ -134,11 +166,12 @@ export const MESSAGES = {
     "scan.noCamera": "No camera available.",
     "scan.unsupported": "This browser cannot open the camera.",
     "scan.manualFallback": "Type the code by hand instead.",
-    "scan.cameraRequired": "Tickets can only be read by camera — there is nothing to type.",
+    "scan.findByName": "Use “{search}” below to let guests in by name.",
+    "scan.retry": "Try the camera again",
     "search.open": "Find by name",
     "search.title": "Find a ticket",
     "search.placeholder": "Name, e-mail or order code",
-    "search.hint": "Two letters are enough. Tapping a name asks you to confirm it first.",
+    "search.hint": "Type at least three letters. Tapping a name asks you to confirm it first.",
     "search.searching": "Searching…",
     "search.none": "No ticket matches.",
     "search.alreadyIn": "already in",
@@ -228,9 +261,17 @@ export const MESSAGES = {
     "offline.contested": "{name} was let in offline, but the ticket was refused on sending: {reason}.",
     "offline.refused": "Refused by the server",
     "offline.dismissRefused": "I have dealt with these",
+    "offline.haltedDevice":
+      "The server is turning this till away: {detail} The sales waiting here stay here. If the till was revoked, pair it again on this event: they will then be sent, with no duplicates.",
+    "offline.haltedWait": "The server asked the till to wait: next try at {time}. Nothing is lost.",
+    "offline.haltedOther": "Sending has stopped, nothing is lost: {detail}",
+    "offline.storageFull":
+      "This device’s storage is full: it can no longer keep sales made with no network. Do not take money while offline, and tell whoever looks after the tills.",
     "offline.saleQueued": "{total} · kept on this till until the network is back",
     "offline.queueFailed": "This till could not store the sale. Do not take the money.",
-    "offline.scanning": "Offline — checking against {n} tickets held on this till",
+    "offline.scanning": "Offline — checking against the {n} tickets on the {time} list",
+    "offline.scanningOld": "Offline — checking against the {n} tickets on the list from {date}, {time}",
+    "offline.scanningUndated": "Offline — checking against {n} tickets held on this till",
     "offline.noSnapshot": "Offline and no guest list on this till: scanning is unavailable.",
     "reason.offline_no_snapshot": "No guest list offline",
     "reason.already_redeemed": "Already scanned",
@@ -286,9 +327,14 @@ export const MESSAGES = {
     "history.cancelling": "Cancelling…",
     "history.confirm": "Cancel order {order}? A credit note will be issued.",
     "history.cancelled": "Order cancelled",
+    "history.alreadyCancelledTitle": "Order already cancelled",
+    "history.backOfficeTitle": "Cancelled from the pretix back office",
     "history.cancelledMeta": "{order} · {total} credited",
     "history.creditNote": "Credit note {number}",
+    "history.backOfficeRefund": "Its refund is handled in pretix: nothing is owed from this till's drawer.",
     "history.alreadyCancelled": "This sale has already been cancelled.",
+    "history.unanswered": "This till sent the cancellation and never got the answer. Ask again to see what is owed.",
+    "history.resume": "Show the cancellation",
     "history.notCancellable": "This entry cannot be cancelled from the till.",
     "takings.title": "Takings for the event",
     "takings.allDates": "all dates of the series",
@@ -355,6 +401,10 @@ export const MESSAGES = {
     "drawer.openWith": "Open with {amount}",
     "drawer.countHelp":
       "Count what is in the drawer. Once the count is recorded, the till sets it against what the drawer should hold.",
+    "drawer.queued.one":
+      "{n} cash sale made on this device has not reached the server yet ({amount}): the expected amount does not include it yet.",
+    "drawer.queued.other":
+      "{n} cash sales made on this device have not reached the server yet ({amount}): the expected amount does not include them yet.",
     "drawer.countRecord": "Record the count",
     "drawer.countAction": "Count the drawer",
     "drawer.counted": "Counted",
@@ -400,6 +450,8 @@ export const MESSAGES = {
     "drawer.amount": "Amount",
     "drawer.putIn": "Put in {amount}",
     "drawer.takeOut": "Take out {amount}",
+    "drawer.moveUnanswered":
+      "This was sent and the server never answered. Send it again: if it was recorded, it will not be recorded twice.",
     "drawer.bannerClosed": "The {name} drawer is closed: open it before taking cash.",
     "drawer.bannerStale": "The {name} drawer was left open since an earlier day: close it, then open tonight’s.",
     "count.how": "How to count",
@@ -477,6 +529,23 @@ export const MESSAGES = {
     "payment.readerTimeout": "Le lecteur a attendu la carte trop longtemps.",
     "payment.readerTaken":
       "Le lecteur encaisse sur l’autre caisse. Attendez la fin, ou prenez cette vente en espèces.",
+    "payment.readerHeldHere":
+      "Le lecteur tient encore le paiement laissé de côté à {time} ({amount}). Annulez-le sur le lecteur, ou réessayez dans un instant.",
+    "payment.readerChecking": "La caisse demande au serveur où en est le paiement carte en cours…",
+    "payment.readerUnanswered":
+      "Pas de réponse du serveur. Regardez l’écran du lecteur\u00a0: s’il demande encore la carte, attendez ou annulez sur le lecteur\u00a0; s’il affiche le paiement accepté, gardez ce panier et réessayez\u00a0; sinon, encaissez en espèces.",
+    "payment.readerSumupUnanswered":
+      "SumUp ne répond pas au serveur. Regardez l’écran du lecteur\u00a0: s’il demande encore la carte, attendez ou annulez sur le lecteur\u00a0; s’il affiche le paiement accepté, gardez ce panier et réessayez\u00a0; sinon, encaissez en espèces.",
+    "payment.readerMovedOn":
+      "Ce paiement ne tient plus le lecteur — un autre paiement l’a pris, ou il attend depuis plus de cinq minutes — et la caisse ne l’a donc pas arrêté. Si le client n’a pas payé, encaissez en espèces\u00a0: la caisse garde un œil sur ce paiement et préviendra s’il passe quand même.",
+    "payment.readerOffline":
+      "Pas de réseau\u00a0: le lecteur de carte ne peut pas servir. Encaissez en espèces, ou attendez le retour du réseau.",
+    "payment.readerBack": "Le réseau est revenu\u00a0: le lecteur de carte peut de nouveau servir.",
+    "payment.resumed":
+      "La caisse a redémarré pendant ce paiement\u00a0: il reprend là où il en était, sans risque d’être compté deux fois.",
+    "payment.latePaid":
+      "Paiement carte de {amount} ({time}) passé sur le lecteur après avoir été laissé de côté\u00a0: aucune vente de cette caisse ne lui correspond. Si le client a payé autrement, il a payé deux fois — à rembourser depuis le back-office, dans «\u00a0Paiements carte sans vente\u00a0».",
+    "payment.latePaidOk": "Compris",
     "payment.readerRetry": "Réessayer",
     "payment.readerStop": "Annuler le paiement",
     "payment.readerStopping": "Annulation du paiement sur le lecteur…",
@@ -494,6 +563,7 @@ export const MESSAGES = {
     "done.order": "Commande",
     "done.next": "Client suivant",
     "done.checkinFailed": "Check-in échoué — faites entrer le client manuellement.",
+    "done.resumed": "La caisse a redémarré pendant l’enregistrement\u00a0: la vente a été gardée, une seule fois.",
     "summary.title": "Recette de l’événement",
     "summary.thisTill": "Cet appareil",
     "summary.allTills": "Tous les appareils",
@@ -526,9 +596,23 @@ export const MESSAGES = {
       "Un clic court à chaque produit, et deux notes graves quand un billet est refusé à la porte. Les iPhone ne peuvent pas vibrer dans un navigateur : le son est le seul moyen d’entendre un refus sans lever les yeux. Il sonne même si le téléphone est en silencieux.",
     "update.reload": "Nouvelle version — recharger",
     "update.reloading": "Chargement de la nouvelle version…",
+    "clock.ahead":
+      "L’horloge de cet appareil a {drift} d’avance\u00a0: les ventes hors ligne seraient mal datées. Réglages › Général › Date et heure › Réglage automatique.",
+    "clock.behind":
+      "L’horloge de cet appareil a {drift} de retard\u00a0: les ventes hors ligne seraient mal datées. Réglages › Général › Date et heure › Réglage automatique.",
+    "update.failed": "La nouvelle version n’a pas pu être téléchargée — toucher pour réessayer",
     "error.offline": "Pas de connexion au serveur.",
+    "error.server": "Le serveur a un souci (HTTP {status}). Réessayez dans un instant.",
+    "error.tooMany": "Trop de demandes à la fois. Attendez quelques secondes, puis réessayez.",
+    "error.timeout": "La demande a mis trop de temps à parvenir au serveur (HTTP 408). Réessayez dans un instant.",
+    "error.denied":
+      "Accès refusé par le serveur (HTTP {status}) — peut-être un pare-feu devant pretix plutôt que pretix lui-même. Réessayez dans un instant ; s’il refuse encore, prévenez l’organisateur.",
     "error.refused":
       "Le serveur a refusé cette caisse : {detail} Réessayez ; si la caisse a été révoquée, dépairez-la et appairez-la avec un nouveau code.",
+    "error.keptForRepair.one":
+      "{n} vente attend sur cet appareil. Elle y reste\u00a0: appairez-le de nouveau sur cet événement et elle partira, sans doublon.",
+    "error.keptForRepair.other":
+      "{n} ventes attendent sur cet appareil. Elles y restent\u00a0: appairez-le de nouveau sur cet événement et elles partiront, sans doublon.",
     "error.retry": "Réessayer",
     "error.retrying": "Nouvel essai…",
     "error.title": "Une erreur est survenue",
@@ -540,11 +624,12 @@ export const MESSAGES = {
     "scan.noCamera": "Aucune caméra disponible.",
     "scan.unsupported": "Ce navigateur ne peut pas ouvrir la caméra.",
     "scan.manualFallback": "Saisissez le code à la main.",
-    "scan.cameraRequired": "Les billets ne se lisent qu’à la caméra — il n’y a rien à saisir.",
+    "scan.findByName": "Utilisez « {search} » ci-dessous pour faire entrer par le nom.",
+    "scan.retry": "Réessayer la caméra",
     "search.open": "Chercher un nom",
     "search.title": "Retrouver un billet",
     "search.placeholder": "Nom, e-mail ou n° de commande",
-    "search.hint": "Deux lettres suffisent. Toucher un nom demande d’abord de le confirmer.",
+    "search.hint": "Tapez au moins trois lettres. Toucher un nom demande d’abord de le confirmer.",
     "search.searching": "Recherche…",
     "search.none": "Aucun billet ne correspond.",
     "search.alreadyIn": "déjà entré",
@@ -634,9 +719,17 @@ export const MESSAGES = {
     "offline.contested": "{name} est entré hors ligne, mais le billet a été refusé à l’envoi : {reason}.",
     "offline.refused": "Refusé par le serveur",
     "offline.dismissRefused": "J’ai traité ces cas",
+    "offline.haltedDevice":
+      "Le serveur refuse cette caisse\u00a0: {detail} Les ventes en attente restent ici. Si elle a été révoquée, appairez-la de nouveau sur cet événement\u00a0: elles partiront alors, sans doublon.",
+    "offline.haltedWait": "Le serveur demande d’attendre\u00a0: nouvel essai à {time}. Rien n’est perdu.",
+    "offline.haltedOther": "L’envoi s’est arrêté, rien n’est perdu\u00a0: {detail}",
+    "offline.storageFull":
+      "La mémoire de cet appareil est pleine\u00a0: il ne peut plus garder de ventes faites hors ligne. N’encaissez pas hors ligne, et prévenez la personne qui s’occupe des caisses.",
     "offline.saleQueued": "{total} · conservée sur cette caisse jusqu’au retour du réseau",
     "offline.queueFailed": "La caisse n’a pas pu enregistrer la vente. N’encaissez pas.",
-    "offline.scanning": "Hors ligne — vérification sur les {n} billets embarqués",
+    "offline.scanning": "Hors ligne — vérification sur les {n} billets de la liste de {time}",
+    "offline.scanningOld": "Hors ligne — vérification sur les {n} billets de la liste du {date} à {time}",
+    "offline.scanningUndated": "Hors ligne — vérification sur les {n} billets embarqués",
     "offline.noSnapshot": "Hors ligne et aucune liste embarquée : le scan est indisponible.",
     "reason.offline_no_snapshot": "Pas de liste hors ligne",
     "reason.already_redeemed": "Déjà scanné",
@@ -692,9 +785,14 @@ export const MESSAGES = {
     "history.cancelling": "Annulation…",
     "history.confirm": "Annuler la commande {order} ? Un avoir sera émis.",
     "history.cancelled": "Commande annulée",
+    "history.alreadyCancelledTitle": "Commande déjà annulée",
+    "history.backOfficeTitle": "Annulée depuis le back-office pretix",
     "history.cancelledMeta": "{order} · {total} avoirés",
     "history.creditNote": "Avoir {number}",
+    "history.backOfficeRefund": "Son remboursement se règle dans pretix : rien n’est dû par le tiroir de cette caisse.",
     "history.alreadyCancelled": "Cette vente a déjà été annulée.",
+    "history.unanswered": "Cette caisse a envoyé l’annulation sans jamais recevoir la réponse. Redemandez-la pour voir ce qui est dû.",
+    "history.resume": "Afficher l’annulation",
     "history.notCancellable": "Cette écriture ne peut pas être annulée depuis la caisse.",
     "takings.title": "Recette de l’événement",
     "takings.allDates": "toutes les dates de la série",
@@ -761,6 +859,10 @@ export const MESSAGES = {
     "drawer.openWith": "Ouvrir avec {amount}",
     "drawer.countHelp":
       "Comptez ce qu’il y a dans la caisse. Une fois le comptage enregistré, la caisse le compare à ce qu’elle doit contenir.",
+    "drawer.queued.one":
+      "{n} vente en espèces faite sur cet appareil n’est pas encore arrivée au serveur ({amount})\u00a0: le montant attendu ne la compte pas encore.",
+    "drawer.queued.other":
+      "{n} ventes en espèces faites sur cet appareil ne sont pas encore arrivées au serveur ({amount})\u00a0: le montant attendu ne les compte pas encore.",
     "drawer.countRecord": "Enregistrer le comptage",
     "drawer.countAction": "Compter la caisse",
     "drawer.counted": "Compté",
@@ -806,6 +908,8 @@ export const MESSAGES = {
     "drawer.amount": "Montant",
     "drawer.putIn": "Entrer {amount}",
     "drawer.takeOut": "Sortir {amount}",
+    "drawer.moveUnanswered":
+      "Ce mouvement a été envoyé et le serveur n’a jamais répondu. Renvoyez-le\u00a0: s’il avait été enregistré, il ne le sera pas deux fois.",
     "drawer.bannerClosed": "La caisse {name} est fermée\u00a0: ouvrez-la avant d’encaisser des espèces.",
     "drawer.bannerStale":
       "La caisse {name} est restée ouverte depuis un autre jour\u00a0: fermez-la, puis ouvrez celle de ce soir.",

@@ -1107,6 +1107,22 @@ button {
   font-weight: 700;
 }
 
+/* A payment picked up after the till restarted under it: said once, above
+   the figures, so the cashier knows why the panel opened by itself. Amber
+   like the note above, and for the same reason: nothing is wrong, but it is
+   not the ordinary course of things either. */
+.pay-note {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--tint-warning);
+  border: 1px solid var(--warning-text);
+  color: var(--warning-text);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
 /* ---------- done screen ---------- */
 
 .done {
@@ -1158,6 +1174,14 @@ button {
 .done .meta {
   opacity: 0.85;
   font-variant-numeric: tabular-nums;
+}
+
+/* Why the screen came up by itself; as wide as a sentence wants, no wider. */
+.done .done-note {
+  max-width: 520px;
+  opacity: 1;
+  font-weight: 700;
+  line-height: 1.4;
 }
 
 .done .btn {
@@ -1246,6 +1270,12 @@ button {
   border-radius: var(--radius);
   padding: 12px 14px;
   margin-bottom: 16px;
+  line-height: 1.4;
+}
+
+/* What the error does not cost: said under it, in the ordinary ink. */
+.error-note {
+  margin: -4px 0 16px;
   line-height: 1.4;
 }
 
@@ -1343,7 +1373,8 @@ table.takings thead th {
   object-fit: cover;
 }
 
-/* Aiming aid. Purely cosmetic: jsQR reads the whole frame, not just this box. */
+/* Aiming aid. Purely cosmetic: jsQR reads everything visible on the stage, not
+   just this box — and nothing of the frame that object-fit crops away. */
 .scanner-reticle {
   position: absolute;
   top: 50%;
@@ -1415,6 +1446,16 @@ table.takings thead th {
   font-weight: 400;
   font-size: 14px;
   opacity: 0.9;
+}
+
+/* White on the red box, like the words in it: the one thing in the box that
+   can be pressed has to look it, whatever the palette. */
+.scanner-status .scanner-retry {
+  margin-top: 14px;
+  min-height: 48px;
+  background: #fff;
+  color: #7f1d1d;
+  font-size: 16px;
 }
 
 .scanner-hint {
@@ -2190,6 +2231,65 @@ table.takings thead th {
 .icon-button.is-alert {
   background: var(--tint-warning);
   box-shadow: inset 0 0 0 1px var(--warning-text);
+}
+
+/* Something true about this device that a volunteer can fix — a clock off
+   the server's — or has to act on — a card payment that went through after
+   the sale was taken in cash. The width of the screen under the top bar,
+   like the drawer's, and text rather than a button: reading it is the point.
+   Amber for the first; the second is money owed to somebody, and red. */
+.notice-bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 16px;
+  background: var(--tint-warning);
+  color: var(--warning-text);
+  border-bottom: 1px solid var(--warning-text);
+  font-size: 15px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.notice-bar > span {
+  flex: 1;
+}
+
+.notice-bar .btn {
+  flex: 0 0 auto;
+  width: auto;
+  min-height: 40px;
+  padding: 0 16px;
+  background: var(--surface);
+  border: 1px solid currentColor;
+  color: inherit;
+}
+
+.notice-bar.is-alarm {
+  background: var(--tint-danger);
+  color: var(--danger-on-tint);
+  border-bottom-color: var(--danger-text);
+}
+
+/* The clock's, which stays until somebody fixes it: said, not shouted, and
+   in as little of a phone's height as it takes. */
+.notice-bar:not(.is-alarm) {
+  font-weight: 400;
+}
+
+/* On a phone the button goes under the sentence rather than squeezing it
+   into a column one word wide. */
+@media (max-width: 520px) {
+  .notice-bar {
+    font-size: 14px;
+  }
+
+  .notice-bar.is-alarm {
+    flex-direction: column;
+    align-items: stretch;
+  }
 }
 
 /* Counting note by note wants the width: notes beside coins on a tablet,

@@ -62,6 +62,9 @@
                                 {% blocktrans trimmed with amount=row.expected_now|money:currency %}
                                     Should hold <strong>{{ amount }}</strong>
                                 {% endblocktrans %}
+                                {% if row.waiting %}
+                                    <br>{% include "pretix_openpos/waiting_sales.html" with waiting=row.waiting %}
+                                {% endif %}
                             {% else %}
                                 <span class="label label-default">{% trans "Closed" context "cash drawer state" %}</span>
                             {% endif %}

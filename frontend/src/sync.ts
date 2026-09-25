@@ -1,7 +1,9 @@
-import { api, ApiError, isRetryable } from "./api";
+import { ApiError, api, isRefusal, isRetryable, isThrottled } from "./api";
 import { countSent } from "./doorCount";
-import { loadFailures, loadQueue, saveFailures, saveQueue } from "./storage";
-import type { Pairing, QueueEntry, SyncReport } from "./types";
+import { describeError } from "./errors";
+import { t } from "./i18n";
+import { addFailure, loadQueue, saveLastSync, saveQueue } from "./storage";
+import type { Pairing, QueueEntry, SyncHalt, SyncReport } from "./types";
 
 /**
  * Draining what the till recorded while it had no network.
@@ -21,7 +23,22 @@ import type { Pairing, QueueEntry, SyncReport } from "./types";
  * **Never drop a refusal silently.** A sale the server will not accept is the
  * one thing an operator has to hear about, so it moves to a failures list that
  * survives restarts and is shown until someone has dealt with it.
+ *
+ * And a refusal is narrow: the server turning down *this* entry, with its
+ * reasons (see ``isRefusal``). Everything else it can answer — the device
+ * refused, an address that is not there, "not now" — stops the run and keeps
+ * the whole queue as it was. A revoked tablet used to file every sale it held
+ * as refused, one by one, and had nothing left to send once it was paired
+ * again.
  */
+
+/**
+ * How long a run waits after "not now" when the server did not say how long.
+ *
+ * The same quarter of a minute as the till's own retry, so a rate limit with
+ * no ``Retry-After`` costs nothing more than the next ordinary try.
+ */
+export const THROTTLED_WAIT_MS = 15_000;
 
 async function replaySale(pairing: Pairing, entry: QueueEntry & { kind: "sale" }, report: SyncReport) {
   const result = await api.checkout(pairing, {
@@ -30,7 +47,15 @@ async function replaySale(pairing: Pairing, entry: QueueEntry & { kind: "sale" }
     payment_type: entry.paymentType,
     cash_given: entry.cashGiven,
     cashier: entry.cashier,
-    offline: { recorded_at: entry.at, charged_total: entry.chargedTotal },
+    offline: {
+      recorded_at: entry.at,
+      charged_total: entry.linesTotal ?? entry.chargedTotal,
+      // This device's clock now, beside its clock then: the server sets the
+      // two against its own and corrects ``recorded_at`` by the difference,
+      // so a tablet whose clock is off still files its sales in the right
+      // evening — and no longer has them refused as dated in the future.
+      sent_at: new Date().toISOString(),
+    },
   });
   report.sales += 1;
   for (const line of result.off_tariff ?? []) {
@@ -106,10 +131,31 @@ export function sendable(entry: QueueEntry, event: string): boolean {
 }
 
 /**
+ * Why the run stops here, from what stopped it.
+ *
+ * Every one of these keeps the entry and everything behind it in the queue;
+ * they differ only in what the operator is told, and in when the next
+ * automatic run may try again.
+ */
+function haltFor(error: unknown): SyncHalt {
+  const message = describeError(error);
+  if (isRetryable(error)) return { kind: "unreachable", message, retryAt: null };
+  if (isThrottled(error)) {
+    const wait = (error as ApiError).retryAfterMs ?? THROTTLED_WAIT_MS;
+    return { kind: "wait", message, retryAt: Date.now() + wait };
+  }
+  if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
+    return { kind: "device", message, retryAt: null };
+  }
+  return { kind: "other", message, retryAt: null };
+}
+
+/**
  * Send everything that can be sent, oldest first.
  *
- * Stops at the first transport failure — the network went away again, and the
- * rest of the queue keeps its place in line.
+ * Stops at the first answer that is not about the entry itself — the network
+ * went away again, the device was turned away, the server asked for a moment
+ * — and the rest of the queue keeps its place in line. The report says which.
  *
  * Sales belonging to another event are stepped over rather than sent: see
  * ``sendable``. They used to *stop* the drain, which meant one stranded entry at
@@ -143,24 +189,36 @@ export async function drainQueue(pairing: Pairing): Promise<SyncReport> {
         countSent(entry);
       }
     } catch (error) {
-      if (isRetryable(error)) break;
+      if (!isRefusal(error)) {
+        report.halted = haltFor(error);
+        break;
+      }
       // A refusal with a reason: the server has spoken, so this entry will not
-      // improve by being retried. Out of the queue and into the report.
+      // improve by being retried. Out of the queue and into the report — but
+      // only once the report is on disk, or the sale would exist nowhere.
+      const filed = addFailure({ entry, at: new Date().toISOString(), message: describeError(error) });
+      if (!filed) {
+        report.halted = { kind: "other", message: t("offline.storageFull"), retryAt: null };
+        break;
+      }
       report.failed += 1;
-      saveFailures([
-        ...loadFailures(),
-        {
-          entry,
-          at: new Date().toISOString(),
-          message: error instanceof ApiError ? error.message : String(error),
-        },
-      ]);
     }
 
     // Re-read rather than trusting an earlier copy, for the same reason.
-    saveQueue(loadQueue().filter((queued) => queued.id !== entry.id));
+    try {
+      saveQueue(loadQueue().filter((queued) => queued.id !== entry.id));
+    } catch {
+      // Sent, and still in the queue: the next run sends it again under its
+      // key, and the server answers it as the replay it is. Stopping here
+      // keeps that to one entry rather than the whole queue.
+      report.halted = { kind: "other", message: t("offline.storageFull"), retryAt: null };
+      break;
+    }
   }
 
+  // Everything that could go went: the moment the back office is told as
+  // "last synchronised" — see useDeviceStatus.
+  if (!report.halted) saveLastSync(new Date().toISOString());
   report.stranded = loadQueue().filter((queued) => !sendable(queued, pairing.event)).length;
   return report;
 }

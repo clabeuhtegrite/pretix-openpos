@@ -1,0 +1,13 @@
+{% load i18n %}{% comment %}
+    Next to an amount a drawer should hold: the sales a till says it is still
+    holding, which are not in that amount until they arrive. Included with
+    ``waiting``, a list of {device, waiting, reported} from drawer_views.
+{% endcomment %}{% if waiting %}
+    <small class="text-warning openpos-waiting">
+        <span class="fa fa-exclamation-triangle"></span>
+        {% trans "Not in this amount yet, still on a till:" %}
+        {% for held in waiting %}
+            <br>{{ held.device.name }} — {{ held.waiting }} ({{ held.reported }})
+        {% endfor %}
+    </small>
+{% endif %}

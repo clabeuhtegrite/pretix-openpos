@@ -32,8 +32,39 @@ interface Props {
   onTerminalStart: () => void;
   /** Take it back off, which is the cashier's only way out of a live payment. */
   onTerminalStop: () => void;
+  /**
+   * Ask the server again about the payment on screen, under its own key —
+   * the "try again" of a wait the server stopped answering, as opposed to the
+   * one after a refusal, which is a new payment.
+   */
+  onTerminalRetry?: () => void;
+  /**
+   * Leave the reader payment on screen behind, to take the sale in cash: the
+   * way out of a wait the server stopped answering. See useTerminal.
+   */
+  onTerminalAbandon?: () => void;
+  /**
+   * Whether the till can reach the server. A reader is driven through it, so
+   * with no network there is no card payment to start — said at once, with
+   * cash still on offer, rather than after a request that cannot arrive.
+   */
+  online?: boolean;
   busy: boolean;
   error: string | null;
+  /**
+   * The error above is the server refusing the sale for good, rather than
+   * "not now". Only read once a reader has taken the money: it is what
+   * unlocks "Back" then, since sending the same sale again would only be
+   * refused again.
+   */
+  refused?: boolean;
+  /**
+   * The method already chosen, for a payment the till is picking up after a
+   * reload. Never set on a fresh basket: the question is asked every time.
+   */
+  initialMethod?: PaymentType | null;
+  /** This payment was interrupted by a reload and is being picked up where it was. */
+  resumed?: boolean;
   /** Money already taken back off the customer, from a sale cancelled to be corrected. */
   credit?: { amountCents: number; order: string } | null;
   /**
@@ -68,14 +99,64 @@ interface Props {
  * work — what happened and how to try again.
  */
 function TerminalPrompt({
-  terminal, currency, fallbackCents, onRetry,
+  terminal, currency, fallbackCents, online, heldBack, onRetry, onAskAgain,
 }: {
   terminal: TerminalState | null;
   currency: string;
   /** The basket's own figure, until the server has priced it. */
   fallbackCents: number;
+  online: boolean;
+  /** Card was chosen with no network, so nothing was put on the reader. */
+  heldBack: boolean;
   onRetry: () => void;
+  onAskAgain?: () => void;
 }) {
+  // No network, and nothing on the reader: there is no starting a payment
+  // through a server that cannot be reached. Said before anything is asked,
+  // with the way to try again once the network is back.
+  if (terminal === null && heldBack) {
+    return (
+      <div className="pay-reader">
+        <p className="pay-reader-prompt">
+          {online ? t("payment.readerBack") : t("payment.readerOffline")}
+        </p>
+        <button className="btn" style={{ marginTop: 12 }} onClick={onRetry} disabled={!online}>
+          {t("payment.readerRetry")}
+        </button>
+      </div>
+    );
+  }
+
+  // The server has said nothing for a while — or SumUp has said nothing to
+  // it — and the reader may or may not still be asking for the card. The one
+  // screen that knows is the reader's own, so that is where the cashier is
+  // sent, with the choice to ask again here, or to take the sale in cash,
+  // which the toggle above now allows. A reader that has moved on to another
+  // payment has nothing left to show about this one: cash, and the till
+  // follows the payment up.
+  if (terminal?.unanswered && terminal.phase !== "paid" && terminal.phase !== "failed") {
+    return (
+      <div className="pay-reader is-waiting">
+        <p className="pay-reader-prompt">
+          {terminal.unansweredBy === "reader"
+            ? t("payment.readerMovedOn")
+            : terminal.unansweredBy === "sumup"
+              ? t("payment.readerSumupUnanswered")
+              : t("payment.readerUnanswered")}
+        </p>
+        <button
+          className="btn"
+          style={{ marginTop: 12 }}
+          onClick={onAskAgain}
+          disabled={terminal.asking}
+          aria-busy={terminal.asking || undefined}
+        >
+          {terminal.asking ? t("error.retrying") : t("payment.readerRetry")}
+        </button>
+      </div>
+    );
+  }
+
   // Stop has been pressed and the reader has not answered yet. Said in place of
   // the request for a card, which the cashier has just decided against; the
   // bar goes on moving, because the wait is still the reader's.
@@ -96,13 +177,25 @@ function TerminalPrompt({
     );
   }
 
+  // Picked up after a reload: the server is being asked how the payment
+  // stands before anything is said about it, because the customer may well
+  // have paid while the till was away.
+  if (terminal.phase === "checking") {
+    return (
+      <p className="pay-reader is-waiting">{t("payment.readerChecking")}</p>
+    );
+  }
+
   if (terminal.phase === "failed") {
     return (
       <div className="pay-reader">
         <div className="error-banner">{terminal.message ?? t("payment.readerRefused")}</div>
-        <button className="btn" style={{ marginTop: 12 }} onClick={onRetry}>
+        {/* A new payment, so a new request: not while there is no network
+            to carry it. */}
+        <button className="btn" style={{ marginTop: 12 }} onClick={onRetry} disabled={!online}>
           {t("payment.readerRetry")}
         </button>
+        {!online && <p className="pay-reader-note">{t("payment.readerOffline")}</p>}
       </div>
     );
   }
@@ -133,19 +226,25 @@ function TerminalPrompt({
       {terminal.stalled && (
         <p className="pay-reader-note">{t("payment.readerStalled")}</p>
       )}
+      {terminal.notice && <p className="pay-reader-note">{terminal.notice}</p>}
     </div>
   );
 }
 
 export default function PaymentPanel({
   totalCents, currency, denominations, cardMode, terminal, onTerminalStart, onTerminalStop,
-  busy, error, credit, drawer, onOpenDrawer, onConfirm, onCancel,
+  onTerminalRetry, onTerminalAbandon, online = true, busy, error, refused = false,
+  initialMethod = null, resumed = false, credit, drawer, onOpenDrawer, onConfirm, onCancel,
 }: Props) {
   // Deliberately unanswered to begin with. A panel that opened on cash got
   // confirmed on cash: a card sale rung up as a cash one, and the drawer at
   // closing time the only thing that ever noticed. So the method is the first
   // thing the panel asks, and nothing else is shown until it has an answer.
-  const [method, setMethod] = useState<PaymentType | null>(null);
+  // The one exception is a payment picked up after a reload, whose answer was
+  // given before the till went away.
+  const [method, setMethod] = useState<PaymentType | null>(initialMethod);
+  /** Card was chosen while the till had no network: nothing went to the reader. */
+  const [heldBack, setHeldBack] = useState(false);
   // Digits only, read as cents. This is how a real till behaves: typing 1-2-3-4
   // means 12.34, and there is no decimal point to fumble mid-queue.
   const [entry, setEntry] = useState("");
@@ -180,7 +279,17 @@ export default function PaymentPanel({
    */
   const readerCannot = onReader && (totalCents <= 0 || credit != null);
   const readerBusy =
-    onReader && (terminal?.phase === "starting" || terminal?.phase === "waiting");
+    onReader &&
+    (terminal?.phase === "starting" ||
+      terminal?.phase === "checking" ||
+      terminal?.phase === "waiting");
+  /**
+   * The server has stopped answering about the payment on the reader, and the
+   * cashier may leave it behind for cash. Card stays locked: a second card
+   * payment over one that may still be live is the double charge this whole
+   * panel is built to prevent.
+   */
+  const wayOut = readerBusy && terminal?.unanswered === true;
   /**
    * The card has been charged, whatever happened next.
    *
@@ -197,6 +306,13 @@ export default function PaymentPanel({
   const methodLocked = busy || readerBusy || readerPaid;
   /** Stop has been pressed, and the reader has not answered yet. */
   const stopping = readerBusy && terminal?.cancelling === true;
+  /**
+   * The money is on a card and the server has refused the sale for good.
+   * Sending it again would be refused again, and a till that could then only
+   * be closed by reloading it is worse than one that lets go: the payment is
+   * in the back office's list of card payments with no sale.
+   */
+  const readerRefused = readerPaid && refused;
 
   /**
    * Answering the question, and — on a reader till — putting the basket on it.
@@ -207,8 +323,20 @@ export default function PaymentPanel({
    * reason to press.
    */
   const choose = (next: PaymentType) => {
+    if (next === "cash" && wayOut) onTerminalAbandon?.();
     setMethod(next);
-    if (next === "card" && onReader && !readerCannot) onTerminalStart();
+    if (next !== "card" || !onReader || readerCannot) return;
+    // Not with no network: the panel says so instead, and cash stays one tap
+    // away. Asking anyway only put a request on its way that could not arrive
+    // and a wait on screen that nothing would end.
+    setHeldBack(!online);
+    if (online) onTerminalStart();
+  };
+
+  /** The reader, asked for the first time once the network is back. */
+  const startNow = () => {
+    setHeldBack(false);
+    onTerminalStart();
   };
 
   const press = (digit: string) => setEntry((current) => (current + digit).replace(/^0+/, "").slice(0, 8));
@@ -226,10 +354,12 @@ export default function PaymentPanel({
             nothing was charged. */}
         {error && (
           <div className="error-banner">
-            {terminal?.phase === "paid" ? `${t("payment.readerPaidNotRecorded")} ` : ""}
+            {readerRefused ? `${t("payment.readerPaidNotRecorded")} ` : ""}
             {error}
           </div>
         )}
+
+        {resumed && <p className="pay-note">{t("payment.resumed")}</p>}
 
         {/* Everything the operator taps to build the amount. Scrolls on a phone;
             what it produces is read off the pinned footer below. */}
@@ -244,7 +374,7 @@ export default function PaymentPanel({
                 className="btn"
                 aria-pressed={method === "cash"}
                 onClick={() => choose("cash")}
-                disabled={methodLocked}
+                disabled={methodLocked && !wayOut}
               >
                 {t("payment.cash")}
               </button>
@@ -377,7 +507,10 @@ export default function PaymentPanel({
                 terminal={terminal}
                 currency={currency}
                 fallbackCents={totalCents}
-                onRetry={onTerminalStart}
+                online={online}
+                heldBack={heldBack}
+                onRetry={startNow}
+                onAskAgain={onTerminalRetry}
               />
             )
           ) : (
@@ -412,8 +545,8 @@ export default function PaymentPanel({
               onClick={readerBusy ? onTerminalStop : onCancel}
               // Leaving is not on offer once the card has been charged: the
               // only correct move is recording the sale, which is the button
-              // beside this one.
-              disabled={busy || readerPaid || stopping}
+              // beside this one — until the server has refused it for good.
+              disabled={busy || (readerPaid && !readerRefused) || stopping}
               aria-busy={stopping || undefined}
             >
               {stopping

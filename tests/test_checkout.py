@@ -53,6 +53,22 @@ def test_a_retry_under_the_same_key_hands_back_the_first_sale(till, event, ticke
 
 
 @pytest.mark.django_db
+def test_the_answer_carries_no_way_into_the_customer_s_order(till, event, ticket):
+    """
+    The order's secret opens the customer's own page — tickets, invoice, the
+    lot. The till never needed it, and a key is not a secret: anybody holding
+    one could have it replayed back to them.
+    """
+    first = sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="no-secret-1")
+    again = sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="no-secret-1")
+    order = Order.objects.get(event=event)
+
+    for response in (first, again):
+        assert response.json()["order"] == {"code": order.code, "total": "10.00"}
+        assert order.secret not in response.content.decode()
+
+
+@pytest.mark.django_db
 def test_a_different_key_is_a_different_sale(till, event, ticket):
     sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="first-sale-1")
     sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="second-sale")
@@ -359,3 +375,66 @@ def test_a_card_sale_cannot_carry_an_amount_received(till, ticket):
 
     assert response.status_code == 400
     assert "cash" in str(response.json()).lower()
+
+
+# -- how big one sale may be -----------------------------------------------
+
+
+@pytest.mark.django_db
+def test_a_sale_of_more_items_than_any_counter_sells_is_refused(till, event, beer):
+    from pretix_openpos.api.serializers import MAX_ITEMS
+
+    response = sell(
+        till,
+        [{"item": beer.pk, "count": MAX_ITEMS - 10}, {"item": beer.pk, "count": 11}],
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "too_many_items"
+    assert str(MAX_ITEMS) in response.json()["positions"][0]
+    assert not Order.objects.filter(event=event).exists()
+    assert not PosSale.objects.exists()
+
+
+@pytest.mark.django_db
+def test_a_sale_right_at_the_limit_goes_through(till, beer, monkeypatch):
+    from pretix_openpos.api import serializers
+
+    # Counted over the whole basket, and inclusive. Lowered so the test does
+    # not write five hundred order positions to say so.
+    monkeypatch.setattr(serializers, "MAX_ITEMS", 3)
+
+    assert sell(
+        till, [{"item": beer.pk, "count": 2}, {"item": beer.pk, "count": 1}]
+    ).status_code == 201
+    assert sell(
+        till, [{"item": beer.pk, "count": 4}], idempotency_key="one-too-many"
+    ).json()["code"] == "too_many_items"
+
+
+@pytest.mark.django_db
+def test_a_replayed_sale_of_that_size_is_refused_too(till, beer, monkeypatch):
+    """
+    What a till's queue holds is bounded like what it sells live: the app
+    caps a basket, so a queued sale this size is not one it could have made,
+    and the refusal goes to the list the operator is shown.
+    """
+    from datetime import timedelta
+
+    from django.utils.timezone import now
+
+    from pretix_openpos.api import serializers
+
+    monkeypatch.setattr(serializers, "MAX_ITEMS", 3)
+
+    response = sell(
+        till,
+        [{"item": beer.pk, "count": 4, "price": "3.00"}],
+        offline={
+            "recorded_at": (now() - timedelta(hours=1)).isoformat(),
+            "charged_total": "12.00",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "too_many_items"

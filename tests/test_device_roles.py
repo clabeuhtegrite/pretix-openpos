@@ -24,7 +24,11 @@ def devices_url(organizer):
 
 
 def assign(device, role="", reader=""):
-    return PosDevice.objects.create(device=device, role=role, sumup_reader_id=reader)
+    # Updated rather than created: a device that has already called the server
+    # has a row, written by the call itself (see ``note_contact``).
+    return PosDevice.objects.update_or_create(
+        device=device, defaults={"role": role, "sumup_reader_id": reader}
+    )[0]
 
 
 # -- what the app is told ---------------------------------------------------

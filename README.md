@@ -250,7 +250,7 @@ If you run pretix in Docker or Kubernetes, [`deploy/Dockerfile`](deploy/Dockerfi
 bakes the plugin into the official image:
 
 ```bash
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.24.2 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.25.0 .
 ```
 
 The PWA bundle is built inside the image, from the tree you are building, so the
@@ -263,6 +263,14 @@ the kubelet at pull time on an amd64 node.
 
 Pin the base image to the same immutable patch tag your cluster already runs
 rather than to a rolling minor.
+
+**Rolling back** is deploying the previous version's image, pinned by digest:
+the published images carry an immutable `<version>-pretix<base>` tag for that.
+Nothing is run by hand; the `migrate` the image runs on start finds nothing to
+do. It is safe down to 0.21.1 on the same pretix base, and never across a
+change of base — below 0.21.0 an older plugin reads the journal as tampered
+with. The reasons, and what breaks where, are in
+[`docs/fonctionnement.md`](docs/fonctionnement.md), §3.1bis (in French).
 
 ## Setting it up
 
@@ -295,20 +303,21 @@ rather than to a rolling minor.
      grid. Naming it here adds the **deposit back** button. Give it an
      unlimited quota: a returned cup does not put stock back.
 6. **Create a device** under the organizer's *Devices*: give it access to the
-   event and pick the **Open POS** security profile. pretix shows a pairing QR
-   code.
+   events it serves and no others — its token reaches their guest lists — and
+   pick the **Open POS** security profile. pretix shows a pairing QR code.
 7. **Open `https://your-pretix/openpos/`** on the tablet, add it to the home
    screen, then launch it from the icon and scan the pairing QR code.
 8. **Say what the device is for** under the organizer's *Open POS → Till
    devices*: **till** for the bar, **door** for the entrance. Leaving it
    unassigned is a fine answer and the default — the device then does both, as
    every device did before this screen existed.
-9. **Optionally, set up a card reader.** Under *Open POS → Card readers*, enter
-   your SumUp merchant code and an API key, then pair a reader with the code it
-   shows on its own screen. Give that reader to a till back on the *Till
-   devices* screen, and that till takes card payments through it and nowhere
-   else — the server refuses a card sale the reader did not validate. Every
-   other device goes on as before.
+9. **Optionally, set up a card reader.** Under *Open POS → Card readers*, which
+   takes the permission to change the organizer's settings since it holds the
+   payment account, enter your SumUp merchant code and an API key, then pair a
+   reader with the code it shows on its own screen. Give that reader to a till
+   back on the *Till devices* screen, and that till takes card payments through
+   it and nowhere else — the server refuses a card sale the reader did not
+   validate. Every other device goes on as before.
 10. **Optionally, set up cash drawers.** Under *Open POS → Cash drawers*, create
     one per physical drawer, with the float it usually starts on, then give
     each till its drawer on the *Till devices* screen. From then on that till
@@ -387,7 +396,7 @@ SQLite with pretix' own test settings. It has its own coverage floor, in
 `pyproject.toml`. It needs pretix installed:
 
 ```bash
-pip install pretix && pip install --no-deps -e . && pip install pytest pytest-django pytest-cov
+pip install "pretix==2026.7.*" && pip install --no-deps -e . && pip install pytest pytest-django pytest-cov
 pytest --cov
 ```
 

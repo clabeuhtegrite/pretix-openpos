@@ -1,5 +1,33 @@
+import logging
+
 from django.utils.translation import gettext_lazy as _
 from pretix.api.auth.devicesecurity import AllowListSecurityProfile
+
+logger = logging.getLogger(__name__)
+
+#: The name search pretix answers a device with, as the security profile knows it.
+SEARCH = ("GET", "api-v1:checkinrpc.search")
+
+#: Characters a name search must hold, spaces not counted, before it is let through.
+#:
+#: pretix' own floor for a caller without full access to the lists, which a
+#: device has: it answers a shorter search with nothing for those callers,
+#: and with everything for the others.
+SEARCH_MIN_CHARACTERS = 3
+
+
+def narrow_search(request) -> bool:
+    """
+    Whether every ``search`` term in this request is long enough to be a search.
+
+    Every term, not only the one pretix will use: a query string may repeat a
+    parameter, and which of the copies a filter reads is pretix' business.
+    Whitespace does not count, so three spaces are not a search either.
+    """
+    terms = request.query_params.getlist("search")
+    return bool(terms) and all(
+        len("".join(term.split())) >= SEARCH_MIN_CHARACTERS for term in terms
+    )
 
 
 class OpenPosSecurityProfile(AllowListSecurityProfile):
@@ -30,6 +58,9 @@ class OpenPosSecurityProfile(AllowListSecurityProfile):
         ("GET", "api-v1:event-detail"),
         # The POS endpoints themselves.
         ("GET", "api-v1:openpos-orga-list"),
+        # The till's own account of the sales it has not sent yet, for the
+        # back office. Writes to this device's row and to nothing else.
+        ("POST", "api-v1:openpos-orga-status"),
         ("GET", "api-v1:openpos-config"),
         ("GET", "api-v1:openpos-catalog"),
         ("POST", "api-v1:openpos-checkout"),
@@ -67,6 +98,31 @@ class OpenPosSecurityProfile(AllowListSecurityProfile):
         ("POST", "api-v1:checkinlist-failed_checkins"),
         # Finding a ticket by name. Tickets carry a QR and nothing a human could
         # retype, so when the code will not scan the only way through is to look
-        # the holder up.
-        ("GET", "api-v1:checkinrpc.search"),
+        # the holder up. Only with a real search term: see ``is_allowed``.
+        SEARCH,
     )
+
+    def is_allowed(self, request):
+        """
+        The allowlist, and for the name search, a term worth the name.
+
+        pretix only holds a caller to its three-character minimum when that
+        caller cannot read every order of the lists it asks about — and a
+        device paired for an event can. With no term at all it answers with
+        every ticket of the lists asked for: names, e-mail addresses, the
+        secrets that are the tickets, for every event the device can see,
+        past ones included. One request would take the whole guest list, and
+        the door has never needed that: it looks up one holder whose code will
+        not scan. So the profile asks for the minimum pretix asks of everybody
+        else, per request, since the allowlist only knows paths.
+        """
+        if not super().is_allowed(request):
+            return False
+        key = (request.method, f"{request.resolver_match.namespace}:{request.resolver_match.url_name}")
+        if key == SEARCH and not narrow_search(request):
+            logger.info(
+                "Request %s not allowed in profile %s: search term shorter than %s characters",
+                key, self.identifier, SEARCH_MIN_CHARACTERS,
+            )
+            return False
+        return True

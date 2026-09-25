@@ -38,9 +38,10 @@ The API this speaks to, all of it under https://api.sumup.com:
 * ``GET/POST/DELETE /v0.1/merchants/{m}/readers`` — the paired readers.
 """
 import logging
+import re
 from datetime import timezone as dt_timezone
 from decimal import Decimal, InvalidOperation
-from urllib.parse import parse_qsl
+from urllib.parse import parse_qsl, quote
 
 import requests
 from django.utils.translation import gettext_lazy as _
@@ -56,6 +57,22 @@ API_BASE = "https://api.sumup.com"
 #: asynchronously afterwards — but still bounded: every one of these calls
 #: happens with somebody standing at a counter.
 TIMEOUT = (5, 15)
+
+#: Connect and read timeouts for the questions a waiting till has answered.
+#:
+#: ``terminal/status`` is polled every couple of seconds for as long as a
+#: cardholder is in front of the reader, and it asks SumUp up to twice. A
+#: pretix runs on a handful of worker processes — two, on the installation this
+#: was written for — so a SumUp that takes its time held one worker per
+#: waiting till for the whole of :data:`TIMEOUT`, and two tills waiting on a
+#: slow SumUp were enough to leave the other tills, the door, the web shop and
+#: the health probe queueing behind them. Nothing is lost by giving up early
+#: on these: a question that gets no answer leaves the payment exactly as it
+#: was stored — still waiting — and the next poll asks again. Starting a
+#: payment, refunding one and the periodic comparison keep :data:`TIMEOUT`:
+#: those are not repeated every two seconds, and an answer lost there costs
+#: more than a few seconds of somebody's time.
+POLL_TIMEOUT = (3, 5)
 
 #: Transaction statuses that mean the customer's money moved.
 #:
@@ -99,6 +116,61 @@ ERR_REFUSED = "refused"
 #: their mind at the counter. Not a refusal to act on: the refund is asked for
 #: again later, by reconcile.py.
 ERR_CONFLICT = "conflict"
+#: SumUp's 429: too many requests from this account for the moment. Nothing was
+#: done, so it is "not now" — never a refusal of the payment or the refund the
+#: request was about.
+ERR_RATE_LIMITED = "rate_limited"
+#: Nothing was sent: the request named something that cannot be a SumUp id.
+ERR_INVALID = "invalid"
+
+#: What SumUp's reader ids look like: ``rdr_`` and a run of letters and
+#: digits, ``rdr_3MSAFM23CK82VSTT4BN6RWSQ65``.
+#:
+#: A reader id goes into a URL path that is sent with the organizer's key, and
+#: one of the ways it arrives is a back-office form, which whoever posts it
+#: may fill with anything: ``rdr_A/../../../v1.0/merchants/…/refunds`` would
+#: have turned "forget this reader" into a refund. So an id is checked against
+#: this shape before any call is made with it, and quoted as one segment on
+#: top of that. Looser than what SumUp sends today — upper case, twenty-six
+#: characters — so that a change of length on their side does not lock every
+#: till out of its reader.
+READER_ID = re.compile(r"rdr_[A-Za-z0-9_]{1,64}")
+
+#: A path this client may send, once every variable part has gone through
+#: :func:`segment`: slash-separated runs of what quoting leaves as it is, and
+#: the escapes themselves. ``_call`` checks it, so that a path built some other
+#: way one day fails there, before the key goes out with it.
+SAFE_PATH = re.compile(r"(?:/[A-Za-z0-9._~%-]+)+")
+
+
+def is_reader_id(value) -> bool:
+    """Whether ``value`` has the shape of a SumUp reader id."""
+    return isinstance(value, str) and READER_ID.fullmatch(value) is not None
+
+
+def _not_sent(detail):
+    return SumUpError(
+        _("SumUp was not asked: the request named something that is not a SumUp id."),
+        code=ERR_INVALID,
+        detail=detail,
+    )
+
+
+def segment(value) -> str:
+    """
+    ``value`` as one segment of a SumUp URL path, and never as more than one.
+
+    Every id that goes into a path goes through this, wherever it came from —
+    a form, the database, SumUp's own answer. Quoted with nothing left safe, a
+    ``/`` cannot start another segment and a ``?`` or a ``#`` cannot end the
+    path early. Quoting leaves ``.`` and ``..`` as they are, and those two
+    climb a level without needing a slash, so they are refused outright, as is
+    the empty segment.
+    """
+    text = quote(str(value), safe="")
+    if text in ("", ".", ".."):
+        raise _not_sent(f"refused path segment {value!r}")
+    return text
 
 
 class SumUpError(Exception):
@@ -152,8 +224,12 @@ class SumUpAccount:
     devices it is attached to are organizer-level too.
     """
 
-    def __init__(self, organizer):
+    def __init__(self, organizer, *, timeout=TIMEOUT):
         self.organizer = organizer
+        #: What every call through this account is bounded by, unless the
+        #: call says otherwise: :data:`TIMEOUT`, or :data:`POLL_TIMEOUT` for
+        #: an account built to answer a till that is polling.
+        self.timeout = timeout
         settings = organizer.settings
         self.merchant_code = (settings.get("openpos_sumup_merchant_code") or "").strip()
         # Read but never exposed: no property, no repr, and nothing that
@@ -179,6 +255,8 @@ class SumUpAccount:
                 code=ERR_NOT_CONFIGURED,
                 detail="missing merchant code or API key",
             )
+        if not SAFE_PATH.fullmatch(path) or any(part in (".", "..") for part in path.split("/")):
+            raise _not_sent(f"refused path {path!r}")
         url = f"{API_BASE}{path}"
         try:
             response = requests.request(
@@ -190,7 +268,7 @@ class SumUpAccount:
                     "Authorization": f"Bearer {self._api_key}",
                     "Accept": "application/json",
                 },
-                timeout=timeout or TIMEOUT,
+                timeout=timeout or self.timeout,
             )
         except requests.RequestException as exc:
             # Includes both timeouts and DNS/TLS failures. Retryable: the till
@@ -276,6 +354,19 @@ class SumUpAccount:
                 detail=detail,
                 reason=reason,
             )
+        if response.status_code == 429:
+            # Not retryable in this module's sense either: SumUp did nothing
+            # with the request, so a payment it was asked to start is not on
+            # the reader. Its own code, for the callers to whom "not now"
+            # matters — a question about a payment that went unanswered is not
+            # news that the payment failed, and a refund put off is not one
+            # refused.
+            return SumUpError(
+                _("SumUp is receiving too many requests. Try again in a moment."),
+                code=ERR_RATE_LIMITED,
+                detail=detail,
+                reason=reason,
+            )
         if response.status_code == 409:
             # Same words for the operator as any refusal; its own code for the
             # caller, which waits and asks again rather than giving up.
@@ -295,11 +386,33 @@ class SumUpAccount:
             reason=reason,
         )
 
+    @property
+    def _merchant(self):
+        """
+        The merchant code as a path segment.
+
+        Read while the path is being built, which is before ``_call`` gets to
+        say the account is not set up: an empty code is that, and is left for
+        ``_call`` to say so, rather than refused here as an empty segment.
+        """
+        return segment(self.merchant_code) if self.merchant_code else ""
+
+    @staticmethod
+    def _reader(reader_id):
+        """A reader id as a path segment, once it is sure to be one. See READER_ID."""
+        if not is_reader_id(reader_id):
+            raise SumUpError(
+                _("This is not a SumUp reader."),
+                code=ERR_INVALID,
+                detail=f"refused reader id {reader_id!r}",
+            )
+        return segment(reader_id)
+
     # -- readers -----------------------------------------------------------
 
     def readers(self):
         """Every reader paired to this merchant account."""
-        body = self._call("GET", f"/v0.1/merchants/{self.merchant_code}/readers")
+        body = self._call("GET", f"/v0.1/merchants/{self._merchant}/readers")
         return body.get("items", []) if isinstance(body, dict) else []
 
     def pair_reader(self, pairing_code, name):
@@ -312,14 +425,14 @@ class SumUpAccount:
         """
         return self._call(
             "POST",
-            f"/v0.1/merchants/{self.merchant_code}/readers",
+            f"/v0.1/merchants/{self._merchant}/readers",
             json={"pairing_code": pairing_code, "name": name},
         )
 
     def forget_reader(self, reader_id):
         self._call(
             "DELETE",
-            f"/v0.1/merchants/{self.merchant_code}/readers/{reader_id}",
+            f"/v0.1/merchants/{self._merchant}/readers/{self._reader(reader_id)}",
             expect=(200, 204),
         )
 
@@ -356,7 +469,7 @@ class SumUpAccount:
         try:
             body = self._call(
                 "GET",
-                f"/v0.1/merchants/{self.merchant_code}/readers/{reader_id}/status",
+                f"/v0.1/merchants/{self._merchant}/readers/{self._reader(reader_id)}/status",
                 timeout=timeout,
             )
         except SumUpError as exc:
@@ -388,7 +501,7 @@ class SumUpAccount:
         """
         body = self._call(
             "POST",
-            f"/v0.1/merchants/{self.merchant_code}/readers/{reader_id}/checkout",
+            f"/v0.1/merchants/{self._merchant}/readers/{self._reader(reader_id)}/checkout",
             json={
                 "total_amount": {
                     "currency": currency,
@@ -426,8 +539,8 @@ class SumUpAccount:
         try:
             body = self._call(
                 "GET",
-                f"/v0.1/merchants/{self.merchant_code}/readers/{reader_id}"
-                f"/checkout/{checkout_id}",
+                f"/v0.1/merchants/{self._merchant}/readers/{self._reader(reader_id)}"
+                f"/checkout/{segment(checkout_id)}",
             )
         except SumUpError as exc:
             logger.info(
@@ -450,7 +563,7 @@ class SumUpAccount:
         """
         self._call(
             "POST",
-            f"/v0.1/merchants/{self.merchant_code}/readers/{reader_id}/terminate",
+            f"/v0.1/merchants/{self._merchant}/readers/{self._reader(reader_id)}/terminate",
             expect=(200, 202, 204),
         )
 
@@ -471,7 +584,7 @@ class SumUpAccount:
         try:
             return self._call(
                 "GET",
-                f"/v2.1/merchants/{self.merchant_code}/transactions",
+                f"/v2.1/merchants/{self._merchant}/transactions",
                 params={"client_transaction_id": client_transaction_id},
             )
         except SumUpError as exc:
@@ -491,7 +604,7 @@ class SumUpAccount:
         """
         return self._call(
             "GET",
-            f"/v2.1/merchants/{self.merchant_code}/transactions",
+            f"/v2.1/merchants/{self._merchant}/transactions",
             params={"id": transaction_id},
         )
 
@@ -533,7 +646,7 @@ class SumUpAccount:
         for _page in range(pages):
             body = self._call(
                 "GET",
-                f"/v2.1/merchants/{self.merchant_code}/transactions/history",
+                f"/v2.1/merchants/{self._merchant}/transactions/history",
                 params=params,
             )
             yield from (item for item in body.get("items") or () if isinstance(item, dict))
@@ -571,7 +684,7 @@ class SumUpAccount:
         """
         self._call(
             "POST",
-            f"/v1.0/merchants/{self.merchant_code}/payments/{transaction_id}/refunds",
+            f"/v1.0/merchants/{self._merchant}/payments/{segment(transaction_id)}/refunds",
             # An empty object for the whole transaction, never no body at all.
             # The spec calls the body optional, but SumUp's own client
             # (sumup-go, ``TransactionsClient.Refund``) always sends one, as

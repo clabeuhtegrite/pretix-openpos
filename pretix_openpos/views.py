@@ -220,6 +220,33 @@ class Echo:
         return value
 
 
+#: What a spreadsheet takes for the start of a formula, at the start of a cell.
+FORMULA_STARTS = ("=", "+", "-", "@", "\t", "\r")
+
+
+def text_cell(value):
+    """
+    A text cell of an export, made safe to open in a spreadsheet.
+
+    Excel, LibreOffice and Google Sheets all run a cell that starts with one
+    of :data:`FORMULA_STARTS` as a formula — ``=HYPERLINK(…)``, ``@SUM(…)``,
+    or worse on an Excel that still honours DDE — and what a cashier's name,
+    a reason or a drawer's name says is decided by whoever typed it on a till
+    or in the back office. The exports are opened by whoever keeps the books,
+    on the machine that keeps them. A leading apostrophe is the spreadsheet's
+    own mark for "text, not a formula"; it shows, which is the price of the
+    file opening safely.
+
+    For text only. Amounts and numbers are written as they are, negative ones
+    included: ``-3.00`` is what a cancellation is worth, and quoting it would
+    turn a column somebody sums into text.
+    """
+    text = "" if value is None else str(value)
+    if text.startswith(FORMULA_STARTS):
+        return "'" + text
+    return text
+
+
 #: How long a card payment may sit unanswered before it is worth a human's
 #: attention.
 #:
@@ -489,10 +516,18 @@ def unresolved_terminal_payments(event):
     if not candidates:
         return []
 
-    # One query for the journal side rather than one per row.
+    # One query for the journal side rather than one per row. Only a card sale
+    # settles a reader payment — the rule ``PosTerminalPayment.settling`` reads
+    # the other way round. Any row carrying the key used to count: a till that
+    # gave up on the reader and took cash under the same key booked a cash
+    # sale, and the card debit that landed afterwards vanished from this list,
+    # the one place it could have been seen. The app now takes that cash under
+    # a key of its own; an older one still in use on a counter does not.
     booked = set(
         PosSale.objects.filter(
             event=event,
+            kind=PosSale.KIND_SALE,
+            payment_type=PosSale.PAYMENT_CARD,
             idempotency_key__in=[payment.idempotency_key for payment in candidates],
         ).values_list("idempotency_key", flat=True)
     )
@@ -692,17 +727,19 @@ class SalesView(EventPermissionRequiredMixin, ListView):
                     for line in sale.positions
                 )
                 tariff_total = off_tariff_total(sale)
+                # Every column that can carry text goes through text_cell,
+                # whoever wrote it; the numbers go out as numbers.
                 yield writer.writerow([
                     sale.seq,
-                    sale.kind,
+                    text_cell(sale.kind),
                     sale.datetime.astimezone(tz).isoformat(),
-                    sale.order_code,
-                    sale.device_name or sale.device_serial or (
+                    text_cell(sale.order_code),
+                    text_cell(sale.device_name or sale.device_serial or (
                         str(_("pretix back office")) if sale.from_back_office else ""
-                    ),
-                    sale.device_serial,
-                    sale.cashier,
-                    sale.payment_type,
+                    )),
+                    text_cell(sale.device_serial),
+                    text_cell(sale.cashier),
+                    text_cell(sale.payment_type),
                     sale.total,
                     "" if sale.cash_given is None else sale.cash_given,
                     "" if sale.cash_change is None else sale.cash_change,
@@ -711,9 +748,9 @@ class SalesView(EventPermissionRequiredMixin, ListView):
                     "" if tariff_total is None else tariff_total,
                     "" if tariff_total is None else sale.total - tariff_total,
                     "" if sale.cancels_seq is None else sale.cancels_seq,
-                    sale.reason,
-                    positions,
-                    sale.drawer_session.drawer.name if sale.drawer_session else "",
+                    text_cell(sale.reason),
+                    text_cell(positions),
+                    text_cell(sale.drawer_session.drawer.name if sale.drawer_session else ""),
                     sale.drawer_session_id or "",
                 ])
 
@@ -923,7 +960,7 @@ class CompareWithSumUpView(EventPermissionRequiredMixin, View):
     permission = "event.orders:write"
 
     def post(self, request, *args, **kwargs):
-        from .reconcile import reconcile_organizer
+        from .reconcile import describe, log_failure, reconcile_organizer
         from .sumup import SumUpAccount
 
         account = SumUpAccount(request.organizer)
@@ -932,8 +969,15 @@ class CompareWithSumUpView(EventPermissionRequiredMixin, View):
         else:
             try:
                 done = reconcile_organizer(request.organizer, account, event=request.event)
-            except Exception:
-                logger.exception("Open POS could not compare %s with SumUp", request.event.slug)
+            except Exception as exc:
+                # The periodic task's own work, run early: when it crashes here
+                # it is broken there too, so it is said the same way, for the
+                # same alert — with its own step, since somebody was watching.
+                log_failure(
+                    "compare_now",
+                    f"event {request.organizer.slug}/{request.event.slug}: {describe(exc)}",
+                    exc_info=True,
+                )
                 done = {"crashed": True}
             if done.get("crashed") or done.get("error"):
                 messages.error(request, comparison_summary(done))

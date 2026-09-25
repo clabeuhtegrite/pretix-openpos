@@ -7,9 +7,14 @@
 # Mac. An arm64 image will build, push and pass every manifest check, and then
 # be refused by the kubelet at pull time on an amd64 node.
 #
-# Pin the base to the same immutable patch tag your cluster already runs. Do not
-# track the rolling minor: the plugin declares `pretix>=2024.7.0`, and pretix
-# refuses to start on an incompatible version rather than failing subtly later.
+# `2026.7` is pretix' rolling minor tag, not an immutable patch tag: upstream
+# moves it to each 2026.7.x patch release, so a rebuild picks up the latest patch
+# of that minor, and CI installs `pretix==2026.7.*` to test the same thing. That
+# is deliberate: the version also names the published channel (`pretix2026.7`),
+# which a cluster mirrors and pins by digest, so the channel stays put across
+# patch releases while a base upgrade to a new minor remains a deliberate edit.
+# To freeze a patch instead, write it here (`2026.7.1`): the channel becomes
+# `pretix2026.7.1`, and whatever pins the old channel has to follow.
 ARG PRETIX_VERSION=2026.7
 
 # The PWA bundle is generated rather than committed, and it used to be built by
