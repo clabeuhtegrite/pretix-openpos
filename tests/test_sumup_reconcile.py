@@ -815,7 +815,25 @@ def test_one_refund_s_trouble_does_not_stop_the_rest(
 # -- pretix' periodic task ------------------------------------------------------
 
 
+@pytest.fixture
+def runperiodic_keeps_the_connection(monkeypatch):
+    """
+    Stop ``runperiodic`` from dropping the test's own database connection.
+
+    It calls ``close_old_connections()`` before each task, which closes a
+    connection whose autocommit is not what the settings say — and inside a
+    test's transaction it never is. On SQLite nothing happens, since Django
+    never closes an in-memory database; on PostgreSQL the task then runs on a
+    closed connection and fails with "connection already closed", which is
+    the test's doing, not the task's.
+    """
+    from pretix.base.management.commands import runperiodic
+
+    monkeypatch.setattr(runperiodic, "close_old_connections", lambda: None)
+
+
 @pytest.mark.django_db
+@pytest.mark.usefixtures("runperiodic_keeps_the_connection")
 def test_pretix_periodic_task_runs_the_comparison(till, event, ticket, reader_till, sumup):
     _sale, order, _response = waiting_sale(till, sumup, event, ticket)
     sumup.not_refundable_yet.clear()
@@ -1103,6 +1121,7 @@ def boom(*args, **kwargs):
 
 
 @pytest.mark.django_db
+@pytest.mark.usefixtures("runperiodic_keeps_the_connection")
 def test_the_periodic_task_failing_whole_is_logged_and_still_raised(monkeypatch, caplog):
     from io import StringIO
 
