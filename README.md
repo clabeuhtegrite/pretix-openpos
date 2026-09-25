@@ -264,6 +264,14 @@ the kubelet at pull time on an amd64 node.
 Pin the base image to the same immutable patch tag your cluster already runs
 rather than to a rolling minor.
 
+**Rolling back** is deploying the previous version's image, pinned by digest:
+the published images carry an immutable `<version>-pretix<base>` tag for that.
+Nothing is run by hand; the `migrate` the image runs on start finds nothing to
+do. It is safe down to 0.21.1 on the same pretix base, and never across a
+change of base — below 0.21.0 an older plugin reads the journal as tampered
+with. The reasons, and what breaks where, are in
+[`docs/fonctionnement.md`](docs/fonctionnement.md), §3.1bis (in French).
+
 ## Setting it up
 
 1. **Enable the plugin** on your event, under *Settings → Plugins*.

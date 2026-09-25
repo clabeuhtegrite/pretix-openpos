@@ -409,6 +409,85 @@ Deux pièges :
   construit, se pousse, passe tous les contrôles de manifeste, puis se fait
   refuser par le kubelet au moment du pull sur un nœud amd64.
 
+### 3.1bis Revenir à la version précédente
+
+Une mise à jour qui tourne mal se défait comme elle s'est faite : en déployant
+l'image d'avant. Rien d'autre — ni `migrate` à la main, ni retour arrière de la
+base.
+
+**Quelle image.** Chaque publication par
+[`publish-image.yml`](../.github/workflows/publish-image.yml) pose deux tags :
+`<version>-pretix<base>` (`0.24.1-pretix2026.7`, par exemple), immuable, et le
+canal `pretix<base>`, qui suit la dernière publication — c'est-à-dire justement
+celle qu'on veut quitter. On épingle donc l'image précédente **par son digest**.
+Il figure dans le résumé de l'exécution qui l'a publiée, dans l'historique du
+manifeste de déploiement s'il est versionné (c'est le digest d'avant), et le
+registre le redonne :
+
+```bash
+docker buildx imagetools inspect ghcr.io/<propriétaire>/pretix-openpos:0.24.1-pretix2026.7 --format '{{.Manifest.Digest}}'
+```
+
+C'est un déploiement comme un autre, avec la précaution de tout déploiement :
+si les nœuds tirent l'image d'un miroir, vérifier qu'il a bien ce digest avant
+de l'épingler. Avec `strategy: Recreate`, le pod en service est arrêté avant
+que le suivant ne tire son image, et un digest absent du miroir, c'est la
+billetterie coupée.
+
+**Au démarrage.** L'image officielle de pretix lance `migrate` à chaque
+démarrage, et ce `migrate`-là n'a rien à faire : Django ne tient compte que des
+migrations qu'il trouve sur le disque, et celles qu'une version plus récente a
+appliquées sont ignorées, sans erreur. Leurs colonnes restent dans la base, la
+version remise en place ne les lit pas, et le jour où l'on revient à la plus
+récente, rien n'est à rejouer ni n'a été perdu. Les caisses ouvertes voient que
+le serveur n'a plus leur version et proposent « Nouvelle version — recharger »
+entre deux clients, comme après une mise à jour : recharger leur rend le
+JavaScript de la version remise en place (derrière un CDN qui garde `sw.js` en
+cache, purger `/openpos/sw.js`, §2.6). Ce qui recule, ce sont les écrans et les
+règles : la version remise en place affiche et calcule ce qu'elle savait
+afficher et calculer.
+
+**Jusqu'où.** C'est sûr tant qu'on reste **sur la même base pretix, et à 0.21.1
+ou au-dessus**. Plus loin, c'est ce que la base a gardé des versions plus
+récentes qui l'interdit :
+
+- **Une autre base pretix : non.** Changer de `-pretix<base>`, c'est aussi
+  ramener pretix lui-même en arrière, et rien ne garantit que ses migrations se
+  laissent enjamber à rebours. Une mise à jour qui a changé de base ne se défait
+  donc pas avec une image, mais en restaurant la base d'avant elle — ventes
+  faites depuis comprises. C'est une raison de ne pas en faire une la veille
+  d'une soirée.
+- **Sous 0.21.0, le journal a l'air falsifié.** Depuis 0.21.0, chaque ligne du
+  journal est hachée en version 5, qui ajoute l'ouverture de caisse à la charge
+  hachée (§6.4). Une version plus ancienne ne connaît pas cette forme : elle
+  rehache ces lignes sous la dernière qu'elle connaît, ne retombe pas sur le
+  hash enregistré, et son `openpos_verify_journal` désigne la première ligne
+  écrite depuis 0.21.0 comme la première qui ne tombe plus juste, puis sort en
+  erreur ; l'écran *Ventes* fait de même dès qu'il refait un parcours complet.
+  Le journal, lui, n'a rien : revenu à une version récente, il se vérifie de
+  bout en bout, lignes écrites entre-temps comprises. Mais un audit en cron
+  sonne, et rien ne distingue cette alarme d'une vraie. Les caisses espèces
+  disparaissent avec (migration `0010`) : un appareil rattaché à un tiroir
+  encaisse alors sans qu'il soit ouvert, et ces espèces n'entrent dans aucun
+  rapport de fermeture.
+- **Sous 0.17.0, plus de paiement sur le lecteur.** La migration `0009` a
+  ajouté aux paiements lecteur une colonne obligatoire, sans valeur par défaut
+  dans la base. Une version plus ancienne ne la remplit pas, la base refuse la
+  ligne, et chaque paiement carte sur le lecteur échoue.
+- **0.21.0 plutôt que 0.21.1** ne coûte que l'archivage des caisses espèces
+  (migration `0011`) : une caisse archivée redevient proposée comme les autres.
+
+**Ce qui rend une migration franchissable à rebours.** Qu'elle ne fasse
+qu'ajouter, et que ce qu'elle ajoute puisse rester vide. La version d'avant
+écrit ses lignes sans connaître les nouvelles colonnes, qui doivent donc
+accepter d'être laissées vides (`null=True`) ou avoir une valeur par défaut
+dans la base elle-même (`db_default`). Une valeur par défaut côté Python ne
+suffit pas : Django la retire de la base une fois la colonne créée, et c'est
+exactement ce qui rend `0009` infranchissable. La migration `0012`, qui ajoute
+des réglages aux appareils de caisse, n'ajoute que des colonnes qui acceptent
+d'être vides : on revient par-dessus sans risque, et les réglages faits avec la
+version récente sont toujours là quand on y revient.
+
 ### 3.2 Configurer l'événement
 
 1. **Activer le plugin** — *Paramètres → Plugins → Open POS*.

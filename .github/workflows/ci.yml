@@ -16,12 +16,28 @@
 # migrations switched off — the schema is built straight from the models — which
 # is what makes them fast. The integration job is where migrations, PostgreSQL
 # and the savepoint handling are exercised for real.
+#
+# Everything that installs pretix installs the version the production image is
+# built on, read out of deploy/Dockerfile: the backend job, and the two images in
+# dev/ — the one the integration job boots, and the one preflight runs the suite
+# in. A suite that installs whatever pretix released last week tests something
+# production does not run, and the day the two differ is the day it passes for
+# the wrong reason.
+#
+# publish-image.yml will not publish a commit until this workflow has passed on
+# it, in the run for its push to main, and it finds that run by this file's
+# name. Renaming the file, or dropping the push trigger, stops every release.
 name: CI
 
 on:
   push:
     branches: [main]
   pull_request:
+
+# Every job reads the tree and nothing else: the images built here are built to
+# be looked at, and pushed nowhere.
+permissions:
+  contents: read
 
 jobs:
   frontend:
@@ -73,13 +89,29 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
           cache: pip
-          cache-dependency-path: pyproject.toml
+          # deploy/Dockerfile too, because it decides which pretix is
+          # installed. Keyed on pyproject.toml alone, a pretix bump would
+          # restore the cache made for the old one and never save a new one,
+          # so every run would download what changed, and compile it when it
+          # is libsass, until pyproject.toml next moved.
+          cache-dependency-path: |
+            pyproject.toml
+            deploy/Dockerfile
       # Named rather than assumed to be on the runner: libsass, which pretix
       # pulls in, publishes no wheel for either version here and is compiled
       # from source. The first run pays for that; later ones take the built
       # wheel from the pip cache above.
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential gettext
-      - run: pip install pretix
+      # The pretix production runs, read out of the production Dockerfile so
+      # the two cannot drift apart (see the top of this file). `2026.7.*`
+      # rather than `2026.7`: pip reads the latter as 2026.7.0 exactly, while
+      # the image's tag follows that release's patches.
+      - name: Install pretix, the version the production image is built on
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^ARG PRETIX_VERSION=\(.*\)$/\1/p' deploy/Dockerfile)
+          [ -n "$version" ] || { echo "::error::no ARG PRETIX_VERSION in deploy/Dockerfile"; exit 1; }
+          pip install "pretix==$version.*"
       # --no-deps: the plugin declares no runtime dependencies of its own, and
       # letting pip resolve again here risks pulling a different pretix.
       - run: pip install --no-deps -e . && pip install "pytest<9" pytest-django pytest-cov
