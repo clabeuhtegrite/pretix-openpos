@@ -78,6 +78,22 @@ describe("what is said", () => {
       pending_sales: 0, oldest_pending_at: null, last_sync_at: null, version: __APP_VERSION__,
     });
   });
+
+  it("gives every instant as the server reads it, and leaves out what is not one", () => {
+    // Storage holds whatever was written to it, by this build or an older
+    // one; one date the server cannot read and the whole report is refused.
+    saveQueue([
+      sale("offset", "2026-08-16T23:00:00+02:00"),
+      sale("garbled", "not a date"),
+    ]);
+    saveLastSync("sometime");
+
+    expect(deviceStatus()).toMatchObject({
+      pending_sales: 2,
+      oldest_pending_at: "2026-08-16T21:00:00.000Z",
+      last_sync_at: null,
+    });
+  });
 });
 
 describe("when it is said", () => {
@@ -131,6 +147,30 @@ describe("when it is said", () => {
     expect(deviceStatusCall).toHaveBeenCalledTimes(2);
   });
 
+  it("not at every return of a network that comes and goes, but once the minute is up", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const { rerender } = report();
+    await waitFor(() => expect(deviceStatusCall).toHaveBeenCalledOnce());
+
+    for (let i = 0; i < 3; i++) {
+      rerender({ online: false, pending: 0 });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      rerender({ online: true, pending: 0 });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+    }
+    expect(deviceStatusCall).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(STATUS_EVERY_MS);
+    });
+
+    expect(deviceStatusCall).toHaveBeenCalledTimes(2);
+  });
+
   it("not for a queue that moved while there was no network", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const { rerender } = report(false, 0);
@@ -172,6 +212,71 @@ describe("when it cannot be said", () => {
     });
 
     expect(deviceStatusCall).toHaveBeenCalledTimes(2);
+  });
+
+  it("is not sent again as it was once the server has turned it down, only once there is news", async () => {
+    // A 400 is this build sending something the server will not take: the
+    // same report would be refused again every minute for the whole evening.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    deviceStatusCall.mockRejectedValue(
+      new ApiError(400, "Invalid.", { version: ["Ensure this field has no more than 64 characters."] }),
+    );
+    const { rerender } = report(true, 0);
+    await waitFor(() => expect(deviceStatusCall).toHaveBeenCalledOnce());
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3 * STATUS_EVERY_MS);
+    });
+    expect(deviceStatusCall).toHaveBeenCalledOnce();
+
+    saveQueue([sale("a", "2026-08-16T21:00:00.000Z")]);
+    rerender({ online: true, pending: 1 });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(STATUS_SETTLE_MS + 100);
+    });
+
+    expect(deviceStatusCall).toHaveBeenCalledTimes(2);
+    expect(deviceStatusCall.mock.calls[1][1]).toMatchObject({ pending_sales: 1 });
+  });
+
+  it.each([401, 403])(
+    "is not sent again on a %i until the till is paired again",
+    async (status) => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      deviceStatusCall.mockRejectedValue(new ApiError(status, "Not a device of this organizer."));
+      const { rerender } = renderHook(
+        (props: { pairing: Pairing }) => useDeviceStatus(props.pairing, true, 0),
+        { initialProps: { pairing } },
+      );
+      await waitFor(() => expect(deviceStatusCall).toHaveBeenCalledOnce());
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2 * STATUS_EVERY_MS);
+      });
+      expect(deviceStatusCall).toHaveBeenCalledOnce();
+
+      const again: Pairing = { ...pairing, token: "tok-2", serial: "TILL2" };
+      rerender({ pairing: again });
+
+      await waitFor(() => expect(deviceStatusCall).toHaveBeenCalledTimes(2));
+      expect(deviceStatusCall.mock.calls[1][0]).toBe(again);
+    },
+  );
+
+  it("is sent again as it was after anything short of a refusal", async () => {
+    // A proxy's page, with no reasons in it, is not the server saying no.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    deviceStatusCall
+      .mockRejectedValueOnce(new ApiError(400, "HTTP 400", "<html>Bad Request</html>"))
+      .mockRejectedValueOnce(new Error("aborted"));
+    report();
+    await waitFor(() => expect(deviceStatusCall).toHaveBeenCalledOnce());
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2 * STATUS_EVERY_MS);
+    });
+
+    expect(deviceStatusCall).toHaveBeenCalledTimes(3);
   });
 
   it("is not tried by a device that is not paired", async () => {
