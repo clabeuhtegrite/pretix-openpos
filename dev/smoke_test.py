@@ -178,6 +178,18 @@ def main():
     check("replay is the same order", replay.get("order", {}).get("code") == sale["order"]["code"],
           f"{replay.get('order', {}).get('code')} vs {sale['order']['code']}")
 
+    print("\n-- a sale has a size limit ---------------------------------")
+    # Five hundred items at most, all lines together: one request used to be
+    # able to ask for a hundred lines of 999 tickets each.
+    status, huge = call("POST", f"/organizers/{ORG}/events/{EVENT}/openpos/checkout/", {
+        "idempotency_key": str(uuid.uuid4()),
+        "positions": [{"item": beer["id"], "count": 300}, {"item": beer["id"], "count": 201}],
+        "payment_type": "cash",
+        "cash_given": "5000.00",
+    }, token)
+    check("a basket of 501 items is refused", status == 400 and huge.get("code") == "too_many_items",
+          f"HTTP {status}: {huge}")
+
     print("\n-- price is not client-controlled --------------------------")
     # A price sent without declaring the sale offline is refused outright. It
     # used to be silently ignored, which was safe but said nothing; a 400 tells
