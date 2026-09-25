@@ -21,9 +21,9 @@ import { fromCents, toCents } from "./money";
 import { newNonce } from "./nonce";
 import { keepSoundReady, play, setSoundEnabled, soundEnabled } from "./sound";
 import {
-  clearBasket, clearPairing, clearSnapshot, enqueue, loadBasket, loadCached, loadCashier,
-  loadFailures, loadPairing, loadQueue, loadUpdateAttempt, queueRevocation, requestPersistence,
-  saveBasket, saveCached, saveCashier, savePairing, saveUpdateAttempt,
+  clearAdmissions, clearBasket, clearPairing, clearSnapshot, enqueue, loadBasket, loadCached,
+  loadCashier, loadFailures, loadPairing, loadQueue, loadUpdateAttempt, queueRevocation,
+  requestPersistence, saveBasket, saveCached, saveCashier, savePairing, saveUpdateAttempt,
 } from "./storage";
 import { useConnectivity } from "./connectivity";
 import { drainQueue } from "./sync";
@@ -102,6 +102,18 @@ function screensFor(config: PosConfig | null) {
     /** A bar till has no door to open; anything unassigned still does. */
     doorReachable: role !== "pos",
   };
+}
+
+/**
+ * Drop what this device carried for a door: the guest list, and the tickets it
+ * let in that the list did not know of yet.
+ *
+ * Every name and ticket secret of an event, on a device that has left it —
+ * unpaired, moved to another event, or made a bar till.
+ */
+function forgetDoor(): void {
+  clearSnapshot();
+  clearAdmissions();
 }
 
 /**
@@ -292,7 +304,7 @@ export default function App() {
   // new config every minute, and the answer only matters when it changes.
   const roleKnown = config !== null;
   useEffect(() => {
-    if (roleKnown && !doorReachable) clearSnapshot();
+    if (roleKnown && !doorReachable) forgetDoor();
   }, [roleKnown, doorReachable]);
 
   // A ref, not the state above: the automatic drain and a tap on "send now" can
@@ -551,7 +563,7 @@ export default function App() {
     const next = { ...pairing, event: slug };
     savePairing(next);
     // The guest list is the event being left's: nothing to scan against here.
-    clearSnapshot();
+    forgetDoor();
     setCart([]);
     setCredit(null);
     setDoorListId(null);
@@ -571,7 +583,7 @@ export default function App() {
     clearPairing();
     clearBasket();
     // A device handed back is not one that keeps the event's guest list.
-    clearSnapshot();
+    forgetDoor();
     setPairing(null);
     setLoadError(null);
     setConfig(null);

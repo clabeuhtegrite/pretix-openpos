@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
-  BASKET_KEEPS_FOR_MS, clearBasket, clearPairing, clearSnapshot, enqueue, loadBasket,
-  loadCached, loadCashier, loadDoorScans, loadFailures, loadPairing, loadQueue, loadSnapshot,
-  loadSnapshotPull, loadUpdateAttempt, requestPersistence, saveBasket, saveCached, saveCashier,
-  saveDoorScans, saveFailures, savePairing, saveQueue, saveSnapshot, saveSnapshotPull,
+  BASKET_KEEPS_FOR_MS, clearAdmissions, clearBasket, clearPairing, clearSnapshot, enqueue,
+  loadAdmissions, loadBasket, loadCached, loadCashier, loadDoorScans, loadFailures, loadPairing,
+  loadQueue, loadSnapshot,
+  loadSnapshotPull, loadUpdateAttempt, requestPersistence, saveAdmissions, saveBasket, saveCached,
+  saveCashier, saveDoorScans, saveFailures, savePairing, saveQueue, saveSnapshot, saveSnapshotPull,
   saveUpdateAttempt,
 } from "./storage";
 import { fillStorage } from "./test/setup";
@@ -226,6 +227,57 @@ describe("the offline guest list", () => {
 
     expect(() => clearSnapshot()).not.toThrow();
     removeItem.mockRestore();
+  });
+});
+
+describe("who the door let in", () => {
+  it("survives a reload, per event", () => {
+    saveAdmissions("festival", { 7: { alice: 1 } });
+
+    expect(loadAdmissions("festival")).toEqual({ 7: { alice: 1 } });
+    expect(loadAdmissions("gala")).toEqual({});
+  });
+
+  it("leaves nothing on disk once there is nothing to remember", () => {
+    saveAdmissions("festival", { 7: { alice: 1 } });
+
+    saveAdmissions("festival", {});
+
+    expect(localStorage.getItem("openpos.admitted.v1.festival")).toBeNull();
+  });
+
+  it("reads as nothing when what is on disk is not a record", () => {
+    localStorage.setItem("openpos.admitted.v1.festival", JSON.stringify(["alice"]));
+
+    expect(loadAdmissions("festival")).toEqual({});
+  });
+
+  it("is forgotten for every event at once, and nothing else with it", () => {
+    saveAdmissions("festival", { 7: { alice: 1 } });
+    saveAdmissions("gala", { 21: { bob: 1 } });
+    saveSnapshot(snapshot);
+
+    clearAdmissions();
+
+    expect(loadAdmissions("festival")).toEqual({});
+    expect(loadAdmissions("gala")).toEqual({});
+    expect(loadSnapshot()).toEqual(snapshot);
+  });
+
+  it("does not stop the door when storage will not take it", () => {
+    fillStorage();
+
+    expect(() => saveAdmissions("festival", { 7: { alice: 1 } })).not.toThrow();
+  });
+
+  it("does not stop the till when storage cannot even be listed", () => {
+    const key = vi.spyOn(localStorage, "key").mockImplementation(() => {
+      throw new Error("SecurityError");
+    });
+    saveAdmissions("festival", { 7: { alice: 1 } });
+
+    expect(() => clearAdmissions()).not.toThrow();
+    key.mockRestore();
   });
 });
 

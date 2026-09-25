@@ -67,7 +67,8 @@ import { t } from "./i18n";
 import { formatMoney } from "./money";
 import {
   clearBasket, loadBasket, loadCashier, loadDeviceReport, loadPairing, loadQueue, loadRevocations,
-  loadSnapshot, savePairing, saveBasket, saveDeviceReport, saveFailures, saveQueue, saveSnapshot,
+  loadAdmissions, loadSnapshot, saveAdmissions, savePairing, saveBasket, saveDeviceReport,
+  saveFailures, saveQueue, saveSnapshot,
 } from "./storage";
 import { fillStorage } from "./test/setup";
 import { noTakings } from "./test/takings";
@@ -1752,6 +1753,7 @@ describe("the guest list carried for a dropout", () => {
       list: { id: 7, name: "Porte" }, generated: "2026-08-16T20:00:00.000Z",
       tickets: [{ secret: "alice", item: 20, name: "Alice", used: false }], truncated: false,
     });
+    saveAdmissions("festival", { 7: { alice: Date.now() } });
     apiMock.config.mockResolvedValue(config({
       device: { serial: "TILL1", name: "Caisse bar", role: "pos" },
     }));
@@ -1765,6 +1767,7 @@ describe("the guest list carried for a dropout", () => {
 
     expect(apiMock.offlineSnapshot).not.toHaveBeenCalled();
     expect(loadSnapshot()).toBeNull();
+    expect(loadAdmissions("festival")).toEqual({});
     vi.useRealTimers();
   });
 
@@ -1777,7 +1780,8 @@ describe("the guest list carried for a dropout", () => {
     await waitFor(() => expect(apiMock.offlineSnapshot).toHaveBeenCalledWith(pairing, 7));
   });
 
-  it("is forgotten when the till is unpaired", async () => {
+  it("is forgotten when the till is unpaired, with who the door let in", async () => {
+    saveAdmissions("festival", { 7: { alice: Date.now() } });
     const { user } = show();
     await ready();
     await waitFor(() => expect(loadSnapshot()).not.toBeNull());
@@ -1787,6 +1791,7 @@ describe("the guest list carried for a dropout", () => {
     await user.click(await screen.findByRole("button", { name: new RegExp(t("settings.unpair")) }));
 
     expect(loadSnapshot()).toBeNull();
+    expect(loadAdmissions("festival")).toEqual({});
     vi.restoreAllMocks();
   });
 
@@ -1816,9 +1821,12 @@ describe("the guest list carried for a dropout", () => {
     await user.click(screen.getByRole("button", { name: "close-scanner" }));
 
     await user.click(screen.getByRole("button", { name: "settings" }));
+    saveAdmissions("festival", { 8: { alice: Date.now() } });
     let heldAtSwitch: unknown = "unread";
+    let admittedAtSwitch: unknown = "unread";
     apiMock.config.mockImplementationOnce(async () => {
       heldAtSwitch = loadSnapshot();
+      admittedAtSwitch = loadAdmissions("festival");
       return config({
         event: { ...config().event, slug: "gala", name: "Gala" },
         checkin: {
@@ -1832,8 +1840,10 @@ describe("the guest list carried for a dropout", () => {
     await waitFor(() =>
       expect(apiMock.offlineSnapshot).toHaveBeenCalledWith({ ...pairing, event: "gala" }, 21),
     );
-    // The festival's guest list was gone before the gala's was asked for.
+    // The festival's guest list was gone before the gala's was asked for,
+    // and so was the record of who its door let in.
     expect(heldAtSwitch).toBeNull();
+    expect(admittedAtSwitch).toEqual({});
   });
 });
 

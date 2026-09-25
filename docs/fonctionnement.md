@@ -1187,11 +1187,24 @@ Un survendu reste un survendu : c'est un fait à réconcilier après la soirée,
   risque d'éviction, mais il n'y a pas de miracle : l'appareil *est* le registre
   tant qu'il n'a pas parlé.
 - **Le scan hors ligne ne voit que sa liste embarquée.** Un billet vendu en ligne
-  pendant la coupure y est absent : il sera refusé à la porte. Un billet déjà
-  scanné à une autre porte pendant la coupure sera accepté ici, et enregistré par
-  pretix comme un passage forcé. Et la liste embarquée ne répond **que pour sa
-  propre porte** : changer de liste pendant la coupure affiche « pas de liste
-  embarquée » plutôt que de faire entrer les invités de l'autre porte.
+  pendant la coupure y est absent : il sera refusé à la porte. Le bandeau hors
+  ligne dit donc de quand date la liste — « vérification sur les 412 billets de
+  la liste de 21:14 », avec le jour si ce n'est pas aujourd'hui — pour qu'on
+  sache que c'est la liste qui ne connaît pas un billet acheté à 21:40, pas le
+  billet qui est faux. Un billet déjà scanné à une autre porte pendant la
+  coupure sera accepté ici, et enregistré par pretix comme un passage forcé. Et
+  la liste embarquée ne répond **que pour sa propre porte** : changer de liste
+  pendant la coupure affiche « pas de liste embarquée » plutôt que de faire
+  entrer les invités de l'autre porte.
+- **Mais cette porte-ci ne fait pas entrer deux fois le même billet.** Tout
+  billet qu'elle a fait entrer — en ligne, ou hors ligne sur sa liste — est noté
+  sur l'appareil, et refusé « déjà scanné » s'il se représente pendant une
+  coupure, tant que la liste embarquée ne le connaît pas encore comme utilisé.
+  Avant, seule la file d'attente en gardait la trace : une fois la file envoyée,
+  une nouvelle coupure et l'écran rouvert, le même billet repassait au vert ; et
+  un billet scanné en ligne n'était noté nulle part. La note s'efface dès que la
+  liste embarquée marque le billet utilisé, au bout de 36 h sinon, et avec la
+  liste (désappairage, changement d'événement, rôle caisse).
 - **Pas de moteur de règles hors ligne.** Les règles de check-in de pretix
   (horaires, quotas d'entrée) ne s'appliquent pas à un scan hors ligne : la
   personne est entrée sur la réponse du téléphone, et la reprise l'enregistre

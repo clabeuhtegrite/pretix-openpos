@@ -116,6 +116,48 @@ export function saveDoorScans(event: string, scans: DoorScans): void {
   }
 }
 
+const ADMISSIONS_PREFIX = "openpos.admitted.v1.";
+
+/** List id → ticket secret → when: `Admissions` in offline.ts, which says why. */
+type AdmissionRecord = Record<string, Record<string, number>>;
+
+/**
+ * The tickets let in at this device, per event — see Admissions in offline.ts.
+ *
+ * Kept per event, and dropped with the guest list: a device that leaves the
+ * event, or the door, has no use for either.
+ */
+export function loadAdmissions(event: string): AdmissionRecord {
+  const saved = readJson<AdmissionRecord | null>(`${ADMISSIONS_PREFIX}${event}`, null);
+  return saved && typeof saved === "object" && !Array.isArray(saved) ? saved : {};
+}
+
+export function saveAdmissions(event: string, admissions: AdmissionRecord): void {
+  try {
+    if (Object.keys(admissions).length) {
+      localStorage.setItem(`${ADMISSIONS_PREFIX}${event}`, JSON.stringify(admissions));
+    } else {
+      localStorage.removeItem(`${ADMISSIONS_PREFIX}${event}`);
+    }
+  } catch {
+    // Storage full: the record holds for as long as the door screen is open,
+    // and the queue still covers what was admitted offline.
+  }
+}
+
+export function clearAdmissions(): void {
+  try {
+    const keys: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key?.startsWith(ADMISSIONS_PREFIX)) keys.push(key);
+    }
+    keys.forEach((key) => localStorage.removeItem(key));
+  } catch {
+    // Nothing more to do about a storage that refuses to be read.
+  }
+}
+
 export function loadSnapshot(): OfflineSnapshot | null {
   return readJson<OfflineSnapshot | null>(SNAPSHOT_KEY, null);
 }

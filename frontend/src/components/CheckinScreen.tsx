@@ -3,14 +3,19 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, isRetryable } from "../api";
 import { useConnectivity } from "../connectivity";
 import { addScans, doorCount, NO_SCANS, subtractScans, waitingScans } from "../doorCount";
-import { t, type MessageKey } from "../i18n";
+import { describeError } from "../errors";
+import { locale, t, type MessageKey } from "../i18n";
 import { newNonce } from "../nonce";
-import { indexSnapshot, offlineVerdict } from "../offline";
+import {
+  admittedOn, indexSnapshot, offlineVerdict, pruneAdmissions, recordAdmission, type Admissions,
+} from "../offline";
 import { play } from "../sound";
-import { enqueue, loadDoorScans, loadQueue, saveDoorScans } from "../storage";
+import {
+  enqueue, loadAdmissions, loadDoorScans, loadQueue, saveAdmissions, saveDoorScans,
+} from "../storage";
 import type {
-  Attendance, CheckinListInfo, DoorScans, Pairing, QueuedCheckin, QueueEntry, RedeemResult,
-  ScanFigures,
+  Attendance, CheckinListInfo, DoorScans, OfflineSnapshot, Pairing, QueuedCheckin, QueueEntry,
+  RedeemResult, ScanFigures,
 } from "../types";
 import { useBackClose } from "../useBackClose";
 import { useOfflineSnapshot } from "../useOfflineSnapshot";
@@ -113,6 +118,36 @@ function reasonLabel(result: RedeemResult): string {
   return label === key ? t("reason.unknown") : label;
 }
 
+/**
+ * What the offline line says about the guest list: how many tickets, and from
+ * when.
+ *
+ * The time is the part that matters. A list pulled at 21:14 knows nothing of
+ * the tickets sold at 21:40, and a door that can read "liste de 21:14" knows
+ * why a ticket bought ten minutes ago is refused — and that it is the list,
+ * not the ticket. A list from another day says the day too.
+ */
+function offlineLine(snapshot: OfflineSnapshot, count: number, now = new Date()): string {
+  const at = new Date(snapshot.generated);
+  if (Number.isNaN(at.getTime())) return t("offline.scanningUndated", { n: count });
+  const time = at.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
+  if (at.toDateString() === now.toDateString()) return t("offline.scanning", { n: count, time });
+  const date = at.toLocaleDateString(locale, { day: "numeric", month: "long" });
+  return t("offline.scanningOld", { n: count, date, time });
+}
+
+/**
+ * Whether a failed scan is worth answering from the guest list here.
+ *
+ * "Not now" rather than "no": the network died under the scan, pretix is
+ * restarting, or it is asking this device to slow down (429) — none of which
+ * processed the scan, and all of which a queued replay under the same nonce
+ * settles. A refusal of the device itself is still an error.
+ */
+function answerable(error: unknown): boolean {
+  return isRetryable(error) || (error instanceof ApiError && error.status === 429);
+}
+
 interface Props {
   pairing: Pairing;
   lists: CheckinListInfo[];
@@ -151,12 +186,21 @@ interface Props {
    * somebody happened to relaunch the app.
    */
   onQueued?: () => void;
+  /**
+   * Told whether the door is in the middle of something: a scan being
+   * answered, a verdict on screen, a search or the head count open, an error
+   * to read. The app waits for none of that before it applies an update, so a
+   * reload never lands on a verdict somebody is reading.
+   */
+  onBusyChange?: (busy: boolean) => void;
+  /** A strip over the picture, under the title — the new-version bar. */
+  notice?: React.ReactNode;
   onClose: () => void;
 }
 
 export default function CheckinScreen({
   pairing, lists, defaultListId, admissionItems, onListChange, onSell, pending = 0, onQueued,
-  onClose,
+  onBusyChange, notice, onClose,
 }: Props) {
   const [listId, setListId] = useState<number | null>(
     defaultListId ?? (lists.length ? lists[0].id : null),
@@ -207,14 +251,46 @@ export default function CheckinScreen({
   // rather than with the other door's.
   const snapshotIndex = useMemo(() => indexSnapshot(snapshot), [snapshot]);
   const snapshotUsable = snapshotIndex !== null && snapshotIndex.listId === listId;
-  // Admitted on this device since the snapshot was taken, so a second scan of
-  // the same ticket is caught without waiting for the network to come back.
-  // Refusals are in the queue too, and do not count as the ticket being used.
-  const scannedHereRef = useRef<Set<string>>(
-    new Set(
-      loadQueue().flatMap((e) => (e.kind === "checkin" && !e.refused ? [e.secret] : [])),
-    ),
+  // Admitted on this device and not yet in the guest list, so a second scan of
+  // the same ticket is caught without waiting for the network to come back —
+  // see Admissions in offline.ts. Read from the device rather than rebuilt
+  // from the queue: the queue empties as soon as it is sent, and the next
+  // dropout then let the same people in again.
+  const admissionsRef = useRef<Admissions | null>(null);
+  if (admissionsRef.current === null) admissionsRef.current = loadAdmissions(pairing.event);
+  // Whatever the guest list held now covers is dropped, on disk too: here on
+  // opening, and at every pull while the door is open.
+  useEffect(() => {
+    const current = admissionsRef.current ?? {};
+    const pruned = pruneAdmissions(current, snapshot, Date.now());
+    admissionsRef.current = pruned;
+    if (pruned !== current) saveAdmissions(pairing.event, pruned);
+  }, [snapshot, pairing.event]);
+
+  const remember = useCallback(
+    (list: number, code: string) => {
+      admissionsRef.current = recordAdmission(admissionsRef.current ?? {}, list, code, Date.now());
+      saveAdmissions(pairing.event, admissionsRef.current);
+    },
+    [pairing.event],
   );
+
+  /**
+   * Every ticket let in on `list` that the guest list may not know of yet.
+   *
+   * The queue too, for what it holds: scans queued by a build that kept no
+   * other record, and a record that storage refused to write. Refusals are
+   * in the queue as well, and do not count as the ticket being used.
+   */
+  const admittedHere = useCallback((list: number): Set<string> => {
+    const admitted = admittedOn(admissionsRef.current ?? {}, list);
+    for (const entry of loadQueue()) {
+      if (entry.kind === "checkin" && !entry.refused && entry.list === list) {
+        admitted.add(entry.secret);
+      }
+    }
+    return admitted;
+  }, []);
 
   // Refs, not state: these gate the decode callback and must not re-render it.
   const lastCodeRef = useRef<{ code: string; at: number } | null>(null);
@@ -256,7 +332,7 @@ export default function CheckinScreen({
       if (attendanceRunRef.current !== run) return;
       // The count is informational: a failure leaves the last known figure on
       // the button rather than taking the operator out of scanning.
-      setAttendanceError(e instanceof ApiError && e.isNetwork ? t("error.offline") : String(e));
+      setAttendanceError(describeError(e));
     } finally {
       if (attendanceRunRef.current === run) setAttendanceBusy(false);
     }
@@ -313,7 +389,7 @@ export default function CheckinScreen({
    */
   const answerHere = useCallback(
     (code: string, nonce: string, list: number): RedeemResult => {
-      const result = offlineVerdict(snapshotIndex, list, code, scannedHereRef.current);
+      const result = offlineVerdict(snapshotIndex, list, code, admittedHere(list));
       const admitted = result.status === "ok";
       const entry: QueuedCheckin = {
         kind: "checkin",
@@ -334,12 +410,12 @@ export default function CheckinScreen({
       enqueue(entry);
       // Only once it is on disk: a scan that could not be kept must not come
       // back as "already scanned" when it is presented again.
-      if (admitted) scannedHereRef.current.add(code);
+      if (admitted) remember(list, code);
       setQueueSeen((seen) => [...seen, entry]);
       onQueued?.();
       return result;
     },
-    [snapshotIndex, pairing.event, admissionItems, onQueued],
+    [snapshotIndex, pairing.event, admissionItems, onQueued, admittedHere, remember],
   );
 
   const submit = useCallback(
@@ -373,12 +449,11 @@ export default function CheckinScreen({
               timeoutMs: LIVE_SCAN_TIMEOUT_MS,
             });
           } catch (e) {
-            // "Not now" rather than "no": the network died under the scan, or
-            // pretix is restarting. That used to end on an error banner with
-            // the scan kept nowhere, so a person waved in meanwhile never
-            // reached pretix. It is answered here instead, like any scan made
-            // offline. A refusal of the device itself is still an error.
-            if (!isRetryable(e)) throw e;
+            // "Not now" rather than "no" (see answerable). That used to end on
+            // an error banner with the scan kept nowhere, so a person waved in
+            // meanwhile never reached pretix. It is answered here instead,
+            // like any scan made offline.
+            if (!answerable(e)) throw e;
           }
         }
         const answeredHere = result === null;
@@ -387,6 +462,10 @@ export default function CheckinScreen({
           // pretix hears about it — with this timestamp — later.
           result = answerHere(code, nonce, listId);
         } else {
+          // pretix has it — but the guest list on this device will not until
+          // its next pull, and a dropout before then would let the same
+          // ticket in again from it.
+          if (result.status === "ok") remember(listId, code);
           liveTotalRef.current = addScans(
             liveTotalRef.current,
             result.status !== "ok"
@@ -428,19 +507,27 @@ export default function CheckinScreen({
         // keep: let the operator retry the same ticket.
         lastCodeRef.current = null;
         setFatal(
-          e instanceof ApiError
-            ? e.message
-            : e instanceof Error && e.message === "queue-write-failed"
-              ? t("checkin.queueFailed")
-              : String(e),
+          e instanceof Error && e.message === "queue-write-failed"
+            ? t("checkin.queueFailed")
+            : describeError(e),
         );
       } finally {
         busyRef.current = false;
         setBusy(false);
       }
     },
-    [listId, pairing, loadAttendance, admissionItems, online, answerHere],
+    [listId, pairing, loadAttendance, admissionItems, online, answerHere, remember],
   );
+
+  // What the app waits on before an update: see onBusyChange. Said false on
+  // the way out too, so a door closed mid-verdict does not hold it for ever.
+  const occupied = busy || verdict !== null || searchOpen || attendanceOpen || fatal !== null;
+  const onBusyChangeRef = useRef(onBusyChange);
+  onBusyChangeRef.current = onBusyChange;
+  useEffect(() => {
+    onBusyChangeRef.current?.(occupied);
+  }, [occupied]);
+  useEffect(() => () => onBusyChangeRef.current?.(false), []);
 
   if (!lists.length) {
     return (
@@ -479,6 +566,7 @@ export default function CheckinScreen({
       // the bottom of this very screen; the hint used to say "there is nothing
       // to type" right above it.
       errorHint={t("scan.findByName", { search: t("search.open") })}
+      banner={notice}
       footer={
         <div className="scanner-footer">
           {lists.length > 1 && (
@@ -532,8 +620,8 @@ export default function CheckinScreen({
           </div>
           {!online && (
             <div className="scanner-offline">
-              {snapshotUsable
-                ? t("offline.scanning", { n: snapshotIndex.count })
+              {snapshotUsable && snapshot
+                ? offlineLine(snapshot, snapshotIndex.count)
                 : t("offline.noSnapshot")}
             </div>
           )}
