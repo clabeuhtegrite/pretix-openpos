@@ -127,14 +127,23 @@ function TerminalPrompt({
     );
   }
 
-  // The server has said nothing for a while, and the reader may or may not
-  // still be asking for the card. The one screen that knows is the reader's
-  // own, so that is where the cashier is sent — with the choice to ask again
-  // here, or to take the sale in cash, which the toggle above now allows.
+  // The server has said nothing for a while — or SumUp has said nothing to
+  // it — and the reader may or may not still be asking for the card. The one
+  // screen that knows is the reader's own, so that is where the cashier is
+  // sent, with the choice to ask again here, or to take the sale in cash,
+  // which the toggle above now allows. A reader that has moved on to another
+  // payment has nothing left to show about this one: cash, and the till
+  // follows the payment up.
   if (terminal?.unanswered && terminal.phase !== "paid" && terminal.phase !== "failed") {
     return (
       <div className="pay-reader is-waiting">
-        <p className="pay-reader-prompt">{t("payment.readerUnanswered")}</p>
+        <p className="pay-reader-prompt">
+          {terminal.unansweredBy === "reader"
+            ? t("payment.readerMovedOn")
+            : terminal.unansweredBy === "sumup"
+              ? t("payment.readerSumupUnanswered")
+              : t("payment.readerUnanswered")}
+        </p>
         <button
           className="btn"
           style={{ marginTop: 12 }}

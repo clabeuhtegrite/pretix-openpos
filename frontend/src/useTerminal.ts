@@ -105,6 +105,13 @@ export interface TerminalState {
    * ``TERMINAL_UNANSWERED_MS``: the panel offers the way out.
    */
   unanswered: boolean;
+  /**
+   * Who went quiet, when it was not the server itself: ``"sumup"`` while the
+   * server answers but could not ask SumUp, ``"reader"`` once the reader has
+   * moved on and nothing on this till can finish the payment any more. Only
+   * the words of the way out change with it.
+   */
+  unansweredBy?: "sumup" | "reader";
   /** "Try again" has been pressed, and its question is on its way. */
   asking: boolean;
   /** Something to say beside the wait that is not a failure: a stop the server asked to delay. */
@@ -211,6 +218,8 @@ export function useTerminal(
   /** The key of the payment a stop is being asked for, while it is being asked. */
   const cancelInFlightRef = useRef<string | null>(null);
   const cancelTimerRef = useRef<number | undefined>(undefined);
+  /** The payment the reader has moved on from, if the one on screen is it — see sendCancel. */
+  const movedOnRef = useRef<string | null>(null);
 
   /** Change the state of the payment `key`, and of no other. */
   const patch = useCallback((key: string, changes: Partial<TerminalState>) => {
@@ -236,10 +245,32 @@ export function useTerminal(
       // landed after the panel was closed, a poll overtaken by a retry. It
       // describes something that is no longer on screen.
       if (keyRef.current !== key) return;
+      if (payment.status === "pending" && movedOnRef.current === key) {
+        // Still open by SumUp's account, and no longer on the reader: an
+        // answer, so heard, but not one that takes the way out away — nothing
+        // on this till can finish this payment now.
+        heard();
+        patch(key, {
+          amount: payment.amount, currency: payment.currency, phase: "waiting", message: null,
+          stalled: false, cancelling: false, unanswered: true, unansweredBy: "reader",
+        });
+        return;
+      }
+      if (payment.status === "pending" && payment.sumup_unreachable) {
+        // The server answered from what it last knew, because SumUp could not
+        // be asked. That is no news of the payment, so it is not counted as
+        // any: held long enough, the way out comes on as it would for a
+        // server gone quiet, worded for SumUp.
+        patch(key, {
+          amount: payment.amount, currency: payment.currency, phase: "waiting", message: null,
+          stalled: false, unansweredBy: "sumup",
+        });
+        return;
+      }
       heard();
       const settled = {
         amount: payment.amount, currency: payment.currency, stalled: false, unanswered: false,
-        notice: null,
+        unansweredBy: undefined, notice: null,
       };
       if (payment.status === "successful") {
         patch(key, { ...settled, phase: "paid", message: null, cancelling: false });
@@ -287,6 +318,7 @@ export function useTerminal(
     keyRef.current = null;
     attemptRef.current = null;
     stopWantedRef.current = null;
+    movedOnRef.current = null;
     window.clearTimeout(cancelTimerRef.current);
     stateRef.current = null;
     setState(null);
@@ -312,6 +344,19 @@ export function useTerminal(
         }
       } catch (err) {
         if (keyRef.current !== key) return;
+        if (errorCode(err) === "reader_moved_on") {
+          // The reader has gone on to another payment — this till's next
+          // customer, or the other till's — or this one has held it past its
+          // five minutes, and the server left the reader alone rather than
+          // stop somebody else's payment. The answer still says how this one
+          // stands: charged, over, or open with nothing here able to finish
+          // it, which is the way out — the payment is written down on the way
+          // and followed up, in case the card goes through after all.
+          window.clearTimeout(cancelTimerRef.current);
+          movedOnRef.current = key;
+          apply(key, (err as ApiError).body as TerminalPayment);
+          return;
+        }
         if (isRefusal(err)) {
           // No such payment, no reader on this till any more: answers, and
           // they end the wait.
@@ -420,6 +465,7 @@ export function useTerminal(
       keyRef.current = key;
       attemptRef.current = { positions, fallback, at: new Date().toISOString() };
       stopWantedRef.current = null;
+      movedOnRef.current = null;
       window.clearTimeout(cancelTimerRef.current);
       heard();
       const next: TerminalState = {
@@ -455,6 +501,7 @@ export function useTerminal(
       keyRef.current = key;
       attemptRef.current = { positions, fallback, at };
       stopWantedRef.current = null;
+      movedOnRef.current = null;
       window.clearTimeout(cancelTimerRef.current);
       heard();
       const base: TerminalState = {
@@ -582,8 +629,9 @@ export function useTerminal(
         }
         // Anything else — no network, a fault, the device refused — is a
         // question that could not be answered. The reader carries on
-        // regardless, and so does the wait.
-        patch(key, { stalled: true });
+        // regardless, and so does the wait. It is the server that has gone
+        // quiet now, whatever it last said about SumUp.
+        patch(key, { stalled: true, ...(movedOnRef.current === key ? {} : { unansweredBy: undefined }) });
         next(TERMINAL_POLL_MS);
       }
     };

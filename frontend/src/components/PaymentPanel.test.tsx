@@ -998,6 +998,22 @@ describe("a reader till that cannot reach the server", () => {
     expect(screen.queryByText(t("payment.readerPrompt"))).toBeNull();
   });
 
+  it("says it is SumUp that has gone quiet when the server says so", () => {
+    reader({ terminal: { ...waiting, unanswered: true, unansweredBy: "sumup" }, initialMethod: "card" });
+
+    expect(screen.getByText(t("payment.readerSumupUnanswered"))).toBeDefined();
+    expect(screen.queryByText(t("payment.readerUnanswered"))).toBeNull();
+    expect(screen.getByRole("button", { name: t("payment.cash") })).toHaveProperty("disabled", false);
+  });
+
+  it("says the reader has moved on, and still lets the sale be taken in cash", () => {
+    reader({ terminal: { ...waiting, unanswered: true, unansweredBy: "reader" }, initialMethod: "card" });
+
+    expect(screen.getByText(t("payment.readerMovedOn"))).toBeDefined();
+    expect(screen.getByRole("button", { name: t("payment.cash") })).toHaveProperty("disabled", false);
+    expect(screen.getByRole("button", { name: t("payment.card") })).toHaveProperty("disabled", true);
+  });
+
   it("asks again under the same payment from there", async () => {
     const user = userEvent.setup();
     const { onTerminalRetry, onTerminalStart } = reader({

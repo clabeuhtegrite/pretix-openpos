@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, isRefusal } from "./api";
+import { api, ApiError, errorCode, isRefusal } from "./api";
 import { dropOrphan, loadOrphans, updateOrphan } from "./storage";
-import type { OrphanPayment, Pairing } from "./types";
+import type { OrphanPayment, Pairing, TerminalPayment } from "./types";
 import { READER_HELD_MS } from "./useTerminal";
 
 /** How often the till asks about the reader payments it left aside, while there are any. */
@@ -48,7 +48,16 @@ async function check(pairing: Pairing, orphan: OrphanPayment, readerBusy: boolea
       // cash. Asked once: written down first, so a reload in between does
       // not ask a second time.
       updateOrphan(orphan.key, { cancelAsked: true });
-      payment = await api.terminalCancel(where, orphan.key);
+      try {
+        payment = await api.terminalCancel(where, orphan.key);
+      } catch (err) {
+        // The reader has moved on — to this till's next customer, often —
+        // and the server left it alone rather than stop somebody else's
+        // payment. Not a refusal of this one: the answer still says how it
+        // stands, and a payment still open is asked about again next round.
+        if (errorCode(err) !== "reader_moved_on") throw err;
+        payment = (err as ApiError).body as TerminalPayment;
+      }
     }
     if (payment.status === "successful") {
       updateOrphan(orphan.key, { paid: true, amount: payment.amount, currency: payment.currency });

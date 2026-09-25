@@ -341,6 +341,12 @@ export interface TerminalPayment {
   currency: string;
   /** Why it did not go through, in words a cashier can read out. */
   failure: string;
+  /**
+   * The server could not ask SumUp this time, and answered from what it last
+   * knew: "pending" then means nobody could find out. Absent from servers
+   * before 0.25.0.
+   */
+  sumup_unreachable?: boolean;
 }
 
 export interface SaleResult {

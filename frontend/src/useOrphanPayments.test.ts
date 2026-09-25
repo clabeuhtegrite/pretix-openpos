@@ -87,6 +87,46 @@ describe("a payment still on the reader", () => {
     expect(terminalCancel).toHaveBeenCalledOnce();
   });
 
+  it("is kept when the reader has moved on, and not stopped a second time", async () => {
+    // The till's next customer paid by card: the reader is theirs now, and
+    // the server left it alone. Still open by SumUp's account, so still
+    // followed — a refusal would have had it forgotten, and a card tapped
+    // late would then have gone unsaid.
+    terminalCancel.mockRejectedValue(
+      new ApiError(400, "moved on", {
+        detail: ["moved on"], code: "reader_moved_on", ...reader("pending"),
+        sumup_unreachable: false,
+      }),
+    );
+    addOrphan(aside("k-1", 2 * ORPHAN_UNKNOWN_AFTER_MS));
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    follow();
+    await waitFor(() => expect(terminalCancel).toHaveBeenCalledOnce());
+    await waitFor(() => expect(loadOrphans()[0]?.cancelAsked).toBe(true));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ORPHAN_CHECK_MS);
+    });
+
+    expect(terminalStatus).toHaveBeenCalledTimes(2);
+    expect(terminalCancel).toHaveBeenCalledOnce();
+    expect(loadOrphans()).toEqual([expect.objectContaining({ key: "k-1", cancelAsked: true })]);
+    expect(loadOrphans()[0].paid).toBeUndefined();
+  });
+
+  it("is said when the reader had moved on and the card had gone through", async () => {
+    terminalCancel.mockRejectedValue(
+      new ApiError(400, "moved on", {
+        detail: ["moved on"], code: "reader_moved_on", ...reader("successful"),
+      }),
+    );
+    addOrphan(aside("k-1", 60_000));
+    const { result } = follow();
+
+    await waitFor(() => expect(result.current.latePaid).toHaveLength(1));
+    expect(result.current.latePaid[0]).toMatchObject({ key: "k-1", paid: true, amount: "4.50" });
+  });
+
   it("is left on the reader while this till has a payment of its own on it", async () => {
     addOrphan(aside("k-1", 60_000));
     follow(true, true);

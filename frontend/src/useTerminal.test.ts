@@ -41,6 +41,14 @@ function refusal(detail: string, code?: string) {
   return new ApiError(400, detail, { detail: [detail], ...(code ? { code } : {}) });
 }
 
+/** The server's answer to a stop it did not send: the reader has moved on. */
+function movedOn(status: "pending" | "successful" | "failed", failure = "") {
+  const detail = "This payment is no longer the one on the card reader, so the reader was left alone.";
+  return new ApiError(400, detail, {
+    detail: [detail], code: "reader_moved_on", ...payment(status, failure), sumup_unreachable: false,
+  });
+}
+
 /** A request whose answer the test hands over when it chooses to. */
 function deferred<T>() {
   let resolve: (value: T) => void = () => {};
@@ -507,6 +515,110 @@ describe("taking the basket back off the reader", () => {
     );
   });
 
+  it("offers the way out for good when the reader has moved on", async () => {
+    // The reader is somebody else's now, or this payment held it past its
+    // five minutes: the server left it alone, and nothing on this till can
+    // finish the payment. Waiting, never failed — SumUp has not said it did.
+    apiMock.terminalStart.mockResolvedValue(payment("pending"));
+    apiMock.terminalStatus.mockResolvedValue(payment("pending"));
+    apiMock.terminalCancel.mockRejectedValue(movedOn("pending"));
+    const { result } = renderHook(() => useTerminal(pairing, vi.fn()));
+    await act(async () => {
+      await result.current.start("key-1", [], basket);
+    });
+
+    await act(async () => {
+      await result.current.cancel();
+    });
+
+    expect(result.current.state).toMatchObject({
+      phase: "waiting", cancelling: false, stalled: false, unanswered: true, unansweredBy: "reader",
+    });
+    // The polls go on, and an answer that the payment is still open does not
+    // take the way out away.
+    await poll();
+    expect(apiMock.terminalStatus).toHaveBeenCalled();
+    expect(result.current.state).toMatchObject({ unanswered: true, unansweredBy: "reader" });
+  });
+
+  it("writes a payment the reader moved on from down on the way out", async () => {
+    apiMock.terminalStart.mockResolvedValue(payment("pending"));
+    apiMock.terminalCancel.mockRejectedValue(movedOn("pending"));
+    const { result } = renderHook(() => useTerminal(pairing, vi.fn()));
+    await act(async () => {
+      await result.current.start("key-1", [], basket);
+    });
+    await act(async () => {
+      await result.current.cancel();
+    });
+
+    act(() => {
+      result.current.abandon();
+    });
+
+    expect(loadOrphans()).toEqual([expect.objectContaining({ key: "key-1", amount: "12.34" })]);
+    expect(result.current.state).toBeNull();
+  });
+
+  it("records the sale when the reader had moved on after the card went through", async () => {
+    const onPaid = vi.fn();
+    apiMock.terminalStart.mockResolvedValue(payment("pending"));
+    apiMock.terminalCancel.mockRejectedValue(movedOn("successful"));
+    const { result } = renderHook(() => useTerminal(pairing, onPaid));
+    await act(async () => {
+      await result.current.start("key-1", [], basket);
+    });
+
+    await act(async () => {
+      await result.current.cancel();
+    });
+
+    expect(onPaid).toHaveBeenCalledOnce();
+    expect(onPaid).toHaveBeenCalledWith(expect.objectContaining({ status: "successful" }), "key-1");
+    expect(result.current.state?.phase).toBe("paid");
+  });
+
+  it("says how it ended when the reader had moved on and the payment was over", async () => {
+    apiMock.terminalStart.mockResolvedValue(payment("pending"));
+    apiMock.terminalCancel.mockRejectedValue(movedOn("failed", "TIMED_OUT"));
+    const { result } = renderHook(() => useTerminal(pairing, vi.fn()));
+    await act(async () => {
+      await result.current.start("key-1", [], basket);
+    });
+
+    await act(async () => {
+      await result.current.cancel();
+    });
+
+    expect(result.current.state?.phase).toBe("failed");
+    expect(result.current.state?.message).toBe(failureMessage("TIMED_OUT"));
+  });
+
+  it("starts the next payment with nothing of the one the reader moved on from", async () => {
+    apiMock.terminalStart.mockResolvedValue(payment("pending"));
+    apiMock.terminalStatus.mockResolvedValue(payment("pending"));
+    apiMock.terminalCancel.mockRejectedValue(movedOn("pending"));
+    const { result } = renderHook(() => useTerminal(pairing, vi.fn()));
+    await act(async () => {
+      await result.current.start("key-1", [], basket);
+    });
+    await act(async () => {
+      await result.current.cancel();
+    });
+    act(() => {
+      result.current.abandon();
+    });
+
+    await act(async () => {
+      await result.current.start("key-2", [], basket);
+    });
+    await poll();
+
+    expect(result.current.state).toMatchObject({
+      key: "key-2", phase: "waiting", unanswered: false, unansweredBy: undefined,
+    });
+  });
+
   it("does nothing at all when no payment was ever started", async () => {
     const { result } = renderHook(() => useTerminal(pairing, vi.fn()));
 
@@ -815,6 +927,47 @@ describe("when the server stops answering", () => {
 
     expect(result.current.state?.unanswered).toBe(false);
     expect(result.current.state?.stalled).toBe(false);
+  });
+
+  it("offers it when the server answers but could not ask SumUp, and says so", async () => {
+    // "Pending" from the server's row, because SumUp was out of reach: no
+    // news of the payment, so no reason to keep the cashier waiting on it
+    // for ever.
+    apiMock.terminalStart.mockResolvedValue(payment("pending"));
+    apiMock.terminalStatus.mockResolvedValue({ ...payment("pending"), sumup_unreachable: true });
+    const { result } = renderHook(() => useTerminal(pairing, vi.fn()));
+    await act(async () => {
+      await result.current.start("key-1", [], basket);
+    });
+
+    await wait(TERMINAL_UNANSWERED_MS - 2000);
+    expect(result.current.state).toMatchObject({ unanswered: false, unansweredBy: "sumup" });
+    await wait(3000);
+
+    expect(result.current.state).toMatchObject({
+      phase: "waiting", stalled: false, unanswered: true, unansweredBy: "sumup",
+    });
+
+    // SumUp answers again: the way out goes, and so do the words about it.
+    apiMock.terminalStatus.mockResolvedValue(payment("pending"));
+    await poll();
+    expect(result.current.state).toMatchObject({ unanswered: false, unansweredBy: undefined });
+  });
+
+  it("says it is the server again once the server itself goes quiet", async () => {
+    apiMock.terminalStart.mockResolvedValue(payment("pending"));
+    apiMock.terminalStatus.mockResolvedValue({ ...payment("pending"), sumup_unreachable: true });
+    const { result } = renderHook(() => useTerminal(pairing, vi.fn()));
+    await act(async () => {
+      await result.current.start("key-1", [], basket);
+    });
+    await poll();
+    expect(result.current.state?.unansweredBy).toBe("sumup");
+
+    apiMock.terminalStatus.mockRejectedValue(new ApiError(0, "network"));
+    await poll();
+
+    expect(result.current.state).toMatchObject({ stalled: true, unansweredBy: undefined });
   });
 
   it("asks again under the same key and the same basket", async () => {

@@ -77,6 +77,10 @@ export const MESSAGES = {
     "payment.readerChecking": "Asking the server where the card payment in progress has got to…",
     "payment.readerUnanswered":
       "No answer from the server. Look at the reader’s screen: if it is still asking for the card, wait or cancel on the reader; if it shows the payment accepted, keep this basket and try again; otherwise, take the payment in cash.",
+    "payment.readerSumupUnanswered":
+      "SumUp is not answering the server. Look at the reader’s screen: if it is still asking for the card, wait or cancel on the reader; if it shows the payment accepted, keep this basket and try again; otherwise, take the payment in cash.",
+    "payment.readerMovedOn":
+      "This payment no longer holds the reader — another payment took it, or it waited more than five minutes — so the till did not stop it. If the customer has not paid, take the payment in cash: the till keeps an eye on this one and will say if it goes through after all.",
     "payment.readerOffline":
       "No network: the card reader cannot be used. Take the payment in cash, or wait for the network to come back.",
     "payment.readerBack": "The network is back: the card reader can be used again.",
@@ -530,6 +534,10 @@ export const MESSAGES = {
     "payment.readerChecking": "La caisse demande au serveur où en est le paiement carte en cours…",
     "payment.readerUnanswered":
       "Pas de réponse du serveur. Regardez l’écran du lecteur\u00a0: s’il demande encore la carte, attendez ou annulez sur le lecteur\u00a0; s’il affiche le paiement accepté, gardez ce panier et réessayez\u00a0; sinon, encaissez en espèces.",
+    "payment.readerSumupUnanswered":
+      "SumUp ne répond pas au serveur. Regardez l’écran du lecteur\u00a0: s’il demande encore la carte, attendez ou annulez sur le lecteur\u00a0; s’il affiche le paiement accepté, gardez ce panier et réessayez\u00a0; sinon, encaissez en espèces.",
+    "payment.readerMovedOn":
+      "Ce paiement ne tient plus le lecteur — un autre paiement l’a pris, ou il attend depuis plus de cinq minutes — et la caisse ne l’a donc pas arrêté. Si le client n’a pas payé, encaissez en espèces\u00a0: la caisse garde un œil sur ce paiement et préviendra s’il passe quand même.",
     "payment.readerOffline":
       "Pas de réseau\u00a0: le lecteur de carte ne peut pas servir. Encaissez en espèces, ou attendez le retour du réseau.",
     "payment.readerBack": "Le réseau est revenu\u00a0: le lecteur de carte peut de nouveau servir.",
