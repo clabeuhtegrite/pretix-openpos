@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, time, timedelta, timezone as dt_timezone
 from decimal import Decimal
 
+from django.core.cache import cache
 from django.db import IntegrityError, OperationalError, connection, transaction
 from django.db.models import Q
 from django.utils.timezone import make_aware, now
@@ -38,7 +39,7 @@ from ..models import (
 )
 from ..payment import CARD, CASH
 from ..reconcile import mark_pending
-from ..sumup import CHECKOUT_CLOSED, ERR_CONFLICT, SumUpAccount, SumUpError, still_running, succeeded
+from ..sumup import CHECKOUT_CLOSED, ERR_CONFLICT, POLL_TIMEOUT, SumUpAccount, SumUpError, still_running, succeeded
 from ..webhook import webhook_url
 
 logger = logging.getLogger(__name__)
@@ -637,8 +638,16 @@ def settle_terminal_payment(payment, account):
     The only place a payment is allowed to become successful, and the reason
     the unsigned callback is harmless: that callback causes this to run, and
     this asks the Transactions API over an authenticated connection. The till
-    polls into the same function on a timer, so an installation SumUp cannot
-    reach settles every payment anyway, a second or two later.
+    polls into the same function on a timer — through
+    :func:`poll_terminal_payment`, which keeps that to one question at a time —
+    so an installation SumUp cannot reach settles every payment anyway, a
+    second or two later.
+
+    One call to SumUp, and a second only when the first cannot answer: the
+    request on the reader is asked about only while no transaction exists, and
+    never after a question that got no answer at all. Every call here is bounded
+    by the timeout of ``account``; a poll's account gives up early, and giving
+    up leaves the row as it was.
     """
     if payment.settled:
         return payment
@@ -698,6 +707,71 @@ def settle_terminal_payment(payment, account):
         payment.failure = str(transaction_data.get("status") or "")[:190]
     payment.save(update_fields=["status", "transaction_id", "failure", "updated"])
     return payment
+
+
+#: How often, at most, SumUp is asked about any one reader payment, in seconds.
+#:
+#: The till polls on a timer while the cardholder looks for their card, and a
+#: till that reloads, or a second tab on the same tablet, polls on a timer of
+#: its own. A poll arriving sooner than this after the last question is
+#: answered from the row as it stands, which is what the question would almost
+#: always have said. When SumUp can reach this server, its callback is what
+#: brings the answer in sooner.
+ASK_SUMUP_EVERY = 2
+
+#: How long a question about one reader payment is taken to be under way when
+#: nothing says it has finished, in seconds.
+#:
+#: The mark is taken off the moment the answer is in; this only bounds what a
+#: worker that died in the middle of a question costs. Longer than the slowest
+#: a poll can be — two calls to SumUp, each bounded by POLL_TIMEOUT — and short
+#: enough that such a death costs a waiting till a few polls, not the payment.
+ASKING_FOR_AT_MOST = 20
+
+
+def poll_terminal_payment(payment, account):
+    """
+    :func:`settle_terminal_payment`, for a till waiting on its reader.
+
+    One question to SumUp at a time about any one payment, and no more than one
+    every :data:`ASK_SUMUP_EVERY` seconds. A poll that finds a question already
+    under way, or one asked a moment ago, is answered from the row as it
+    stands: the same shape and the same meaning as any other answer, "still
+    waiting" until the question in flight writes otherwise. Without this,
+    every poll of every waiting till held a worker for as long as SumUp took to
+    answer, and a pretix runs on a handful of workers: two tills waiting on a
+    slow SumUp were enough to leave every other request of the evening — the
+    other tills, the door, the web shop, the health probe — queueing behind
+    them.
+
+    Through the cache because that is the one thing every worker process
+    shares: Redis or memcached, on a pretix set up for production. On one
+    with neither, pretix' cache keeps nothing, every poll asks as it always
+    did, and the short timeouts of the polling account are what bound it.
+
+    SumUp's callback does not come through here. It says the payment has just
+    ended, and a question already under way may have been asked the moment
+    before and come back "pending": skipping the callback's own question on its
+    account would leave the payment waiting for the next poll — or for nothing,
+    once the till has gone.
+    """
+    if payment.settled:
+        return payment
+    marks = f"pretix_openpos:terminal:{payment.pk}"
+    if not cache.add(f"{marks}:asked", True, timeout=ASK_SUMUP_EVERY):
+        return payment
+    asking = f"{marks}:asking"
+    if not cache.add(asking, True, timeout=ASKING_FOR_AT_MOST):
+        return payment
+    try:
+        # Read again now that this is the one question. Another may have
+        # settled the payment between this request reading the row and taking
+        # the mark, and asking SumUp once more would only hear the same answer
+        # a second time.
+        payment.refresh_from_db()
+        return settle_terminal_payment(payment, account)
+    finally:
+        cache.delete(asking)
 
 
 def card_mode(pos_device) -> str:
@@ -1806,8 +1880,15 @@ class OpenPosViewSet(viewsets.ViewSet):
 
     # -- the card reader ---------------------------------------------------
 
-    def _terminal_context(self, request):
-        """The reader this till drives, refusing every till that drives none."""
+    def _terminal_context(self, request, *, waiting=False):
+        """
+        The reader this till drives, refusing every till that drives none.
+
+        ``waiting`` is for the calls a till makes while a cardholder is in front
+        of the reader — asking how the payment is going, stopping it — whose
+        account gives up on SumUp after :data:`~pretix_openpos.sumup.POLL_TIMEOUT`
+        rather than the full timeout a payment is started with. See there.
+        """
         device = request.auth if isinstance(request.auth, Device) else None
         pos_device = PosDevice.for_device(device)
         if not pos_device.drives_terminal:
@@ -1815,7 +1896,12 @@ class OpenPosViewSet(viewsets.ViewSet):
                 {"detail": [_("No card reader is assigned to this till.")],
                  "code": "no_terminal"}
             )
-        return device, pos_device, SumUpAccount(request.event.organizer)
+        account = (
+            SumUpAccount(request.event.organizer, timeout=POLL_TIMEOUT)
+            if waiting
+            else SumUpAccount(request.event.organizer)
+        )
+        return device, pos_device, account
 
     def _terminal_payload(self, payment):
         return {
@@ -1861,7 +1947,10 @@ class OpenPosViewSet(viewsets.ViewSet):
         # looked since it was written, which is not the same as the cardholder
         # still standing there; this is the very call the other till's poll
         # makes, and it is how a finished payment stops holding the machine.
-        held = settle_terminal_payment(held, account)
+        # Made the way that poll makes it, too: when the other till has just
+        # asked, or is asking right now, its answer is the one read here — at
+        # worst a moment old, which costs this cashier a second tap.
+        held = poll_terminal_payment(held, account)
         if held.status != PosTerminalPayment.STATUS_PENDING:
             return
 
@@ -2055,8 +2144,16 @@ class OpenPosViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=["get"], url_path="terminal/status", url_name="terminal-status")
     def terminal_status(self, request, **kwargs):
-        """Where a payment has got to. Polled by the till while it waits."""
-        device, _pos_device, account = self._terminal_context(request)
+        """
+        Where a payment has got to. Polled by the till while it waits.
+
+        Answered from the row as it stands whenever SumUp cannot be asked in
+        good time — no answer within POLL_TIMEOUT, a question about this payment
+        already under way, one asked a moment ago (:func:`poll_terminal_payment`)
+        — so a slow SumUp makes a till wait a little longer for its answer, and
+        never makes it read a failure.
+        """
+        device, _pos_device, account = self._terminal_context(request, waiting=True)
         payment = PosTerminalPayment.objects.filter(
             event=request.event, idempotency_key=request.query_params.get("idempotency_key", "")
         ).first()
@@ -2067,7 +2164,7 @@ class OpenPosViewSet(viewsets.ViewSet):
                 {"detail": [_("No card payment was started for this basket.")],
                  "code": "no_payment"}
             )
-        return Response(self._terminal_payload(settle_terminal_payment(payment, account)))
+        return Response(self._terminal_payload(poll_terminal_payment(payment, account)))
 
     @action(detail=False, methods=["post"], url_path="terminal/cancel", url_name="terminal-cancel")
     def terminal_cancel(self, request, **kwargs):
@@ -2079,8 +2176,12 @@ class OpenPosViewSet(viewsets.ViewSet):
         is whatever the payment turns out to be afterwards, not whatever was
         asked for — a card tapped in the same second is a payment, and the till
         has to be told that rather than a cancellation that did not happen.
+
+        The stop itself is always sent. What the payment became is asked the
+        way a poll asks it, and the till reads a "pending" here exactly as it
+        reads one from a poll: its next poll says how it ended.
         """
-        device, _pos_device, account = self._terminal_context(request)
+        device, _pos_device, account = self._terminal_context(request, waiting=True)
         payment = PosTerminalPayment.objects.filter(
             event=request.event,
             idempotency_key=request.data.get("idempotency_key", ""),
@@ -2101,7 +2202,7 @@ class OpenPosViewSet(viewsets.ViewSet):
                 # Already finished, already gone, or unreachable. Asking SumUp
                 # what actually happened answers all three.
                 pass
-        return Response(self._terminal_payload(settle_terminal_payment(payment, account)))
+        return Response(self._terminal_payload(poll_terminal_payment(payment, account)))
 
     @action(detail=False, methods=["get"], url_path="offline", url_name="offline")
     def offline(self, request, **kwargs):

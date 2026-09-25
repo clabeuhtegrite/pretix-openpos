@@ -387,6 +387,277 @@ def test_asking_about_a_basket_nobody_started_is_refused(till, reader_till, sumu
     assert response.json()["code"] == "no_payment"
 
 
+# -- a till waiting does not hold the server -------------------------------
+#
+# pretix runs on a handful of worker processes, and a till waiting for a card
+# polls every couple of seconds. Each poll used to ask SumUp up to twice, with
+# twenty seconds' patience each time: one slow SumUp and two waiting tills were
+# enough to leave the other tills, the door, the web shop and the health probe
+# queueing behind them.
+
+
+def a_moment_later(monkeypatch, seconds):
+    """Move the cache's clock on by ``seconds``, as the in-memory cache reads it."""
+    import time as clock
+    from types import SimpleNamespace
+
+    from django.core.cache.backends import locmem
+
+    monkeypatch.setattr(
+        locmem, "time", SimpleNamespace(time=lambda: clock.time() + seconds)
+    )
+
+
+def calls_since(sumup, before):
+    return [(method, path) for method, path, _body in sumup.calls[before:]]
+
+
+@pytest.mark.django_db
+def test_a_waiting_till_gives_up_on_sumup_long_before_a_start_would(
+    till, ticket, reader_till, sumup
+):
+    from pretix_openpos.sumup import POLL_TIMEOUT, TIMEOUT
+
+    start(till, [{"item": ticket.pk, "count": 1}])
+    status(till)
+    cancel_payment(till)
+
+    (_post, started, patience), *asked = sumup.timeouts
+    assert started.endswith("/checkout")
+    assert patience == TIMEOUT
+    # The poll's two questions, then the stop and the question after it.
+    checkout_id = PosTerminalPayment.objects.get().checkout_id
+    assert [path.rsplit("/", 1)[-1] for _method, path, _t in asked] == [
+        "transactions", checkout_id, "terminate", "transactions", checkout_id,
+    ]
+    assert {timeout for _method, _path, timeout in asked} == {POLL_TIMEOUT}
+    assert sum(POLL_TIMEOUT) < sum(TIMEOUT)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "failure", [requests.ReadTimeout("too slow"), requests.ConnectTimeout("no route")]
+)
+def test_a_sumup_too_slow_for_a_poll_leaves_the_till_waiting(
+    till, ticket, reader_till, sumup, failure
+):
+    """
+    Not a failure, and not a 5xx either: a slow SumUp is no news about the
+    payment, and the answer says exactly what it said before the question.
+    """
+    start(till, [{"item": ticket.pk, "count": 1}])
+    sumup.next_exception = failure
+
+    response = status(till)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "pending", "amount": "10.00", "currency": "EUR", "failure": "",
+    }
+
+
+@pytest.mark.django_db
+def test_a_reader_request_too_slow_to_answer_changes_nothing(
+    till, ticket, reader_till, sumup, monkeypatch
+):
+    from pretix_openpos import sumup as sumup_module
+
+    start(till, [{"item": ticket.pk, "count": 1}])
+    # Over, as it happens — an answer in time would have closed the payment.
+    sumup.walk_away()
+    answer = sumup.request
+
+    def slow_reader(method, url, **kwargs):
+        if "/checkout/" in url:
+            raise requests.ReadTimeout("too slow")
+        return answer(method, url, **kwargs)
+
+    monkeypatch.setattr(sumup_module.requests, "request", slow_reader)
+
+    assert status(till).json()["status"] == "pending"
+    assert PosTerminalPayment.objects.get().status == PosTerminalPayment.STATUS_PENDING
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("outcome", ["SUCCESSFUL", "FAILED", "PENDING"])
+def test_a_transaction_that_answers_is_the_only_question_asked(
+    till, ticket, reader_till, sumup, outcome
+):
+    """The request on the reader is only asked about while no card has been presented."""
+    start(till, [{"item": ticket.pk, "count": 1}])
+    sumup.pay(status=outcome)
+    before = len(sumup.calls)
+
+    status(till)
+
+    assert calls_since(sumup, before) == [
+        ("GET", f"/v2.1/merchants/{sumup.merchant}/transactions")
+    ]
+
+
+@pytest.mark.django_db
+def test_a_question_that_got_no_answer_is_not_followed_by_a_second(
+    till, ticket, reader_till, sumup
+):
+    start(till, [{"item": ticket.pk, "count": 1}])
+    sumup.walk_away()
+    sumup.next_exception = requests.ReadTimeout("too slow")
+    before = len(sumup.calls)
+
+    assert status(till).json()["status"] == "pending"
+    assert len(calls_since(sumup, before)) == 1
+
+
+@pytest.mark.django_db
+def test_a_poll_straight_after_another_is_answered_without_asking_sumup(
+    till, ticket, reader_till, sumup, real_cache
+):
+    start(till, [{"item": ticket.pk, "count": 1}])
+    status(till)
+    sumup.pay()
+    before = len(sumup.calls)
+
+    response = status(till)
+
+    # What the row says, in the shape of every other answer: the card that
+    # went through a moment ago is the next poll's news.
+    assert response.status_code == 200
+    assert response.json()["status"] == "pending"
+    assert calls_since(sumup, before) == []
+
+
+@pytest.mark.django_db
+def test_the_first_poll_after_the_pause_asks_again(
+    till, ticket, reader_till, sumup, real_cache, monkeypatch
+):
+    from pretix_openpos.api.views import ASK_SUMUP_EVERY
+
+    start(till, [{"item": ticket.pk, "count": 1}])
+    status(till)
+    sumup.pay()
+    # Well inside the time a question may take, so this also says the
+    # question that finished let go of the payment rather than timing out.
+    a_moment_later(monkeypatch, ASK_SUMUP_EVERY + 1)
+
+    assert status(till).json()["status"] == "successful"
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("seconds_later", [0, 3])
+def test_a_poll_arriving_while_sumup_is_being_asked_does_not_ask_too(
+    till, ticket, reader_till, sumup, real_cache, monkeypatch, seconds_later
+):
+    """
+    SumUp is slow, and the next poll — from the same till, or a second tab on
+    it — arrives while the first is still waiting for its answer: straight
+    away, or once the pause between two questions is over.
+    """
+    from pretix_openpos import sumup as sumup_module
+
+    start(till, [{"item": ticket.pk, "count": 1}])
+    sumup.pay()
+    answer = sumup.request
+    meanwhile = {}
+
+    def slow(method, url, **kwargs):
+        if not meanwhile:
+            meanwhile["calls"] = len(sumup.calls)
+            a_moment_later(monkeypatch, seconds_later)
+            meanwhile["response"] = status(till)
+            meanwhile["asked"] = len(sumup.calls) - meanwhile["calls"]
+        return answer(method, url, **kwargs)
+
+    monkeypatch.setattr(sumup_module.requests, "request", slow)
+
+    first = status(till)
+
+    assert meanwhile["response"].status_code == 200
+    assert meanwhile["response"].json()["status"] == "pending"
+    assert meanwhile["asked"] == 0
+    assert first.json()["status"] == "successful"
+
+
+@pytest.mark.django_db
+def test_a_question_left_behind_by_a_dead_worker_holds_the_payment_for_so_long(
+    till, ticket, reader_till, sumup, real_cache, monkeypatch
+):
+    from pretix_openpos.api.views import ASKING_FOR_AT_MOST
+
+    start(till, [{"item": ticket.pk, "count": 1}])
+    payment = PosTerminalPayment.objects.get()
+    # What a worker killed in the middle of its question leaves behind.
+    real_cache.add(f"pretix_openpos:terminal:{payment.pk}:asking", True, ASKING_FOR_AT_MOST)
+    sumup.pay()
+
+    assert status(till).json()["status"] == "pending"
+    a_moment_later(monkeypatch, ASKING_FOR_AT_MOST + 1)
+    assert status(till).json()["status"] == "successful"
+
+
+@pytest.mark.django_db
+def test_a_payment_another_question_settled_meanwhile_is_not_asked_about(
+    till, organizer, ticket, reader_till, sumup
+):
+    from pretix_openpos.api.views import poll_terminal_payment
+    from pretix_openpos.sumup import SumUpAccount
+
+    start(till, [{"item": ticket.pk, "count": 1}])
+    # Read by this request a moment before another one settled it.
+    stale = PosTerminalPayment.objects.get()
+    PosTerminalPayment.objects.update(
+        status=PosTerminalPayment.STATUS_SUCCESSFUL, transaction_id="tx_1"
+    )
+    before = len(sumup.calls)
+
+    polled = poll_terminal_payment(stale, SumUpAccount(organizer))
+
+    assert polled.status == PosTerminalPayment.STATUS_SUCCESSFUL
+    assert calls_since(sumup, before) == []
+
+
+@pytest.mark.django_db
+def test_the_callback_asks_even_while_a_till_has_just_asked(
+    client, organizer, till, ticket, reader_till, sumup, real_cache
+):
+    """
+    A poll's question may have been answered "pending" the moment before the
+    card went through. The callback is SumUp saying it has; skipping it on the
+    poll's account would leave the payment waiting — for nothing, once the till
+    has gone.
+    """
+    start(till, [{"item": ticket.pk, "count": 1}])
+    status(till)
+    payment = PosTerminalPayment.objects.get()
+    sumup.pay()
+
+    response = client.post(
+        callback_url(organizer),
+        data={"payload": {"client_transaction_id": payment.client_transaction_id}},
+        content_type="application/json",
+    )
+
+    assert response.status_code == 200
+    assert PosTerminalPayment.objects.get().status == PosTerminalPayment.STATUS_SUCCESSFUL
+
+
+@pytest.mark.django_db
+def test_a_second_till_reads_the_answer_the_first_one_just_had(
+    till, another_till, ticket, shared_reader, sumup, real_cache
+):
+    """
+    The first till has just asked about the payment holding the shared reader;
+    the second, starting a basket, takes that answer rather than asking again.
+    """
+    start(till, [{"item": ticket.pk, "count": 1}], key="premiere-01")
+    status(till, key="premiere-01")
+    before = len(sumup.calls)
+
+    response = start(another_till, [{"item": ticket.pk, "count": 1}], key="seconde-01")
+
+    assert response.json()["code"] == "terminal_busy"
+    assert calls_since(sumup, before) == []
+
+
 # -- taking it back off ----------------------------------------------------
 
 

@@ -1484,6 +1484,41 @@ carte présentée au dernier moment est un paiement, quoi que dise la demande. U
 paiement lancé avant la 0.17.0 n'a pas d'identifiant de demande et se règle
 comme avant, par la seule API Transactions.
 
+### Une caisse qui attend n'occupe pas le serveur
+
+Tant qu'un client cherche sa carte, la caisse relève `terminal/status` toutes
+les deux secondes, et chaque relève posait jusqu'à deux questions à SumUp, avec
+vingt secondes de patience chacune. pretix tourne sur une poignée de processus
+(deux, sur l'installation pour laquelle Open POS a été écrit) : un SumUp lent et
+deux caisses en attente suffisaient à faire patienter tout le reste — les autres
+caisses, la porte, la billetterie en ligne, et la sonde de santé, qui finit par
+retirer le serveur du service. D'où quatre règles :
+
+- **Une relève abandonne vite** : 3 s pour joindre SumUp, 5 s pour sa réponse
+  (`POLL_TIMEOUT`, au lieu de 5 et 15). Démarrer un paiement, rembourser et la
+  comparaison périodique gardent les délais longs : ils ne se répètent pas
+  toutes les deux secondes. Une relève restée sans réponse répond ce que dit la
+  ligne enregistrée — « en cours » —, dans la forme habituelle et en 200 : la
+  caisse continue d'attendre, elle ne lit jamais un échec. L'annulation
+  (`terminal/cancel`) suit la même règle.
+- **Une question à la fois par paiement, et pas plus d'une toutes les deux
+  secondes.** Une relève qui arrive pendant qu'une autre interroge SumUp sur ce
+  paiement, ou moins de deux secondes après la précédente, répond depuis la
+  ligne enregistrée sans rien demander ; la suivante saura. La marque est posée
+  dans le cache de pretix (Redis en production, partagé par tous les
+  processus) et retirée dès la réponse ; un processus tué en pleine question la
+  laisse au plus vingt secondes. **Sans Redis ni memcached**, le cache de pretix
+  ne garde rien : chaque relève interroge SumUp comme avant, bornée par les
+  délais courts.
+- **Une seule question quand elle suffit** : la demande posée sur le lecteur
+  n'est interrogée que tant qu'aucune transaction n'existe, et jamais après une
+  première question restée sans réponse.
+- **Le rappel de SumUp n'est pas freiné** : il interroge SumUp à chaque fois,
+  même si une caisse vient de le faire, parce qu'une question posée l'instant
+  d'avant le paiement a pu répondre « en cours ». La caisse qui démarre un
+  panier sur un lecteur partagé lit, elle, la réponse que l'autre caisse vient
+  d'obtenir sur le paiement qui occupe le lecteur.
+
 ### Quand le lecteur refuse la demande
 
 SumUp refuse de poser un montant sur un lecteur **hors ligne** (éteint, ou hors
