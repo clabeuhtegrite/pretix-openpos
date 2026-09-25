@@ -10,6 +10,17 @@ from ..models import PosSale, refund_key
 #: Guard against a runaway client turning one tap into a thousand-line order.
 MAX_LINES = 100
 
+#: The most items one sale may hold, all its lines together.
+#:
+#: A line may count up to 999 and a sale may hold a hundred lines, which let
+#: one request ask for a hundred thousand tickets — each one an order position
+#: to write, a ticket to render and, for an admission, a check-in to make, all
+#: inside one request holding one worker. Five hundred is more than any counter
+#: sells in one go: a bar round is a dozen, a group at the door a few dozen, and
+#: a school trip a couple of hundred at most. Anything larger is a mistake, or a
+#: tablet in the wrong hands, and is better split into several sales anyway.
+MAX_ITEMS = 500
+
 
 #: How stale a queued sale may be before it looks like a mistake rather than a
 #: dropout. A night is hours; a week is somebody replaying an old backup.

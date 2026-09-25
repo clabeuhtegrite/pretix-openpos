@@ -41,6 +41,7 @@ from ..payment import CARD, CASH
 from ..reconcile import mark_pending
 from ..sumup import CHECKOUT_CLOSED, ERR_CONFLICT, POLL_TIMEOUT, SumUpAccount, SumUpError, still_running, succeeded
 from ..webhook import webhook_url
+from .throttling import DeviceThrottleMixin
 
 logger = logging.getLogger(__name__)
 
@@ -588,6 +589,33 @@ def resolve_line(
     )
 
 
+def refuse_oversized(positions):
+    """
+    Refuse a basket of more than MAX_ITEMS items, all lines together.
+
+    Raised from the view rather than from the serializer, where the ``code``
+    would come back wrapped in a list. Live and replayed sales alike: a till
+    whose queue holds a sale this size recorded it wrongly, and a queued sale
+    refused goes to the list of refusals the operator is shown, with this
+    sentence — it is not lost. A basket the card reader has already been paid
+    for is never asked: it was capped by ``terminal/start`` before any card
+    came near it.
+    """
+    from .serializers import MAX_ITEMS
+
+    if sum(line["count"] for line in positions) > MAX_ITEMS:
+        raise ValidationError(
+            {
+                "positions": [
+                    _("A sale can hold at most {max} items. Split it into several sales.").format(
+                        max=MAX_ITEMS
+                    )
+                ],
+                "code": "too_many_items",
+            }
+        )
+
+
 def sellable_items(event, channel, *, settled, pinned=False):
     """
     What may be sold — and, for a sale already paid for, what may be recorded.
@@ -980,7 +1008,7 @@ def _lock_idempotency_key(event, idempotency_key):
         raise SaleInProgress() from exc
 
 
-class OpenPosOrganizerViewSet(viewsets.ViewSet):
+class OpenPosOrganizerViewSet(DeviceThrottleMixin, viewsets.ViewSet):
     """
     Organizer-level endpoint, so a till can find out which events it may sell for.
 
@@ -1065,7 +1093,7 @@ def offline_restrictions(position):
     return restrictions
 
 
-class OpenPosViewSet(viewsets.ViewSet):
+class OpenPosViewSet(DeviceThrottleMixin, viewsets.ViewSet):
     """
     Everything the till needs, and nothing else.
 
@@ -1427,6 +1455,8 @@ class OpenPosViewSet(viewsets.ViewSet):
                         "code": "terminal_required",
                     }
                 )
+        if terminal is None:
+            refuse_oversized(data["positions"])
 
         offline = data.get("offline")
         drawer_session = drawer_session_for(
@@ -2003,6 +2033,10 @@ class OpenPosViewSet(viewsets.ViewSet):
                 self._terminal_payload(settle_terminal_payment(existing, account)),
                 status=status.HTTP_200_OK,
             )
+
+        # Here, before any card is asked for: the checkout that follows books
+        # this basket as it was pinned, and asks nothing of its size again.
+        refuse_oversized(data["positions"])
 
         self._refuse_if_reader_is_busy(
             event, _pos_device.sumup_reader_id, idempotency_key, account

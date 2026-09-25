@@ -2581,6 +2581,17 @@ Tout appel sur un événement où le plugin n'est pas activé est refusé en 403
 que soit l'accès du device : c'est ce qui empêche une app périmée de vendre sur
 un événement pour lequel l'organisateur n'a jamais ouvert de caisse.
 
+**Chaque appareil a un budget de 600 requêtes par minute**, dépensé par tous les
+endpoints Open POS à la fois (y compris la liste des événements). Au-delà, un
+`429` avec `Retry-After` (en secondes) et `"code": "rate_limited"` : « pas
+maintenant », jamais « non » — une vente en file ainsi refusée reste dans la file
+et repart plus tard, sous la même clé. Le budget est large exprès : une caisse
+qui vide cent ventes en file tout en relevant son lecteur toutes les deux
+secondes en fait environ cent trente dans la pire minute de sa soirée. Seuls les
+appareils sont comptés, pas un jeton d'équipe ni une session du back-office. Le
+compte est tenu dans le cache de pretix : sans Redis ni memcached, rien n'est
+compté et rien n'est refusé.
+
 Les trois endpoints `terminal/` n'existent que pour une caisse à qui un lecteur
 est attribué ; les autres reçoivent `no_terminal`. De même, les écritures
 `drawer/` n'existent que pour un appareil rattaché à une caisse espèces ; les
@@ -2604,7 +2615,10 @@ rien de ce qu'il dit n'est cru (§5quinquies).
 ```
 
 `variation` est optionnel (défaut `null`), `count` va de 1 à 999, au maximum 100
-lignes. `cash_given` n'est accepté que pour un paiement en espèces, et refusé
+lignes, et **500 articles au plus sur toute la vente** (somme des `count`) : au-delà,
+`too_many_items`, en direct comme en rejeu, et dès `terminal/start` pour un panier
+destiné au lecteur — un panier payé au lecteur n'est plus mesuré à
+l'encaissement. `cash_given` n'est accepté que pour un paiement en espèces, et refusé
 dès que `expected_total` est négatif : c'est le tiroir qui paie, rien n'a été
 tendu.
 
@@ -2819,6 +2833,8 @@ le tarif d'hier.
 | 400 `price_changed` | Les prix ont bougé sous le panier | Recharge le catalogue, re-tarife, garde le panneau ouvert |
 | 400 `idempotency_key` | Clé absente, malformée, ou finissant par `:refund` | Ne devrait pas arriver : l'app frappe des UUID |
 | 503 `sale_in_progress` | Une autre tentative de la même vente est encore en cours d'écriture | Renvoie plus tard sous la même clé (tout 5xx) ; le renvoi est un rejeu |
+| 429 `rate_limited` | L'appareil a dépassé son budget de requêtes (600 par minute), sur n'importe quel endpoint Open POS | « Pas maintenant » : attend `Retry-After` et renvoie sous la même clé ; une vente en file y reste |
+| 400 `too_many_items` | Plus de 500 articles sur une vente (somme des `count`), en direct, en rejeu ou sur `terminal/start` | Affiche le message ; en rejeu, la vente passe dans la liste des refus |
 | 400 `positions` | Variante inconnue ou manquante, montant libre à zéro, consigne sur le mauvais produit | Affiche le message tel quel |
 | 400 `item_not_sold` | Produit hors de ce qu'une grille de caisse peut montrer (en direct : hors catalogue du moment ; en rejeu : hors canal Open POS, masqué sans bon, vendu seulement en lot…) | Affiche le message ; en rejeu, la vente passe dans la liste des refus |
 | 400 `negative_price` | Rejeu d'une ligne sous zéro qui n'est pas une consigne rendue | Idem |

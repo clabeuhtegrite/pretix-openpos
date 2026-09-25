@@ -375,3 +375,66 @@ def test_a_card_sale_cannot_carry_an_amount_received(till, ticket):
 
     assert response.status_code == 400
     assert "cash" in str(response.json()).lower()
+
+
+# -- how big one sale may be -----------------------------------------------
+
+
+@pytest.mark.django_db
+def test_a_sale_of_more_items_than_any_counter_sells_is_refused(till, event, beer):
+    from pretix_openpos.api.serializers import MAX_ITEMS
+
+    response = sell(
+        till,
+        [{"item": beer.pk, "count": MAX_ITEMS - 10}, {"item": beer.pk, "count": 11}],
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "too_many_items"
+    assert str(MAX_ITEMS) in response.json()["positions"][0]
+    assert not Order.objects.filter(event=event).exists()
+    assert not PosSale.objects.exists()
+
+
+@pytest.mark.django_db
+def test_a_sale_right_at_the_limit_goes_through(till, beer, monkeypatch):
+    from pretix_openpos.api import serializers
+
+    # Counted over the whole basket, and inclusive. Lowered so the test does
+    # not write five hundred order positions to say so.
+    monkeypatch.setattr(serializers, "MAX_ITEMS", 3)
+
+    assert sell(
+        till, [{"item": beer.pk, "count": 2}, {"item": beer.pk, "count": 1}]
+    ).status_code == 201
+    assert sell(
+        till, [{"item": beer.pk, "count": 4}], idempotency_key="one-too-many"
+    ).json()["code"] == "too_many_items"
+
+
+@pytest.mark.django_db
+def test_a_replayed_sale_of_that_size_is_refused_too(till, beer, monkeypatch):
+    """
+    What a till's queue holds is bounded like what it sells live: the app
+    caps a basket, so a queued sale this size is not one it could have made,
+    and the refusal goes to the list the operator is shown.
+    """
+    from datetime import timedelta
+
+    from django.utils.timezone import now
+
+    from pretix_openpos.api import serializers
+
+    monkeypatch.setattr(serializers, "MAX_ITEMS", 3)
+
+    response = sell(
+        till,
+        [{"item": beer.pk, "count": 4, "price": "3.00"}],
+        offline={
+            "recorded_at": (now() - timedelta(hours=1)).isoformat(),
+            "charged_total": "12.00",
+        },
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "too_many_items"

@@ -230,6 +230,35 @@ def test_a_sold_out_product_does_not_reach_a_cardholder(till, ticket, reader_til
 
 
 @pytest.mark.django_db
+def test_a_basket_bigger_than_any_sale_never_reaches_a_cardholder(
+    till, ticket, reader_till, sumup, monkeypatch
+):
+    from pretix_openpos.api import serializers
+
+    monkeypatch.setattr(serializers, "MAX_ITEMS", 3)
+
+    response = start(till, [{"item": ticket.pk, "count": 2}, {"item": ticket.pk, "count": 2}])
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "too_many_items"
+    assert sumup.started == []
+    assert not PosTerminalPayment.objects.exists()
+
+
+@pytest.mark.django_db
+def test_a_basket_the_card_paid_for_is_not_measured_again(till, ticket, reader_till, sumup, monkeypatch):
+    """Capped when it went on the reader. After the card, refusing it strands a payment."""
+    from pretix_openpos.api import serializers
+
+    take_payment(till, [{"item": ticket.pk, "count": 3}], sumup=sumup)
+    monkeypatch.setattr(serializers, "MAX_ITEMS", 2)
+
+    response = sell(till, [{"item": ticket.pk, "count": 3}], payment_type="card", idempotency_key=KEY)
+
+    assert response.status_code == 201
+
+
+@pytest.mark.django_db
 def test_a_product_that_is_not_on_sale_here_is_refused(till, event, ticket, reader_till, sumup):
     ticket.all_sales_channels = False
     ticket.limit_sales_channels.clear()

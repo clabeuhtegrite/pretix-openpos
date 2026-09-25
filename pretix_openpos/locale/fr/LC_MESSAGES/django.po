@@ -36,7 +36,7 @@ msgstr "Cette vente est datée dans le futur."
 msgid "This sale is too old to be replayed automatically."
 msgstr "Cette vente est trop ancienne pour être rejouée automatiquement."
 
-#: api/serializers.py:115
+#: api/serializers.py:167
 msgid "This key is reserved for the deposit half of another sale."
 msgstr "Cette clé est réservée à la consigne rendue d’une autre vente."
 
@@ -118,7 +118,14 @@ msgstr "Déclinaison inconnue pour le produit {name}."
 msgid "Product {name} requires an option to be chosen."
 msgstr "Le produit {name} demande de choisir une déclinaison."
 
-#: api/views.py:529
+#: api/views.py:610
+#, python-brace-format
+msgid "A sale can hold at most {max} items. Split it into several sales."
+msgstr ""
+"Une vente ne peut pas compter plus de {max} articles. Répartissez-la en "
+"plusieurs ventes."
+
+#: api/views.py:531
 #, python-brace-format
 msgid "{name} cannot be sold for less than nothing."
 msgstr "Impossible de vendre {name} en dessous de zéro."
@@ -136,10 +143,14 @@ msgstr ""
 msgid "A free amount has to be more than nothing."
 msgstr "Un montant libre doit être supérieur à zéro."
 
-#: api/views.py:744
+#: api/views.py:941
 msgid "This sale is still being recorded. Try again in a moment."
 msgstr ""
 "Cette vente est encore en cours d’enregistrement. Réessayez dans un instant."
+
+#: api/throttling.py:69
+msgid "This device is sending too many requests. Try again in a moment."
+msgstr "Cet appareil envoie trop de requêtes. Réessayez dans un instant."
 
 #: api/views.py:817
 #, python-brace-format
