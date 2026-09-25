@@ -19,7 +19,7 @@ import { describeError } from "./errors";
 import { t } from "./i18n";
 import { fromCents, toCents } from "./money";
 import { newNonce } from "./nonce";
-import { play, setSoundEnabled, soundEnabled, unlock } from "./sound";
+import { keepSoundReady, play, setSoundEnabled, soundEnabled } from "./sound";
 import {
   clearBasket, clearPairing, enqueue, loadBasket, loadCached, loadCashier, loadFailures,
   loadPairing, loadQueue, loadUpdateAttempt, queueRevocation, requestPersistence, saveBasket,
@@ -223,21 +223,16 @@ export default function App() {
   useEffect(requestPersistence, []);
 
   /**
-   * Start the audio on the first tap, whatever that tap was.
+   * Keep the audio ready, from the first tap to the last.
    *
    * No browser will start an audio context outside a gesture, and the sound
    * that matters most — a refused ticket at the door — arrives on a camera
-   * frame rather than a tap. So it is claimed at the first opportunity,
-   * whichever screen the operator happens to be on.
+   * frame rather than a tap. So every tap, whichever screen it lands on, tries
+   * until the audio runs, and coming back to the app asks for it again: this
+   * used to try once, on the first touch, and an iPhone that refused that one
+   * or took the audio away after a call left the door silent all night.
    */
-  useEffect(() => {
-    const once = () => {
-      unlock();
-      window.removeEventListener("pointerdown", once);
-    };
-    window.addEventListener("pointerdown", once);
-    return () => window.removeEventListener("pointerdown", once);
-  }, []);
+  useEffect(() => keepSoundReady(), []);
 
   /**
    * Keep the basket on disk, so a reload does not lose it.

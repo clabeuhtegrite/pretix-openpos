@@ -1730,6 +1730,21 @@ Sur un iPhone antérieur à iOS 17, le son se tait quand le téléphone est en
 silencieux ; il n'y a pas de contournement propre, et le seul remède est de
 sortir le téléphone du silencieux.
 
+**Quand le son se réveille :** aucun navigateur ne laisse une page démarrer le
+son sans un geste de l'utilisateur, et un refus à la porte arrive sur une image
+de la caméra, pas sur un appui. L'app redemande donc le son **à chaque appui**,
+où qu'il tombe, tant qu'il ne tourne pas — et pas seulement au premier : sur un
+écran tactile, c'est le doigt qui se relève qui compte comme geste, pas celui
+qui se pose, et l'ancienne version, qui n'essayait qu'une fois au premier
+contact, pouvait rester muette toute la soirée. Un iPhone reprend aussi le son
+après un appel, Siri ou un passage en arrière-plan (état « interrompu ») : l'app
+le redemande dès qu'elle revient à l'écran, puis au premier appui ; si l'iPhone
+ne le rend toujours pas, l'appui suivant repart sur un son neuf. Un son qui
+n'a pas pu sortir tout de suite est joué s'il revient dans la demi-seconde, et
+abandonné sinon — plutôt que de ressortir, au prochain appui, tous les refus
+d'une demi-heure d'un coup. En pratique : **si la porte est muette, un appui
+n'importe où sur l'écran la rallume.**
+
 ### Ce qui attend le serveur
 
 Un appui que le serveur doit confirmer se voit tout de suite, et se voit tant

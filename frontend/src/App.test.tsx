@@ -3,7 +3,13 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { apiMock, sound } = vi.hoisted(() => ({
-  sound: { play: vi.fn(), unlock: vi.fn(), setSoundEnabled: vi.fn(), soundEnabled: vi.fn(() => true) },
+  sound: {
+    play: vi.fn(),
+    unlock: vi.fn(),
+    keepSoundReady: vi.fn(() => vi.fn()),
+    setSoundEnabled: vi.fn(),
+    soundEnabled: vi.fn(() => true),
+  },
   apiMock: {
     config: vi.fn(),
     catalog: vi.fn(),
@@ -534,16 +540,24 @@ describe("hearing the till", () => {
     expect(sound.play).toHaveBeenCalledWith("add");
   });
 
-  it("starts the audio on the first tap, whatever that tap was", async () => {
+  it("keeps the audio ready for as long as the app runs, and lets go after", async () => {
     // No browser will open an audio context outside a gesture, and a refused
-    // ticket at the door arrives on a camera frame rather than a tap.
-    sound.unlock.mockClear();
-    const { user } = show();
+    // ticket at the door arrives on a camera frame rather than a tap. What
+    // the gestures do is sound.ts's to prove; here, that it is held from the
+    // start and released once, not re-armed on every render.
+    const release = vi.fn();
+    sound.keepSoundReady.mockClear();
+    sound.keepSoundReady.mockReturnValue(release);
+    const { unmount } = render(<App />);
     await ready();
+    await userEvent.setup().click(screen.getByRole("tab", { name: "Bar" }));
 
-    await user.click(screen.getByRole("tab", { name: "Bar" }));
+    expect(sound.keepSoundReady).toHaveBeenCalledTimes(1);
+    expect(release).not.toHaveBeenCalled();
 
-    expect(sound.unlock).toHaveBeenCalled();
+    unmount();
+
+    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("remembers being told to keep quiet", async () => {
