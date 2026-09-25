@@ -6,7 +6,7 @@ const { jsQR } = vi.hoisted(() => ({ jsQR: vi.fn() }));
 vi.mock("jsqr", () => ({ default: jsQR }));
 
 import { t } from "../i18n";
-import QrScanner from "./QrScanner";
+import QrScanner, { visibleCrop } from "./QrScanner";
 
 /**
  * The camera.
@@ -125,6 +125,8 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   Reflect.deleteProperty(navigator, "mediaDevices");
+  Reflect.deleteProperty(HTMLElement.prototype, "clientWidth");
+  Reflect.deleteProperty(HTMLElement.prototype, "clientHeight");
 });
 
 describe("opening the camera", () => {
@@ -263,6 +265,265 @@ describe("a camera the system takes away", () => {
     });
 
     expect(getUserMedia).not.toHaveBeenCalled();
+  });
+});
+
+describe("a camera that comes back", () => {
+  it("takes the error down and shows the viewfinder again", async () => {
+    // Another app held the camera when the door opened; the volunteer locks
+    // and unlocks the phone, and the camera is there. The "no camera" box
+    // used to stay over the working picture until the scanner was reopened.
+    getUserMedia.mockRejectedValueOnce(new DOMException("busy", "NotReadableError"));
+    const { container } = show();
+    await screen.findByText(t("scan.noCamera"));
+    expect(container.querySelector(".scanner-reticle")).toBeNull();
+
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    await waitFor(() => expect(screen.queryByText(t("scan.noCamera"))).toBeNull());
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+    expect(container.querySelector(".scanner-reticle")).not.toBeNull();
+    expect(screen.queryByText(t("scan.starting"))).toBeNull();
+  });
+
+  it("reads codes again once it is back", async () => {
+    getUserMedia.mockRejectedValueOnce(new DOMException("busy", "NotReadableError"));
+    jsQR.mockReturnValue({ data: "ticket-secret" });
+    const { onDecode } = show();
+    await screen.findByText(t("scan.noCamera"));
+
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await waitFor(() => expect(screen.queryByText(t("scan.noCamera"))).toBeNull());
+    await decodeFrame();
+
+    expect(onDecode).toHaveBeenCalledWith("ticket-secret");
+  });
+
+  it("keeps the error up while it tries on its own, rather than flashing it away", async () => {
+    getUserMedia.mockRejectedValueOnce(new DOMException("busy", "NotReadableError"));
+    show();
+    await screen.findByText(t("scan.noCamera"));
+    let release: (stream: unknown) => void = () => {};
+    const camera = track();
+    getUserMedia.mockImplementationOnce(() => new Promise((resolve) => {
+      release = resolve;
+    }));
+
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    expect(screen.getByText(t("scan.noCamera"))).toBeDefined();
+
+    await act(async () => {
+      release({ getVideoTracks: () => [camera], getTracks: () => [camera] });
+    });
+    await waitFor(() => expect(screen.queryByText(t("scan.noCamera"))).toBeNull());
+  });
+
+  it("offers to try again, and says it is starting the moment that is tapped", async () => {
+    // The operator who has just closed the app that held the camera should
+    // not have to lock the phone to find out whether that was it.
+    getUserMedia.mockRejectedValueOnce(new DOMException("busy", "NotReadableError"));
+    let release: (stream: unknown) => void = () => {};
+    getUserMedia.mockImplementationOnce(() => new Promise((resolve) => {
+      release = resolve;
+    }));
+    const { user, container } = show();
+
+    await user.click(await screen.findByRole("button", { name: t("scan.retry") }));
+
+    expect(screen.queryByText(t("scan.noCamera"))).toBeNull();
+    expect(screen.getByText(t("scan.starting"))).toBeDefined();
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+
+    const camera = track();
+    await act(async () => {
+      release({ getVideoTracks: () => [camera], getTracks: () => [camera] });
+    });
+    await waitFor(() => expect(screen.queryByText(t("scan.starting"))).toBeNull());
+    expect(container.querySelector(".scanner-reticle")).not.toBeNull();
+  });
+
+  it("says so again when trying again did not help", async () => {
+    getUserMedia.mockRejectedValue(new DOMException("gone", "NotFoundError"));
+    const { user } = show();
+
+    await user.click(await screen.findByRole("button", { name: t("scan.retry") }));
+
+    expect(await screen.findByText(t("scan.noCamera"))).toBeDefined();
+    expect(screen.getByRole("button", { name: t("scan.retry") })).toBeDefined();
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+  });
+
+  it("offers it after a refused permission, which can be granted in the meantime", async () => {
+    getUserMedia.mockRejectedValue(new DOMException("no", "NotAllowedError"));
+    show();
+
+    await screen.findByText(t("scan.denied"));
+
+    expect(screen.getByRole("button", { name: t("scan.retry") })).toBeDefined();
+  });
+
+  it("does not offer it to a browser with no camera API, which retrying cannot grow", async () => {
+    Reflect.deleteProperty(navigator, "mediaDevices");
+    show();
+
+    await screen.findByText(t("scan.unsupported"));
+
+    expect(screen.queryByRole("button", { name: t("scan.retry") })).toBeNull();
+  });
+
+  it("does not ask for a second camera while the first is still being asked for", async () => {
+    // The screen coming back while the permission sheet is up: the second
+    // stream used to replace the first in the scanner's hands, and the first
+    // stayed open with nothing left to switch it off.
+    let release: (stream: unknown) => void = () => {};
+    getUserMedia.mockImplementationOnce(() => new Promise((resolve) => {
+      release = resolve;
+    }));
+    const { unmount } = show();
+    await waitFor(() => expect(getUserMedia).toHaveBeenCalledOnce());
+
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    const camera = track();
+    await act(async () => {
+      release({ getVideoTracks: () => [camera], getTracks: () => [camera] });
+    });
+    unmount();
+
+    expect(getUserMedia).toHaveBeenCalledOnce();
+    expect(stop).toHaveBeenCalledOnce();
+  });
+
+  it("takes no notice of a track it has already replaced", async () => {
+    const first = cameraGives();
+    show();
+    await waitFor(() => expect(screen.queryByText(t("scan.starting"))).toBeNull());
+    const second = cameraGives();
+    await act(async () => {
+      first.end();
+    });
+    await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByText(t("scan.starting"))).toBeNull());
+
+    // The first one ending again — as a stopped track can — is not the
+    // camera going away: the second is the one in use.
+    await act(async () => {
+      first.end();
+    });
+
+    expect(getUserMedia).toHaveBeenCalledTimes(2);
+    expect(second.readyState).toBe("live");
+  });
+});
+
+describe("closing the scanner", () => {
+  it("starts no frame loop when it was closed while the picture was starting", async () => {
+    // The volunteer taps ✕ before the video has started: play() is aborted
+    // when the element goes, and the loop it used to start then ran for as
+    // long as the app did, decoding a <video> nobody would see again.
+    let refuse: (error: unknown) => void = () => {};
+    HTMLVideoElement.prototype.play = vi.fn(() => new Promise<void>((_, reject) => {
+      refuse = reject;
+    }));
+    let scheduled = 0;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frame = callback;
+      scheduled += 1;
+      return scheduled;
+    });
+    const { unmount } = show();
+    await waitFor(() => expect(HTMLVideoElement.prototype.play).toHaveBeenCalled());
+
+    unmount();
+    await act(async () => {
+      refuse(new DOMException("aborted", "AbortError"));
+    });
+
+    expect(scheduled).toBe(0);
+    expect(stop).toHaveBeenCalled();
+  });
+
+  it("lets a frame already on its way end the loop rather than go on", async () => {
+    let scheduled = 0;
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      frame = callback;
+      scheduled += 1;
+      return scheduled;
+    });
+    // A browser may still deliver the frame it had queued when the loop is
+    // cancelled; what matters is that it asks for no other.
+    vi.stubGlobal("cancelAnimationFrame", () => {});
+    const { unmount } = show();
+    await waitFor(() => expect(scheduled).toBe(1));
+    const queued = frame as FrameRequestCallback;
+
+    unmount();
+    queued(5000);
+
+    expect(scheduled).toBe(1);
+    expect(jsQR).not.toHaveBeenCalled();
+  });
+});
+
+describe("reading only what is on screen", () => {
+  it("leaves out the sides a phone held upright never shows", () => {
+    // A 1280×720 frame in a 390×560 stage: scaled to cover, only a 501-pixel
+    // wide band of the middle is on screen.
+    const crop = visibleCrop(1280, 720, 390, 560);
+
+    expect(crop.height).toBe(720);
+    expect(crop.y).toBe(0);
+    expect(crop.width).toBeCloseTo(501.43, 1);
+    expect(crop.x).toBeCloseTo((1280 - crop.width) / 2, 5);
+  });
+
+  it("leaves out the top and bottom a wide stage never shows", () => {
+    const crop = visibleCrop(640, 480, 1180, 600);
+
+    expect(crop.width).toBe(640);
+    expect(crop.x).toBe(0);
+    expect(crop.height).toBeCloseTo(325.42, 1);
+    expect(crop.y).toBeCloseTo((480 - crop.height) / 2, 5);
+  });
+
+  it("keeps the whole frame when the stage has its shape", () => {
+    expect(visibleCrop(640, 480, 320, 240)).toEqual({ x: 0, y: 0, width: 640, height: 480 });
+  });
+
+  it("keeps the whole frame when the stage has not been laid out", () => {
+    expect(visibleCrop(1280, 720, 0, 0)).toEqual({ x: 0, y: 0, width: 1280, height: 720 });
+  });
+
+  it("decodes the visible part only, at the resolution it always had", async () => {
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", { value: 390, configurable: true });
+    Object.defineProperty(HTMLElement.prototype, "clientHeight", { value: 560, configurable: true });
+    const drawImage = vi.fn();
+    HTMLCanvasElement.prototype.getContext = vi.fn().mockReturnValue({
+      drawImage,
+      getImageData: (_x: number, _y: number, width: number, height: number) => ({
+        data: new Uint8ClampedArray(width * height * 4),
+      }),
+    }) as unknown as HTMLCanvasElement["getContext"];
+    show();
+    await waitFor(() => expect(screen.queryByText(t("scan.starting"))).toBeNull());
+
+    await decodeFrame();
+
+    // Half scale, as the whole 1280×720 frame had: 251×360 instead of 640×360.
+    expect(jsQR).toHaveBeenCalledWith(expect.anything(), 251, 360, expect.anything());
+    const [, sx, sy, sw, sh, dx, dy, dw, dh] = drawImage.mock.calls[0];
+    expect(sx).toBeCloseTo(389.29, 1);
+    expect(sy).toBe(0);
+    expect(sw).toBeCloseTo(501.43, 1);
+    expect(sh).toBe(720);
+    expect([dx, dy, dw, dh]).toEqual([0, 0, 251, 360]);
   });
 });
 
@@ -455,6 +716,15 @@ describe("what is on screen", () => {
     show({ children: <div>Entrée autorisée</div> });
 
     expect(screen.getByText("Entrée autorisée")).toBeDefined();
+  });
+
+  it("puts the caller's banner between the title bar and the picture", () => {
+    const { container } = show({ banner: <button className="update-bar">New version</button> });
+
+    const bar = container.querySelector(".scanner-bar");
+    const banner = screen.getByRole("button", { name: "New version" });
+    expect(bar?.nextElementSibling).toBe(banner);
+    expect(banner.nextElementSibling?.classList.contains("scanner-stage")).toBe(true);
   });
 
   it("renders the caller's footer", () => {

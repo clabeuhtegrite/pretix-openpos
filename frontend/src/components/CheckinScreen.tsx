@@ -475,8 +475,10 @@ export default function CheckinScreen({
       onClose={onClose}
       // Tickets carry a QR code and nothing a human could retype, so there is no
       // manual entry to fall back on here — unlike pairing, where pretix prints
-      // the code as text next to the QR.
-      errorHint={t("scan.cameraRequired")}
+      // the code as text next to the QR. What there is, is the name search at
+      // the bottom of this very screen; the hint used to say "there is nothing
+      // to type" right above it.
+      errorHint={t("scan.findByName", { search: t("search.open") })}
       footer={
         <div className="scanner-footer">
           {lists.length > 1 && (

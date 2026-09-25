@@ -9,7 +9,12 @@ const { redeem, attendance, offlineSnapshot, searchAttendees, scanner, play } = 
   searchAttendees: vi.fn(),
   play: vi.fn(),
   /** Handles on the scanner's props, so a test can put a code in front of it. */
-  scanner: { decode: (_secret: string) => {}, close: () => {}, paused: false },
+  scanner: {
+    decode: (_secret: string) => {},
+    close: () => {},
+    paused: false,
+    errorHint: undefined as string | undefined,
+  },
 }));
 
 vi.mock("../api", async (importOriginal) => {
@@ -25,20 +30,24 @@ vi.mock("../sound", () => ({ play }));
 // The camera has its own tests. Here it is a thing that hands over a decoded
 // string, reports whether it was told to hold, and renders what it is given.
 vi.mock("./QrScanner", () => ({
-  default: ({ onDecode, onClose, paused, footer, children, title }: {
+  default: ({ onDecode, onClose, paused, footer, children, title, errorHint, banner }: {
     onDecode: (text: string) => void;
     onClose: () => void;
     paused?: boolean;
     footer?: React.ReactNode;
     children?: React.ReactNode;
     title: string;
+    errorHint?: string;
+    banner?: React.ReactNode;
   }) => {
     scanner.decode = onDecode;
     scanner.close = onClose;
     scanner.paused = Boolean(paused);
+    scanner.errorHint = errorHint;
     return (
       <div>
         <h2>{title}</h2>
+        {banner}
         <span data-testid="paused">{String(Boolean(paused))}</span>
         {footer}
         {children}
@@ -931,6 +940,16 @@ describe("the guest list carried for a dropout", () => {
 });
 
 describe("finding somebody by name", () => {
+  it("is what the camera's error points to, since it is right below", () => {
+    // The hint used to say there was nothing to type, over a screen whose
+    // bottom row is a search for exactly that.
+    show();
+
+    expect(scanner.errorHint).toBe(t("scan.findByName", { search: t("search.open") }));
+    expect(scanner.errorHint).toContain(t("search.open"));
+    expect(screen.getByRole("button", { name: new RegExp(t("search.open")) })).toBeDefined();
+  });
+
   it("opens the search", async () => {
     const { user } = show();
 

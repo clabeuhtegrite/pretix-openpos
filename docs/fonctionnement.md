@@ -692,6 +692,18 @@ une liste. C'est [CheckinScreen.tsx](../frontend/src/components/CheckinScreen.ts
   ~8 images/s sur une image réduite à 640 px de côté. Pas de `BarcodeDetector` :
   sur iOS, l'API Shape Detection est derrière un drapeau dans les Réglages sur
   17 et cassée depuis 18 — une caisse sur iPhone ne scannerait jamais rien.
+  Seule la partie de l'image **visible à l'écran** est décodée : l'aperçu remplit
+  la zone en coupant ce qui dépasse, et sur un téléphone tenu droit ce sont les
+  deux bandes de gauche et de droite de chaque image, qu'on décodait pour rien.
+  Ce qu'on voit est ce qui se lit, avec la même finesse qu'avant et moins de
+  travail par image. Fermer le scanner arrête la caméra **et** la boucle de
+  décodage, même fermé pendant que l'image démarrait.
+- **Caméra indisponible** (une autre app la tient, autorisation refusée) : le
+  cadre rouge le dit, rappelle que la **recherche par nom** en bas de l'écran
+  permet de faire entrer sans caméra, et propose **Réessayer la caméra**. La
+  caméra est aussi redemandée quand l'app revient à l'écran ; dès qu'elle est
+  là, le message disparaît et le viseur revient — il restait affiché par-dessus
+  une caméra revenue jusqu'à ce qu'on ferme et rouvre le scanner.
 - **Verdict lisible à bout de bras** : vert 4 s, rouge 8 s, et un appui sur le
   verdict le referme aussitôt — le délai ne protège que l'opérateur qui n'a pas
   encore levé les yeux, il ne retient jamais une file qui avance. Un même code
@@ -2832,7 +2844,7 @@ l'installation — donc `npm i --no-save playwright` avant de s'en servir.
 | L'événement n'apparaît pas au moment de l'appairage ou dans *Réglages → Événement* | Plugin non activé sur l'événement (l'app le nomme alors, sous le champ), ou device sans accès à l'événement (*Appareils → cet appareil*). Que la boutique soit en ligne ne compte pas |
 | « Faites entrer » ne s'affiche jamais | Aucune liste de contrôle choisie dans *Open POS → Réglages*, ou aucun produit d'admission dans la vente |
 | Un billet refuse de se scanner | Code-barres non-QR : passer par la recherche par nom ou une douchette clavier |
-| La caméra ne démarre pas | Contexte non sécurisé (HTTP), ou autorisation refusée dans les réglages du navigateur |
+| La caméra ne démarre pas | Contexte non sécurisé (HTTP), ou autorisation refusée dans les réglages du navigateur ; si une autre app la tenait, la fermer puis toucher *Réessayer la caméra* |
 | La recette ne correspond pas au tiroir | Vérifier la ligne « mode test » sur l'écran *Ventes* : elle est comptée à part. Sur un appareil rattaché à une caisse espèces, c'est le rapport de fermeture qui se rapproche du tiroir, pas la recette : elle ne compte ni le fond ni les entrées et sorties d'argent |
 | La caisse refuse les espèces : « La caisse … n'est pas ouverte » | Ouvrir la caisse espèces (bouton billet de la barre du haut) sur un fond compté. Le client peut attendre : rien n'a été enregistré |
 | « Ouverte … et jamais fermée » | La caisse espèces n'a pas été fermée une soirée précédente. *Fermer sans compter* sur la caisse, ou fermer depuis son rapport avec le montant si quelqu'un l'a compté, puis ouvrir celle du soir |
