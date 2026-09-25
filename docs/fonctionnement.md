@@ -503,7 +503,8 @@ fois le compte SumUp renseigné sous *Open POS → Lecteurs de carte*. Voir le
 **Pourquoi ce filtre.** Ouverte dans un onglet, l'app affiche les instructions
 d'installation au lieu de la caisse : en mode installé on a le plein écran, pas
 de barre d'adresse, et le wake lock empêche l'écran de s'éteindre en plein
-service. Échappatoire volontaire : ouvrir une fois `/openpos/?browser=1` autorise
+service (sur iPhone et iPad, à partir d'iOS 18.4 seulement — voir §3.5 et la
+liste d'avant soirée, §7.0). Échappatoire volontaire : ouvrir une fois `/openpos/?browser=1` autorise
 définitivement l'usage en onglet sur cet appareil — être verrouillé hors de sa
 caisse le soir d'un événement est une panne pire qu'un bénévole dans un onglet.
 
@@ -527,7 +528,7 @@ proposent ni les mêmes API ni les mêmes gestes, et chaque écart est traité :
 | Détection du mode installé | `display-mode: standalone` | `navigator.standalone`, qu'Apple n'a jamais remplacé — les deux sont consultés |
 | Geste **retour** | Ferme le panneau ouvert, pas la caisse (chaque panneau empile une entrée d'historique) | N'existe pas |
 | Lecture des QR | jsQR, jamais `BarcodeDetector` | Idem — l'API est derrière un drapeau sur 17 et cassée depuis 18 |
-| Écran allumé | Wake Lock | Wake Lock depuis Safari 16.4 ; absent avant, on s'en passe sans rien dire. Le mode économie d'énergie le refuse — c'est un verrou de veille, pas un blocage du bouton latéral |
+| Écran allumé | Wake Lock | Wake Lock dans Safari depuis 16.4, mais **dans une app ouverte depuis l'écran d'accueil seulement depuis iOS/iPadOS 18.4** (bogue WebKit 254545) : avant, l'écran s'éteint au délai du verrouillage automatique quoi que l'app demande, et elle n'a aucun moyen de le savoir — d'où la ligne de la liste d'avant soirée (§7.0). Le mode économie d'énergie le refuse — c'est un verrou de veille, pas un blocage du bouton latéral |
 | Vibration au refus | Oui | Non — l'API n'existe pas sur iOS ; le verdict rouge reste la réponse |
 | Lampe au scan | Bouton 🔦 quand la caméra en a une | Aucune API : pas de bouton |
 | Encoche / barre de gestes | `env(safe-area-inset-*)` sur toutes les couches plein écran | Idem, `viewport-fit=cover` dans le shell |
@@ -2156,47 +2157,55 @@ ligne est là parce que son absence coûte cher une fois la porte ouverte.
    onglet. L'app refuse de vendre dans un onglet ; c'est délibéré, une barre
    d'adresse au-dessus du panier et un geste de rafraîchissement en travers,
    c'est une vente perdue.
-3. Le **nom du caissier** est renseigné dans les réglages de chaque tablette. Il
+3. Chaque iPhone et chaque iPad est en **iOS / iPadOS 18.4 ou plus récent**
+   (*Réglages → Général → Informations*). Avant 18.4, une app ouverte depuis
+   l'écran d'accueil ne sait pas garder l'écran allumé (bogue WebKit 254545) :
+   il s'éteint au bout du délai de verrouillage automatique, en pleine file, et
+   la caméra de la porte s'arrête avec lui — sans que l'app puisse s'en rendre
+   compte. Un appareil qui ne peut pas être mis à jour : *Réglages → Luminosité
+   et affichage → Verrouillage automatique* sur **Jamais** pour la soirée, et
+   branché si possible.
+4. Le **nom du caissier** est renseigné dans les réglages de chaque tablette. Il
    part avec chaque vente et c'est ce qui rend la recette ventilable en fin de
    soirée.
-4. Le **rôle** de chaque appareil est le bon dans *Open POS → Appareils de
+5. Le **rôle** de chaque appareil est le bon dans *Open POS → Appareils de
    caisse* : caisse pour le bar, porte pour l'entrée. Un appareil sans rôle fait
    les deux, ce qui convient à une petite soirée et pas à un bar qui bouscule.
-5. Faire **une vente en mode test** sur chaque tablette, puis l'annuler. C'est
+6. Faire **une vente en mode test** sur chaque tablette, puis l'annuler. C'est
    le seul moyen de savoir que le token est encore valide, que l'événement est
    joignable et que l'écran répond. Le mode test ne se mélange pas à la recette.
 
 **Le lecteur de carte**
 
-6. *Open POS → Lecteurs de carte* : le lecteur est **Appairé** et, dans la
+7. *Open POS → Lecteurs de carte* : le lecteur est **Appairé** et, dans la
    colonne *En ce moment*, **Prêt**. « Inconnu » veut dire que le lecteur est
    trop ancien pour répondre à cette question et non qu'il est éteint ; « Hors
    ligne » veut dire qu'il l'est vraiment ; « Mise à jour en cours » veut dire
    attendre qu'il ait fini.
-7. La **batterie** affichée est suffisante, ou le lecteur est sur son socle.
-8. Si un lecteur affiche **Encaissement en cours** alors que personne
+8. La **batterie** affichée est suffisante, ou le lecteur est sur son socle.
+9. Si un lecteur affiche **Encaissement en cours** alors que personne
    n'encaisse, presser **Effacer son écran** : il reste bloqué d'une soirée à
    l'autre sinon, et refuse le premier paiement de la vôtre.
-9. Faire **un aller-retour à un euro** : une vente carte, puis son annulation.
-   C'est le seul test qui prouve la chaîne entière, du panier jusqu'au
-   remboursement.
+10. Faire **un aller-retour à un euro** : une vente carte, puis son annulation.
+    C'est le seul test qui prouve la chaîne entière, du panier jusqu'au
+    remboursement.
 
 **Le serveur**
 
-10. *Open POS → Ventes* : la chaîne du journal ne signale rien, et la section
+11. *Open POS → Ventes* : la chaîne du journal ne signale rien, et la section
     **Paiements carte sans vente** est vide. Si elle ne l'est pas, régler ces
     lignes avant d'en ajouter de nouvelles.
-11. Les **prix des produits** dans pretix sont ceux de ce soir. Un prix modifié
+12. Les **prix des produits** dans pretix sont ceux de ce soir. Un prix modifié
     pendant une vente est géré, mais c'est une seconde de flottement devant un
     client.
 
 **Les caisses espèces**
 
-12. *Open POS → Caisses espèces* : aucun tiroir n'est resté ouvert depuis une
+13. *Open POS → Caisses espèces* : aucun tiroir n'est resté ouvert depuis une
     soirée précédente. S'il y en a un, le fermer depuis son rapport, avec le
     montant si quelqu'un a compté le tiroir, sans sinon — ou le laisser faire à
     la caisse, qui le proposera.
-13. Juste avant l'ouverture des portes, sur un appareil de chaque tiroir :
+14. Juste avant l'ouverture des portes, sur un appareil de chaque tiroir :
     compter le fond et **ouvrir la caisse**. Une fois par tiroir ; les autres
     appareils du même tiroir le voient ouvert dans la minute, ou dès qu'on
     touche leur bandeau.
