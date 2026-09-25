@@ -17,6 +17,7 @@ The flow, once, so the tests below read as steps rather than as HTTP:
    server finds the payment, books the order from the *pinned* basket, and only
    then is anything in the journal.
 """
+from datetime import timedelta
 from decimal import Decimal
 from unittest.mock import patch
 
@@ -522,6 +523,137 @@ def test_a_sale_the_app_sends_differently_is_booked_from_the_pinned_basket(
     assert response.status_code == 201
     positions = PosSale.objects.get().positions
     assert [p["item"] for p in positions] == [ticket.pk]
+
+
+def queued_offline(till, positions, charged, **kwargs):
+    """The sale as a till queues it when the network died after the reader said "paid"."""
+    return sell(
+        till,
+        positions,
+        payment_type="card",
+        idempotency_key=KEY,
+        offline={
+            "recorded_at": (now() - timedelta(minutes=1)).isoformat(),
+            "charged_total": charged,
+        },
+        **kwargs,
+    )
+
+
+@pytest.mark.django_db
+def test_a_card_sale_queued_after_the_reader_took_it_survives_a_price_change(
+    till, event, ticket, reader_till, sumup
+):
+    """
+    The network died between the reader's "paid" and the checkout, so the
+    till queued the sale under the same key and replays it later.
+
+    It priced the queue from the tariff it had cached — ten euros — while the
+    reader charged what the server had priced a moment earlier: twelve. The
+    lines then did not add up to what was charged, and the replay was refused
+    as a corrupted queue: a card charged, and no order behind it.
+    """
+    ticket.default_price = Decimal("12.00")
+    ticket.save(update_fields=["default_price"])
+    take_payment(till, [{"item": ticket.pk, "count": 1}], sumup=sumup)
+
+    response = queued_offline(
+        till, [{"item": ticket.pk, "count": 1, "price": "10.00"}], charged="12.00"
+    )
+
+    assert response.status_code == 201, response.content
+    # Booked from what the card paid for, not from the queue's own figures.
+    assert response.json()["order"]["total"] == "12.00"
+    sale = PosSale.objects.get()
+    assert sale.offline is True
+    assert sale.positions[0]["unit_price"] == "12.00"
+
+
+@pytest.mark.django_db
+def test_a_card_sale_queued_after_the_reader_took_it_is_booked_whatever_the_queue_says(
+    till, event, ticket, beer, reader_till, sumup
+):
+    # Lines that add up among themselves, and to a figure that is not what the
+    # reader took. The reader's is the one the customer agreed to.
+    take_payment(till, [{"item": ticket.pk, "count": 1}], sumup=sumup)
+
+    response = queued_offline(
+        till, [{"item": beer.pk, "count": 1, "price": "3.00"}], charged="3.00"
+    )
+
+    assert response.status_code == 201, response.content
+    assert response.json()["order"]["total"] == "10.00"
+    assert [p["item"] for p in PosSale.objects.get().positions] == [ticket.pk]
+
+
+@pytest.mark.django_db
+def test_a_card_sale_queued_offline_with_no_reader_payment_behind_it_is_refused(
+    till, event, ticket, reader_till, sumup
+):
+    # The owner's rule, replays included: a till with a reader may not record
+    # a card payment that reader did not validate.
+    response = queued_offline(
+        till, [{"item": ticket.pk, "count": 1, "price": "10.00"}], charged="10.00"
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "terminal_required"
+    assert not PosSale.objects.exists()
+
+
+@pytest.mark.django_db
+def test_a_basket_paid_on_the_reader_is_recorded_whatever_the_catalogue_did_since(
+    till, event, ticket, reader_till, sumup
+):
+    """
+    Switched off and taken off the till's channel in the moment between the
+    card and the checkout. The server priced this basket itself, from the grid
+    it served; a card has paid for it. Nothing is refused.
+    """
+    take_payment(till, [{"item": ticket.pk, "count": 1}], sumup=sumup)
+    ticket.active = False
+    ticket.save(update_fields=["active"])
+    ticket.limit_sales_channels.clear()
+
+    response = sell(
+        till, [{"item": ticket.pk, "count": 1}], payment_type="card", idempotency_key=KEY
+    )
+
+    assert response.status_code == 201, response.content
+    assert response.json()["order"]["total"] == "10.00"
+
+
+@pytest.mark.django_db
+def test_a_free_amount_paid_on_the_reader_is_reported_once_its_product_is_not_the_one(
+    till, event, misc, beer, reader_till, sumup
+):
+    """
+    A reason on a line hides nothing from the tariff comparison, except on the
+    product set aside for free amounts. The organiser named another one between
+    the card and the checkout: the line is recorded — the card paid for it —
+    and reported as off the tariff, like any other line priced by the till.
+    """
+    start(till, [{"item": misc.pk, "count": 1, "price": "4.50", "description": "Tombola"}])
+    sumup.pay()
+    status(till)
+    event.settings.set("openpos_custom_item", str(beer.pk))
+
+    response = sell(
+        till, [{"item": misc.pk, "count": 1, "price": "4.50", "description": "Tombola"}],
+        payment_type="card", idempotency_key=KEY,
+    )
+
+    assert response.status_code == 201, response.content
+    assert response.json()["off_tariff"] == [
+        {
+            "item": misc.pk,
+            "item_name": "Divers",
+            "variation": None,
+            "variation_name": None,
+            "charged": "4.50",
+            "tariff": "0.00",
+        }
+    ]
 
 
 @pytest.mark.django_db

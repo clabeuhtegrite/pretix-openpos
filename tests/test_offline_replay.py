@@ -140,14 +140,45 @@ def test_a_till_that_is_online_still_cannot_oversell(till, event, ticket):
 
 
 @pytest.mark.django_db
-def test_a_product_pulled_from_the_till_during_the_dropout_is_still_recorded(
+def test_a_product_whose_sales_ended_during_the_dropout_is_still_recorded(
     till, event, ticket
 ):
-    ticket.limit_sales_channels.clear()
+    ticket.available_until = now() - timedelta(hours=1)
+    ticket.save(update_fields=["available_until"])
 
     body = offline_sale(till, [{"item": ticket.pk, "count": 1, "price": "10.00"}]).json()
 
     assert Order.objects.get(code=body["order"]["code"]).total == Decimal("10.00")
+
+
+@pytest.mark.django_db
+def test_a_product_switched_off_after_the_evening_is_still_recorded(till, event, ticket):
+    """
+    The way an evening ends: the organiser switches its products off.
+
+    The till that sold them while cut off replays the next morning, into an
+    event whose products are all off. pretix refuses an order for a product
+    that is switched off, force or no force; the money was taken the night
+    before, and that refusal would have stranded it.
+    """
+    ticket.active = False
+    ticket.save(update_fields=["active"])
+
+    response = offline_sale(till, [{"item": ticket.pk, "count": 1, "price": "10.00"}])
+
+    assert response.status_code == 201, response.content
+    assert Order.objects.get(code=response.json()["order"]["code"]).total == Decimal("10.00")
+
+
+@pytest.mark.django_db
+def test_a_product_switched_off_is_still_refused_live(till, ticket):
+    ticket.active = False
+    ticket.save(update_fields=["active"])
+
+    response = sell(till, [{"item": ticket.pk, "count": 1}])
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "item_not_sold"
 
 
 @pytest.mark.django_db
@@ -456,3 +487,156 @@ def test_a_correction_is_said_in_the_units_a_person_would_use(event, seconds, sa
     # What was written, when it cannot be read as a date; a till, when none is named.
     assert "not a date" in text
     assert "a till" in text
+
+
+# -- what a replay can still not claim ----------------------------------------
+#
+# A replay is the till's word, and it is taken — at the price the till says,
+# over a quota that ran out — because the money has moved. It is not taken for
+# more than a till could genuinely have produced: a tablet that only claims to
+# have been offline could otherwise record any product at any price.
+
+
+@pytest.mark.django_db
+def test_a_product_that_is_not_on_the_till_s_channel_is_refused(till, event, ticket):
+    """
+    A till only ever sells from the grid it is served, and the grid is the
+    Open POS channel. A product that is not on it — a presale-only ticket, say
+    — is something no till could have rung up.
+    """
+    ticket.limit_sales_channels.clear()
+
+    response = offline_sale(till, [{"item": ticket.pk, "count": 1, "price": "10.00"}])
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "item_not_sold"
+    assert not Order.objects.filter(event=event).exists()
+
+
+def _hidden_without_voucher(item):
+    item.require_voucher = True
+    item.hide_without_voucher = True
+    item.save()
+
+
+def _bundled_only(item):
+    item.require_bundling = True
+    item.save()
+
+
+def _in_an_add_on_category(item):
+    item.category = item.event.categories.create(name="Options", is_addon=True)
+    item.save()
+
+
+def _cross_selling_only(item):
+    item.category = item.event.categories.create(name="Suggestions", cross_selling_mode="only")
+    item.save()
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "hide",
+    [_hidden_without_voucher, _bundled_only, _in_an_add_on_category, _cross_selling_only],
+    ids=["hidden without a voucher", "bundled only", "add-on", "cross-selling only"],
+)
+def test_a_product_no_till_s_grid_could_show_is_refused(till, event, ticket, hide):
+    hide(ticket)
+
+    response = offline_sale(till, [{"item": ticket.pk, "count": 1, "price": "10.00"}])
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "item_not_sold"
+
+
+@pytest.mark.django_db
+def test_a_voucher_only_product_the_grid_does_show_is_recorded(till, event, ticket):
+    # Shown to the till with its voucher requirement, and sold live like that:
+    # a replay of it is a replay of something the till could have done.
+    ticket.require_voucher = True
+    ticket.save()
+
+    assert any(
+        entry["id"] == ticket.pk
+        for category in till.get("catalog").json()["categories"]
+        for entry in category["items"]
+    )
+    response = offline_sale(till, [{"item": ticket.pk, "count": 1, "price": "10.00"}])
+
+    assert response.status_code == 201, response.content
+
+
+@pytest.mark.django_db
+def test_a_line_below_zero_is_refused_unless_it_hands_a_deposit_back(till, event, ticket):
+    response = offline_sale(
+        till,
+        [
+            {"item": ticket.pk, "count": 1, "price": "10.00"},
+            {"item": ticket.pk, "count": 1, "price": "-10.00"},
+        ],
+        charged=Decimal("0.00"),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "negative_price"
+    assert not Order.objects.filter(event=event).exists()
+
+
+@pytest.mark.django_db
+def test_a_ticket_replayed_for_nothing_is_recorded_and_reported(till, event, ticket):
+    # Zero is not below zero: a till can have given one away. The money that
+    # did not come in is what the report is for.
+    body = offline_sale(till, [{"item": ticket.pk, "count": 1, "price": "0.00"}]).json()
+
+    assert body["off_tariff"][0]["charged"] == "0.00"
+    assert body["off_tariff"][0]["tariff"] == "10.00"
+
+
+@pytest.mark.django_db
+def test_a_reason_on_a_product_other_than_the_free_amount_one_is_refused(
+    till, event, ticket, misc
+):
+    """
+    The reason is what marks a free amount, and it used to exempt its line
+    from the tariff comparison whatever product it was on: a ticket replayed
+    at ten cents "for a friend" went through unreported.
+    """
+    response = offline_sale(
+        till, [{"item": ticket.pk, "count": 1, "price": "0.10", "description": "Un ami"}]
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "free_amount_elsewhere"
+    assert not Order.objects.filter(event=event).exists()
+
+
+@pytest.mark.django_db
+def test_a_reason_is_refused_when_no_product_is_set_aside_for_free_amounts(till, ticket):
+    response = offline_sale(
+        till, [{"item": ticket.pk, "count": 1, "price": "10.00", "description": "Un ami"}]
+    )
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "free_amount_elsewhere"
+
+
+@pytest.mark.django_db
+def test_a_free_amount_replayed_on_its_own_product_is_taken_at_its_word(till, misc):
+    body = offline_sale(
+        till, [{"item": misc.pk, "count": 1, "price": "4.50", "description": "Tombola"}]
+    ).json()
+
+    assert body["order"]["total"] == "4.50"
+    assert body["off_tariff"] == []
+
+
+@pytest.mark.django_db
+def test_the_seven_day_window_is_kept(till, ticket):
+    # A till can stay closed over a weekend with a queue in it; a week is the
+    # organiser's call, and it has not changed.
+    line = [{"item": ticket.pk, "count": 1, "price": "10.00"}]
+
+    assert offline_sale(till, line, at=now() - timedelta(days=6, hours=23)).status_code == 201
+    assert offline_sale(
+        till, line, at=now() - timedelta(days=7, hours=1), idempotency_key="too-old-01"
+    ).status_code == 400

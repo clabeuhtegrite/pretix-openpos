@@ -118,6 +118,11 @@ msgstr "Déclinaison inconnue pour le produit {name}."
 msgid "Product {name} requires an option to be chosen."
 msgstr "Le produit {name} demande de choisir une déclinaison."
 
+#: api/views.py:529
+#, python-brace-format
+msgid "{name} cannot be sold for less than nothing."
+msgstr "Impossible de vendre {name} en dessous de zéro."
+
 #: api/views.py:510
 msgid "This product is not the one deposits are taken on."
 msgstr "Ce produit n’est pas celui sur lequel les consignes sont prises."

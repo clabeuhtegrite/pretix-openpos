@@ -619,7 +619,10 @@ envoyée qu'une fois le paiement validé. Le §5quinquies décrit la séquence.
 
 2.  Résolution        Chaque ligne doit être un produit filter_available(channel=openpos).
                       Variante inconnue/inactive → 400. Produit à variantes sans
-                      variante → 400.
+                      variante → 400. Vente rejouée hors ligne : tout produit
+                      qu'une grille de caisse a pu montrer, activé ou non, en
+                      vente ou non (§5ter). Panier payé au lecteur : tout
+                      produit de l'événement (§6.3bis).
 
 3.  Tarification      resolve_price() : prix de la date, sinon prix variante,
                       sinon prix produit. Le total est calculé ici, et nulle part ailleurs.
@@ -1148,19 +1151,60 @@ et la marque hors ligne de pretix.
 le tiroir et le billet dans une main : refuser à ce moment n'annule pas la vente,
 ça la laisse dans un navigateur, hors de pretix *et hors du journal* — c'est-à-dire
 exactement là où un journal en ajout seul existe pour qu'elle ne soit pas. Donc
-un rejeu est créé avec `force`, et résolu sur tout ce que l'événement connaît
-encore plutôt que sur le seul catalogue du jour :
+un rejeu est créé avec `force`, et résolu sur tout ce qu'une grille de caisse a
+pu montrer plutôt que sur le seul catalogue du jour :
 
 | Ce qui a changé pendant la coupure | Vente en direct | Vente rejouée |
 |---|---|---|
 | Quota épuisé | refusée (rien n'a été encaissé) | enregistrée |
-| Produit retiré du canal Open POS | refusée | enregistrée |
+| Période de vente terminée (« disponible jusqu'au ») | refusée | enregistrée |
+| Produit désactivé (après la soirée, typiquement) | refusée | enregistrée |
 | Déclinaison désactivée | refusée | enregistrée |
+| Produit retiré du canal Open POS | refusée | **refusée** (`item_not_sold`) |
 | Produit ou déclinaison qui n'a jamais existé | refusée | refusée |
 | Tarif modifié | prix serveur appliqué | prix encaissé conservé, écart signalé |
 
 Un survendu reste un survendu : c'est un fait à réconcilier après la soirée, et
 `offline = True` est précisément ce qui permet de retrouver ces lignes-là.
+
+**Mais un rejeu ne peut pas prétendre à plus qu'une caisse n'a pu faire.** Un
+rejeu, c'est la parole de la caisse. Elle est prise — au prix dit, au-delà d'un
+quota épuisé — parce que l'argent a bougé ; elle n'est pas prise pour ce
+qu'aucune caisse n'aurait pu produire, sans quoi une tablette qui se *dit* hors
+ligne pourrait enregistrer n'importe quel produit à n'importe quel prix :
+
+- **Seulement ce qu'une grille de caisse a pu montrer** : un produit du canal
+  Open POS, que pretix montre sans bon de réduction (pas « masqué sans bon »),
+  vendu seul (pas « seulement en lot », pas dans une catégorie de compléments ni
+  de vente croisée seule). Qu'il soit encore activé ou encore dans sa période de
+  vente, c'est justement ce qui a pu changer depuis la soirée : ce n'est pas
+  demandé. Un produit qui n'exige un bon qu'« avec information » reste montré
+  par la grille et vendu en direct ; son rejeu passe aussi. Refus :
+  `item_not_sold`.
+- **Rien sous zéro, sauf une consigne rendue** (`refund: true`). Zéro passe — un
+  billet offert existe — et l'écart au tarif est signalé. Refus :
+  `negative_price`.
+- **Un motif seulement sur le produit des montants libres.** Refus :
+  `free_amount_elsewhere`.
+- **Tout écart au tarif est signalé**, motif ou pas, sauf sur le produit des
+  montants libres, qui n'a pas de tarif.
+- La fenêtre de **sept jours** ne bouge pas : une caisse peut rester fermée un
+  week-end avec une file dedans.
+
+Pour arrêter la vente d'un produit pendant une soirée où une caisse peut être
+coupée, réglez sa **fin de période de vente** (ou son quota à zéro, ou
+désactivez-le) plutôt que de le retirer du canal Open POS : c'est ce dernier
+geste qui dit « aucune caisse ne vend ça », et un rejeu d'une vente de ce
+produit serait refusé.
+
+**Une vente carte déjà payée au lecteur mais mise en file** (le réseau est tombé
+entre le « payé » du lecteur et l'encaissement) n'est jugée sur aucune de ses
+lignes : elle est enregistrée depuis le panier épinglé quand le lecteur a été
+sollicité (§6.3bis), quoi que la file dise des prix ou du total. Avant, un prix
+modifié entre-temps faisait refuser le rejeu (« la somme des lignes ne correspond
+pas au total encaissé ») : carte débitée, pas de commande. Sans paiement lecteur
+réussi derrière, une vente carte rejouée par une caisse qui a un lecteur reste
+refusée (`terminal_required`).
 
 ### Les limites, dites franchement
 
@@ -1985,7 +2029,10 @@ simplement périmée ne peut pas vendre un billet à 40 € pour 4 €.
 Deux exceptions, et elles sont étroites :
 
 - **Une vente rejouée hors ligne** porte ses prix, parce que le client a déjà
-  payé et que le serveur n'a plus à décider, seulement à constater (§5ter).
+  payé et que le serveur n'a plus à décider, seulement à constater (§5ter) —
+  dans les bornes de ce qu'une caisse a pu produire : rien sous zéro hors
+  consigne rendue, un motif seulement sur le produit des montants libres, et
+  tout écart au tarif signalé.
 - **Une ligne de montant libre** porte le sien, parce que c'est toute la
   fonction. Elle n'est acceptée que sur le produit unique désigné dans les
   réglages, seulement accompagnée d'un motif, et seulement au-dessus de zéro ;
@@ -2733,7 +2780,10 @@ le tarif d'hier.
 | 400 `price_changed` | Les prix ont bougé sous le panier | Recharge le catalogue, re-tarife, garde le panneau ouvert |
 | 400 `idempotency_key` | Clé absente, malformée, ou finissant par `:refund` | Ne devrait pas arriver : l'app frappe des UUID |
 | 503 `sale_in_progress` | Une autre tentative de la même vente est encore en cours d'écriture | Renvoie plus tard sous la même clé (tout 5xx) ; le renvoi est un rejeu |
-| 400 `positions` | Produit non vendable au guichet / variante inconnue | Affiche le message tel quel |
+| 400 `positions` | Variante inconnue ou manquante, montant libre à zéro, consigne sur le mauvais produit | Affiche le message tel quel |
+| 400 `item_not_sold` | Produit hors de ce qu'une grille de caisse peut montrer (en direct : hors catalogue du moment ; en rejeu : hors canal Open POS, masqué sans bon, vendu seulement en lot…) | Affiche le message ; en rejeu, la vente passe dans la liste des refus |
+| 400 `negative_price` | Rejeu d'une ligne sous zéro qui n'est pas une consigne rendue | Idem |
+| 400 `free_amount_elsewhere` | Montant libre (motif) sur un autre produit que celui désigné | Idem |
 | 400 `cash_given` | Reçu inférieur au dû, ou montant reçu sur un panier qui paie | Affiche le message |
 | 400 `terminal_required` | Vente carte qu'aucun paiement lecteur ne justifie | Ne devrait pas arriver : l'app passe par le lecteur (§5quinquies). Affiche le refus |
 | 400 `no_terminal` | Appel `terminal/` depuis une caisse sans lecteur | Idem ; l'app n'offre ce chemin qu'en mode `terminal` |

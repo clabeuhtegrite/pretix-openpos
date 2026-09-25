@@ -214,17 +214,34 @@ class CheckoutSerializer(KeySerializer):
                     {"positions": [_("A deposit refund cannot be a positive amount.")]}
                 )
 
+        # A card payment the till's reader has already taken, for this very
+        # key: the checkout books it from the basket the server priced when it
+        # put the amount on the reader, and the lines sent now are not read.
+        pinned = (
+            self.context.get("pinned", False)
+            and data["payment_type"] == PosSale.PAYMENT_CARD
+        )
+
         if offline:
             # All or nothing: a partly priced basket means the queue is damaged,
             # and guessing the missing half is the one thing not to do with money.
-            if len(priced) != len(data["positions"]):
+            #
+            # Except over a basket the reader has been paid for. The network
+            # died between the reader's "paid" and the checkout, so the till
+            # queued the sale — priced from its own cached tariff, while the
+            # card was charged what the server had priced a moment before. The
+            # two disagree whenever a price moved in between, and checking one
+            # against the other refused the replay: a card charged, and no
+            # order behind it. The pinned basket is what gets booked, so there
+            # is nothing here to check.
+            if not pinned and len(priced) != len(data["positions"]):
                 raise serializers.ValidationError(
                     {"positions": [_("Every line of an offline sale must carry the price charged.")]}
                 )
             charged = sum(
-                (p["price"] * p["count"] for p in data["positions"]), Decimal("0.00")
+                (p["price"] * p["count"] for p in priced), Decimal("0.00")
             )
-            if charged != offline["charged_total"]:
+            if not pinned and charged != offline["charged_total"]:
                 raise serializers.ValidationError(
                     {"offline": [_("The lines do not add up to the total charged.")]}
                 )

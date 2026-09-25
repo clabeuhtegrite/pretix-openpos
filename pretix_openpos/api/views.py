@@ -1,14 +1,16 @@
+import copy
 import hashlib
 import logging
 from datetime import datetime, time, timedelta, timezone as dt_timezone
 from decimal import Decimal
 
 from django.db import IntegrityError, OperationalError, connection, transaction
+from django.db.models import Q
 from django.utils.timezone import make_aware, now
 from django.utils.translation import gettext_lazy as _
 from django_scopes import scopes_disabled
 from i18nfield.strings import LazyI18nString
-from pretix.api.serializers.order import OrderCreateSerializer
+from pretix.api.serializers.order import OrderCreateSerializer, OrderPositionCreateSerializer
 from pretix.base.models import Checkin, Device, Order, Quota, TeamAPIToken
 from pretix.base.models.orders import OrderPayment, OrderRefund
 from pretix.base.services.checkin import CheckInError, RequiredMediaExchangeError, perform_checkin
@@ -434,7 +436,7 @@ class ResolvedLine:
 
 def resolve_line(
     line, *, sellable, custom_item, deposit, settled, subevent=None,
-    off_limits=frozenset(),
+    off_limits=frozenset(), pinned=False,
 ):
     """
     Price one line of a basket, and refuse the ones that may not be sold.
@@ -454,11 +456,24 @@ def resolve_line(
     ``off_limits`` is the categories this device is not the one to sell. A line
     from one of them is refused outright while nothing has been taken, and only
     reported once something has — see :func:`_outside_role`.
+
+    ``pinned`` says the basket was priced by this server, when the card reader
+    was asked for the money: the lines are its own, read back. A settled line
+    that is *not* pinned is a till's word — a sale it rang up with no network —
+    and that word is bounded to what a till could genuinely have produced: a
+    product it could have shown (see :func:`sellable_items`), nothing below
+    zero but a deposit handed back, a reason only on the free-amount product.
+    Everything else it is taken at, and anything off the tariff is reported.
     """
     item = sellable.get(line["item"])
     if item is None:
         raise ValidationError(
-            {"positions": [_("Product {id} is not on sale at the till.").format(id=line["item"])]}
+            {
+                "positions": [
+                    _("Product {id} is not on sale at the till.").format(id=line["item"])
+                ],
+                "code": "item_not_sold",
+            }
         )
 
     # What this till is for, before what it costs. Checked here rather than
@@ -503,6 +518,21 @@ def resolve_line(
         sent_price = Decimal(str(sent_price))
 
     tariff = resolve_price(item, variation, subevent)
+    replayed = settled and not pinned
+    if replayed and not is_refund and sent_price is not None and sent_price < Decimal("0.00"):
+        # Only a deposit handed back takes money out of the drawer, and it
+        # says so with its own flag. A product line below zero is a till
+        # inventing a refund, which no screen of the app can produce.
+        raise ValidationError(
+            {
+                "positions": [
+                    _("{name} cannot be sold for less than nothing.").format(
+                        name=str(item.name)
+                    )
+                ],
+                "code": "negative_price",
+            }
+        )
     if is_refund:
         # A deposit handed back is worth exactly what the deposit costs,
         # negated here rather than sent: the till names the product, the server
@@ -512,19 +542,33 @@ def resolve_line(
             raise ValidationError(
                 {"positions": [_("This product is not the one deposits are taken on.")]}
             )
-    elif description and not settled:
-        if custom_item is None or item.pk != custom_item.pk:
+    elif description:
+        free_amount = custom_item is not None and item.pk == custom_item.pk
+        # A reason is what marks a free amount, and the free-amount product is
+        # the one place a till decides a price. On any other line it used to
+        # be a way to charge anything and have it pass unreported — so it is
+        # refused, from a replayed queue as well as live. Only a basket the
+        # reader was paid for keeps it, since that one was checked when the
+        # amount went on the reader; it is then reported like any other line
+        # whose price is not the tariff, below.
+        if not free_amount and not pinned:
             raise ValidationError(
-                {"positions": [_("Free amounts can only be sold on the product set aside for them.")]}
+                {
+                    "positions": [
+                        _("Free amounts can only be sold on the product set aside for them.")
+                    ],
+                    "code": "free_amount_elsewhere",
+                }
             )
-        if sent_price is None or sent_price <= Decimal("0.00"):
+        if not settled and (sent_price is None or sent_price <= Decimal("0.00")):
             raise ValidationError(
                 {"positions": [_("A free amount has to be more than nothing.")]}
             )
-        # The one price the till decides. It is not compared with the tariff and
-        # never reported as off-tariff: the product's own price is a placeholder
-        # that no free-amount sale is charged at.
-        tariff = sent_price
+        if free_amount:
+            # The one price the till decides. It is not compared with the
+            # tariff and never reported as off-tariff: the product's own price
+            # is a placeholder that no free-amount sale is charged at.
+            tariff = sent_price
 
     # A settled line always has one: an offline sale is refused whole by
     # CheckoutSerializer unless every line carries what was charged, and a
@@ -543,7 +587,7 @@ def resolve_line(
     )
 
 
-def sellable_items(event, channel, *, settled):
+def sellable_items(event, channel, *, settled, pinned=False):
     """
     What may be sold — and, for a sale already paid for, what may be recorded.
 
@@ -551,10 +595,32 @@ def sellable_items(event, channel, *, settled):
     now: nothing has been taken, so refusing costs a tap. A sale that has
     already been paid for is a different question — the catalogue may well have
     moved since, and refusing then does not undo the sale.
+
+    Moved, but not beyond what a till could ever have offered. A sale replayed
+    from a till that was cut off is the till's word, and a till only ever sells
+    from the grid it was served: products on the Open POS channel, that pretix
+    would show without a voucher, sold on their own. Whether one of them is
+    still switched on, or still within its sale period, is exactly what may
+    have changed since the evening, and is not asked. Anything outside that
+    set is something no till could have rung up — a tablet that only claims to
+    have been offline — and is refused. A basket the card reader has been paid
+    for (``pinned``) was priced here, from this very list, when the reader was
+    asked; it is recorded whatever has happened to the catalogue since.
     """
     items = event.items.all()
     if not settled:
         items = items.filter_available(channel=channel)
+    elif not pinned:
+        # pretix' own filter_available, less the conditions that change in
+        # the course of an evening: switched on, available from, available
+        # until. What is left describes the product rather than the moment.
+        items = items.filter(
+            Q(all_sales_channels=True) | Q(limit_sales_channels=channel),
+            Q(category__isnull=True) | Q(category__is_addon=False),
+            Q(category__isnull=True) | ~Q(category__cross_selling_mode="only"),
+            require_bundling=False,
+            hide_without_voucher=False,
+        )
     # The category rides along because every line is now asked which one it is
     # in, and naming it in a refusal is the difference between "this till does
     # not sell Bar" and a product id.
@@ -711,6 +777,35 @@ def hold_drawer_session(session, payment_type):
     if held is None and payment_type == PosSale.PAYMENT_CASH:
         refuse(drawer_closed())
     return held
+
+
+class _PaidPositionSerializer(OrderPositionCreateSerializer):
+    def validate_item(self, item):
+        # pretix refuses a product that is switched off, force or no force,
+        # and that is the one refusal a sale already paid for cannot satisfy:
+        # the organiser switched the product off after the evening — as one
+        # does — and the till that sold it that evening replays the next
+        # morning. Judged as it would be if it were still on, so that every
+        # other check pretix makes of an item still applies.
+        if not item.active:
+            switched_on = copy.copy(item)
+            switched_on.active = True
+            super().validate_item(switched_on)
+            return item
+        return super().validate_item(item)
+
+
+class PaidOrderSerializer(OrderCreateSerializer):
+    """
+    pretix' own order serializer, for a sale whose money has already moved.
+
+    Replayed from a till that was cut off, or paid on the card reader before
+    the order could be written. It differs in one respect only — see
+    :class:`_PaidPositionSerializer` — and is otherwise exactly what a sale
+    being rung up now goes through, ``force`` included.
+    """
+
+    positions = _PaidPositionSerializer(many=True, required=True)
 
 
 #: How long an attempt at a sale waits for another attempt at the same sale.
@@ -1200,7 +1295,24 @@ class OpenPosViewSet(viewsets.ViewSet):
         event = request.event
         device = request.auth if isinstance(request.auth, Device) else None
 
-        serializer = CheckoutSerializer(data=request.data)
+        # The reader payment this key names, when this till's reader has been
+        # paid for it. Looked up before the request is judged, because it
+        # changes what there is to judge: its basket is the one booked, so the
+        # lines of a sale queued after the reader said "paid" are not read.
+        pos_device = PosDevice.for_device(device)
+        paid_on_reader = None
+        if pos_device.drives_terminal:
+            paid_on_reader = PosTerminalPayment.objects.filter(
+                event=event,
+                idempotency_key=idempotency_key,
+                status=PosTerminalPayment.STATUS_SUCCESSFUL,
+            ).first()
+            if paid_on_reader is not None and not paid_on_reader.belongs_to(device):
+                paid_on_reader = None
+
+        serializer = CheckoutSerializer(
+            data=request.data, context={"pinned": paid_on_reader is not None}
+        )
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
@@ -1222,20 +1334,13 @@ class OpenPosViewSet(viewsets.ViewSet):
         # reader payment cannot happen while the till is cut off anyway — the
         # reader is driven through SumUp's cloud, so a till with no network
         # cannot start one.
-        pos_device = PosDevice.for_device(device)
         terminal = None
         if (
             data["payment_type"] == PosSale.PAYMENT_CARD
             and pos_device.drives_terminal
         ):
-            terminal = PosTerminalPayment.objects.filter(
-                event=event, idempotency_key=idempotency_key
-            ).first()
-            if (
-                terminal is None
-                or terminal.status != PosTerminalPayment.STATUS_SUCCESSFUL
-                or not terminal.belongs_to(device)
-            ):
+            terminal = paid_on_reader
+            if terminal is None:
                 raise ValidationError(
                     {
                         "payment_type": [
@@ -1281,7 +1386,7 @@ class OpenPosViewSet(viewsets.ViewSet):
             settled=settled,
         )
 
-        sellable = sellable_items(event, channel, settled=settled)
+        sellable = sellable_items(event, channel, settled=settled, pinned=terminal is not None)
         # The same answer the catalogue was drawn from, asked again here
         # because that is the only place it binds. A live line from one of
         # these categories is refused; a line whose money has already changed
@@ -1319,6 +1424,7 @@ class OpenPosViewSet(viewsets.ViewSet):
                 settled=settled,
                 subevent=subevent,
                 off_limits=off_limits,
+                pinned=terminal is not None,
             )
             item = resolved.item
             variation = resolved.variation
@@ -1332,12 +1438,14 @@ class OpenPosViewSet(viewsets.ViewSet):
             # cached, and the customer has already paid that. The order is
             # therefore created at what was charged — anything else would print
             # an invoice for a sum nobody handed over — and the divergence is
-            # reported rather than smoothed away. A free amount is the same
-            # story with no tariff to diverge from, so it is left out of the
-            # comparison. A card payment the reader has already taken is priced
-            # from the row written when the cardholder was asked, so it can
-            # diverge the same way and is reported the same way.
-            if settled and price != tariff and not description:
+            # reported rather than smoothed away. A free amount on its own
+            # product has no tariff to diverge from (resolve_line makes its
+            # tariff the amount itself); a reason on any other line hides
+            # nothing any more, and used to hide everything. A card payment
+            # the reader has already taken is priced from the row written when
+            # the cardholder was asked, so it can diverge the same way and is
+            # reported the same way.
+            if settled and price != tariff:
                 off_tariff.append(
                     {
                         "item": item.pk,
@@ -1384,7 +1492,7 @@ class OpenPosViewSet(viewsets.ViewSet):
                 # a few lines further down.
                 journal_line["description"] = description
                 notes.append(f"{count}× {item.name} — {description}")
-            if settled and price != tariff and not description:
+            if settled and price != tariff:
                 # Kept on the line itself, so the divergence survives in the
                 # journal even after the tariff has been edited again.
                 journal_line["tariff_price"] = str(tariff)
@@ -1541,7 +1649,7 @@ class OpenPosViewSet(viewsets.ViewSet):
             # the whole of the queue at the end of an evening. There is nothing
             # for pretix to hold: an order cannot be worth less than nothing.
             if api_positions:
-                order_serializer = OrderCreateSerializer(
+                order_serializer = (PaidOrderSerializer if settled else OrderCreateSerializer)(
                     data=payload,
                     context={
                         "event": event,
