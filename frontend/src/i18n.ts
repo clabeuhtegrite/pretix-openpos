@@ -121,6 +121,8 @@ export const MESSAGES = {
     "update.reload": "New version — reload",
     "update.reloading": "Loading the new version…",
     "error.offline": "No connection to the server.",
+    "error.server": "The server is having trouble (HTTP {status}). Try again in a moment.",
+    "error.tooMany": "Too many requests at once. Wait a few seconds, then try again.",
     "error.refused":
       "The server refused this till: {detail} Try again; if the till has been revoked, unpair it and pair it again with a new code.",
     "error.retry": "Retry",
@@ -527,6 +529,8 @@ export const MESSAGES = {
     "update.reload": "Nouvelle version — recharger",
     "update.reloading": "Chargement de la nouvelle version…",
     "error.offline": "Pas de connexion au serveur.",
+    "error.server": "Le serveur a un souci (HTTP {status}). Réessayez dans un instant.",
+    "error.tooMany": "Trop de demandes à la fois. Attendez quelques secondes, puis réessayez.",
     "error.refused":
       "Le serveur a refusé cette caisse : {detail} Réessayez ; si la caisse a été révoquée, dépairez-la et appairez-la avec un nouveau code.",
     "error.retry": "Réessayer",

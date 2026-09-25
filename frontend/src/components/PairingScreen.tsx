@@ -1,6 +1,7 @@
 import { useState } from "react";
 
-import { api, ApiError } from "../api";
+import { api } from "../api";
+import { describeError } from "../errors";
 import { t } from "../i18n";
 import type { Pairing, PosEventList } from "../types";
 import { EventButtons, UnavailableEvents } from "./EventChoice";
@@ -64,13 +65,10 @@ export default function PairingScreen({ onPaired }: Props) {
       setPartial(base);
       setEvents(list);
     } catch (err) {
-      setError(
-        err instanceof ApiError
-          ? err.isNetwork
-            ? t("error.offline")
-            : err.message
-          : String(err),
-      );
+      // The same wording as everywhere else: a pairing tried against a pretix
+      // that is restarting used to say "HTTP 502" to the person holding a
+      // brand-new till.
+      setError(describeError(err));
     } finally {
       setBusy(false);
     }
