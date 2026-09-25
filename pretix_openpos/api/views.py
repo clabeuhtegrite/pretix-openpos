@@ -942,8 +942,9 @@ class SaleInProgress(APIException):
                 "code": "sale_in_progress",
             }
         )
-        # Retry-After, which is also what makes the app treat this as "not now"
-        # rather than "no": a 5xx is retried under the same key, a 4xx is not.
+        # Sent as Retry-After. The 503 itself is what makes the app treat this
+        # as "not now" rather than "no": it retries a 5xx under the same key,
+        # and lists a 4xx among the refusals.
         self.wait = 2
 
 
