@@ -23,9 +23,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         zlib1g-dev \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir pretix \
-    && pip install --no-cache-dir "pytest<9" pytest-django pytest-cov
+# The pretix the production image is built on, read out of deploy/Dockerfile
+# rather than typed a second time here, so that the suite preflight runs is the
+# one CI runs, against what production runs. Read by the image itself rather
+# than handed in as a build argument: preflight and the command at the top of
+# this file then both get the same pretix without having to be told. Copied on
+# its own, just before the install, so that only an edit to that file costs a
+# reinstall.
+COPY deploy/Dockerfile /tmp/deploy.Dockerfile
+RUN set -e; \
+    version=$(sed -n 's/^ARG PRETIX_VERSION=\(.*\)$/\1/p' /tmp/deploy.Dockerfile); \
+    if [ -z "$version" ]; then echo "no ARG PRETIX_VERSION in deploy/Dockerfile" >&2; exit 1; fi; \
+    pip install --no-cache-dir --upgrade pip; \
+    pip install --no-cache-dir "pretix==${version}.*"; \
+    pip install --no-cache-dir "pytest<9" pytest-django pytest-cov; \
+    rm /tmp/deploy.Dockerfile
 
 WORKDIR /plugin
 ENTRYPOINT ["/bin/sh", "-c"]
