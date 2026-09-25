@@ -27,6 +27,7 @@ const { apiMock, sound } = vi.hoisted(() => ({
     drawerMovement: vi.fn(),
     drawerCount: vi.fn(),
     drawerClose: vi.fn(),
+    deviceStatus: vi.fn(),
   },
 }));
 
@@ -56,16 +57,25 @@ vi.mock("./components/QrScanner", () => ({
 
 import App from "./App";
 import { ApiError, deviceDescription } from "./api";
+import { noteServerTime } from "./clock";
 import { markReachable, markUnreachable } from "./connectivity";
-import { t } from "./i18n";
+import { moment } from "./drawer";
+import { describeError } from "./errors";
+import { t, tn } from "./i18n";
 import { formatMoney } from "./money";
 import {
-  clearBasket, loadBasket, loadCashier, loadDeviceReport, loadPairing, loadQueue, loadRevocations,
-  savePairing, saveBasket, saveDeviceReport, saveFailures, saveQueue,
+  addOrphan, clearBasket, loadBasket, loadCashier, loadDeviceReport, loadFailures, loadOrphans,
+  loadPairing, loadPendingPayment, loadQueue, loadRevocations, savePairing, saveBasket,
+  saveDeviceReport, saveFailures, savePendingPayment, saveQueue,
 } from "./storage";
 import { fillStorage } from "./test/setup";
 import { noTakings } from "./test/takings";
-import type { Catalog, DrawerState, JournalLine, PosConfig, SaleResult } from "./types";
+import type {
+  Catalog, DrawerState, JournalLine, PendingPayment, PosConfig, QueuedSale, SaleResult,
+} from "./types";
+import { STATUS_SETTLE_MS } from "./useDeviceStatus";
+import { ORPHAN_CHECK_MS } from "./useOrphanPayments";
+import { TERMINAL_POLL_MS, TERMINAL_UNANSWERED_MS } from "./useTerminal";
 
 /**
  * The till as a whole.
@@ -212,6 +222,7 @@ beforeEach(() => {
     list: { id: 7, name: "Porte" }, generated: "2026-08-16T20:00:00.000Z",
     tickets: [], truncated: false,
   });
+  apiMock.deviceStatus.mockResolvedValue({ server_time: new Date().toISOString() });
 });
 
 afterEach(() => {
@@ -2245,5 +2256,703 @@ describe("the cash drawer", () => {
 
     expect(screen.queryByRole("button", { name: t("drawer.title", { name: "Bar" }) })).toBeNull();
     expect(apiMock.drawer).not.toHaveBeenCalled();
+  });
+});
+
+
+/** A till whose card payments go through the reader on the counter. */
+function terminalTill(): PosConfig {
+  return config({ device: { serial: "TILL1", name: "Caisse bar", role: "pos", card: "terminal" } });
+}
+
+/** What the server answers about a reader payment. */
+function onReader(status: "pending" | "successful" | "failed", amount = "3.00", failure = "") {
+  return { status, amount, currency: "EUR", failure };
+}
+
+/** A request that went and never came back, as the real client reports one. */
+function unreachable(): Promise<never> {
+  markUnreachable();
+  return Promise.reject(new ApiError(0, "network"));
+}
+
+/** Ring up one beer and answer the panel's question with the card. */
+async function payByCard(user: ReturnType<typeof userEvent.setup>) {
+  await ringUp(user);
+  await user.click(screen.getByRole("button", { name: t("payment.card") }));
+}
+
+/** The key the basket went on the reader under, the n-th time. */
+const readerKey = (n = 0) => apiMock.terminalStart.mock.calls[n][1].idempotency_key as string;
+
+/** A payment written down as on its way, the way the till writes it. */
+function pendingPayment(over: Partial<PendingPayment> = {}): PendingPayment {
+  return {
+    event: "festival",
+    key: "k-pending",
+    stage: "sale",
+    paymentType: "cash",
+    cashGiven: null,
+    charged: null,
+    cart: [{
+      key: "10:", itemId: 10, variationId: null, label: "Bière",
+      unitPrice: 300, count: 1, available: null,
+    }],
+    credit: null,
+    cashier: "",
+    admits: false,
+    currency: "EUR",
+    at: new Date(Date.now() - 60_000).toISOString(),
+    ...over,
+  };
+}
+
+/** A sale rung up with no network, waiting in the queue. */
+function queuedSale(id: string, at = "2026-08-16T21:00:00.000Z"): QueuedSale {
+  return {
+    kind: "sale", id, at, event: "festival",
+    positions: [{ item: 10, variation: null, count: 1, price: "3.00" }],
+    chargedTotal: "3.00", paymentType: "cash", cashGiven: "5.00", cashChange: "2.00",
+    cashier: "", admits: false, label: "1× Bière",
+  };
+}
+
+describe("a card payment on the reader", () => {
+  beforeEach(() => {
+    apiMock.config.mockResolvedValue(terminalTill());
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    clearBasket();
+  });
+
+  it("records the sale once when a stop and the tapped card cross", async () => {
+    // The customer taps as the cashier presses stop: the poll says paid, and
+    // so does the answer to the stop, a moment later. Both used to record
+    // the sale, and the second landed while the first was still on its way.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    apiMock.terminalStart.mockResolvedValue(onReader("pending"));
+    const poll = later<ReturnType<typeof onReader>>();
+    apiMock.terminalStatus.mockReturnValue(poll.promise);
+    const stop = later<ReturnType<typeof onReader>>();
+    apiMock.terminalCancel.mockReturnValue(stop.promise);
+    const recorded = later<SaleResult>();
+    apiMock.checkout.mockReturnValue(recorded.promise);
+    const { user } = show();
+    await ready();
+    await payByCard(user);
+    await screen.findByText(t("payment.readerPrompt"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(TERMINAL_POLL_MS);
+    });
+    expect(apiMock.terminalStatus).toHaveBeenCalledOnce();
+
+    await user.click(screen.getByRole("button", { name: t("payment.readerStop") }));
+    await act(async () => poll.resolve(onReader("successful")));
+    await waitFor(() => expect(apiMock.checkout).toHaveBeenCalledOnce());
+    await act(async () => stop.resolve(onReader("successful")));
+    await act(async () => recorded.resolve(sold({ payment_type: "card" })));
+
+    expect(await screen.findByRole("button", { name: t("done.next") })).toBeDefined();
+    expect(apiMock.checkout).toHaveBeenCalledOnce();
+    expect(apiMock.checkout.mock.calls[0][1].idempotency_key).toBe(readerKey());
+  });
+
+  it("sends a stop pressed while the basket is on its way only once the server has it", async () => {
+    // Sent at once, the stop could overtake the start, be told there was
+    // nothing to stop, and hand the cashier the cash button while the start
+    // put the basket on the reader a second later.
+    const start = later<ReturnType<typeof onReader>>();
+    apiMock.terminalStart.mockReturnValue(start.promise);
+    apiMock.terminalCancel.mockResolvedValue(onReader("failed", "3.00", "CANCELLED"));
+    const { user } = show();
+    await ready();
+    await payByCard(user);
+
+    await user.click(screen.getByRole("button", { name: t("payment.readerStop") }));
+
+    expect(apiMock.terminalCancel).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: t("payment.cash") })).toHaveProperty("disabled", true);
+    await act(async () => start.resolve(onReader("pending")));
+    await waitFor(() => expect(apiMock.terminalCancel).toHaveBeenCalledOnce());
+    expect(apiMock.terminalCancel.mock.calls[0][1]).toBe(readerKey());
+    expect(await screen.findByText(t("payment.readerCancelled"))).toBeDefined();
+  });
+
+  it("puts nothing on the reader with no network, and keeps cash one tap away", async () => {
+    const { user } = show();
+    await ready();
+    act(() => markUnreachable());
+
+    await payByCard(user);
+
+    expect(await screen.findByText(t("payment.readerOffline"))).toBeDefined();
+    expect(apiMock.terminalStart).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: t("payment.cash") })).toHaveProperty("disabled", false);
+    expect(screen.getByRole("button", { name: t("payment.back") })).toHaveProperty("disabled", false);
+  });
+
+  it("puts the basket on the reader once the network is back, when asked", async () => {
+    apiMock.terminalStart.mockResolvedValue(onReader("pending"));
+    const { user } = show();
+    await ready();
+    act(() => markUnreachable());
+    await payByCard(user);
+
+    await act(async () => markReachable());
+
+    expect(await screen.findByText(t("payment.readerBack"))).toBeDefined();
+    expect(apiMock.terminalStart).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: t("payment.readerRetry") }));
+    expect(await screen.findByText(t("payment.readerPrompt"))).toBeDefined();
+    expect(apiMock.terminalStart).toHaveBeenCalledOnce();
+  });
+
+  it("offers a way out once the server has gone quiet, and takes the cash under the sale's own key", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    apiMock.terminalStart.mockResolvedValue(onReader("pending"));
+    apiMock.terminalStatus.mockImplementation(unreachable);
+    const { user } = show();
+    await ready();
+    await payByCard(user);
+    await screen.findByText(t("payment.readerPrompt"));
+    // Until then the rule holds: a payment the till cannot see is a payment
+    // still running.
+    expect(screen.getByRole("button", { name: t("payment.cash") })).toHaveProperty("disabled", true);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(TERMINAL_UNANSWERED_MS + 1000);
+    });
+
+    expect(await screen.findByText(t("payment.readerUnanswered"))).toBeDefined();
+    await user.click(screen.getByRole("button", { name: t("payment.cash") }));
+    await user.click(screen.getByRole("button", { name: t("payment.confirm") }));
+    await screen.findByText(/kept on this till/);
+    const [entry] = loadQueue();
+    expect(entry).toMatchObject({ kind: "sale", paymentType: "cash" });
+    // Never the reader's key: had that payment gone through, the replay would
+    // find it and record a card sale for money taken in cash.
+    expect(entry.id).not.toBe(readerKey());
+    // The reader payment is kept aside, to be asked about.
+    expect(loadOrphans()).toEqual([expect.objectContaining({ key: readerKey(), amount: "3.00" })]);
+  });
+
+  it("keeps waiting, cash locked, through a till turned away or asked to slow down", async () => {
+    // Neither says anything about the payment, which the reader may still be
+    // asking a customer for.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    apiMock.terminalStart.mockResolvedValue(onReader("pending"));
+    apiMock.terminalStatus
+      .mockRejectedValueOnce(new ApiError(429, "Too many requests."))
+      .mockRejectedValueOnce(new ApiError(403, "Forbidden."))
+      .mockResolvedValue(onReader("pending"));
+    const { user } = show();
+    await ready();
+    await payByCard(user);
+    await screen.findByText(t("payment.readerPrompt"));
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(3 * TERMINAL_POLL_MS + 500);
+    });
+
+    expect(apiMock.terminalStatus).toHaveBeenCalledTimes(3);
+    expect(screen.getByText(t("payment.readerPrompt"))).toBeDefined();
+    expect(screen.getByRole("button", { name: t("payment.cash") })).toHaveProperty("disabled", true);
+    expect(apiMock.checkout).not.toHaveBeenCalled();
+  });
+
+  it("queues a card sale it could not record with its lines' own sum beside the reader's figure", async () => {
+    // The server priced the basket at 3.50 when it put it on the reader; the
+    // lines here say 3.00, a tariff refresh behind. Checked against 3.50 on
+    // replay, they did not add up and the sale was refused.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    apiMock.terminalStart.mockResolvedValue(onReader("pending", "3.50"));
+    apiMock.terminalStatus.mockResolvedValue(onReader("successful", "3.50"));
+    apiMock.checkout.mockImplementation(unreachable);
+    const { user } = show();
+    await ready();
+    await payByCard(user);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(TERMINAL_POLL_MS + 500);
+    });
+
+    await waitFor(() => expect(loadQueue()).toHaveLength(1));
+    expect(loadQueue()[0]).toMatchObject({
+      id: readerKey(), paymentType: "card", chargedTotal: "3.50", linesTotal: "3.00",
+    });
+  });
+
+  it("takes cash after a refused card under the sale's key, never the reader's", async () => {
+    apiMock.terminalStart.mockResolvedValue(onReader("failed", "3.00", "FAILED"));
+    const { user } = show();
+    await ready();
+    await payByCard(user);
+    await screen.findByText(t("payment.readerRefused"));
+
+    await user.click(screen.getByRole("button", { name: t("payment.cash") }));
+    await user.click(screen.getByRole("button", { name: t("payment.confirm") }));
+
+    await waitFor(() => expect(apiMock.checkout).toHaveBeenCalledOnce());
+    const sale = apiMock.checkout.mock.calls[0][1];
+    expect(sale.payment_type).toBe("cash");
+    expect(sale.idempotency_key).not.toBe(readerKey());
+  });
+
+  it("asks nothing more about the reader once the panel has closed", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    apiMock.terminalStart.mockResolvedValue(onReader("pending"));
+    apiMock.terminalStatus.mockResolvedValue(onReader("successful"));
+    apiMock.checkout.mockResolvedValue(sold({ payment_type: "card" }));
+    const { user } = show();
+    await ready();
+    await payByCard(user);
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(TERMINAL_POLL_MS + 500);
+    });
+    expect(await screen.findByRole("button", { name: t("done.next") })).toBeDefined();
+    const asked = apiMock.terminalStatus.mock.calls.length;
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10 * TERMINAL_POLL_MS);
+    });
+
+    expect(apiMock.terminalStatus).toHaveBeenCalledTimes(asked);
+  });
+});
+
+describe("a card payment left aside", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("is taken off the reader once the server answers, while it is still recent", async () => {
+    addOrphan({
+      event: "festival", key: "k-aside", at: new Date(Date.now() - 60_000).toISOString(),
+      amount: "3.00", currency: "EUR",
+    });
+    apiMock.terminalStatus.mockResolvedValue(onReader("pending"));
+    apiMock.terminalCancel.mockResolvedValue(onReader("failed", "3.00", "CANCELLED"));
+    show();
+    await ready();
+
+    await waitFor(() => expect(apiMock.terminalCancel).toHaveBeenCalledOnce());
+    expect(apiMock.terminalCancel.mock.calls[0][1]).toBe("k-aside");
+    await waitFor(() => expect(loadOrphans()).toEqual([]));
+  });
+
+  it("is shown, until somebody has read it, when the card went through after all", async () => {
+    const at = new Date(Date.now() - 10 * 60_000).toISOString();
+    addOrphan({ event: "festival", key: "k-aside", at, amount: "3.00", currency: "EUR" });
+    apiMock.terminalStatus.mockResolvedValue(onReader("successful"));
+    const { user } = show();
+    await ready();
+    const warning = t("payment.latePaid", { amount: formatMoney(300, "EUR"), time: moment(at) });
+
+    expect(await screen.findByText(warning)).toBeDefined();
+    // Too old to be taken off a reader that may have moved on to somebody else.
+    expect(apiMock.terminalCancel).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: t("payment.latePaidOk") }));
+
+    expect(screen.queryByText(warning)).toBeNull();
+    expect(loadOrphans()).toEqual([]);
+  });
+
+  it("is waited for while the network is gone, and asked about once it is back", async () => {
+    addOrphan({
+      event: "festival", key: "k-aside", at: new Date(Date.now() - 10 * 60_000).toISOString(),
+      amount: "3.00", currency: "EUR",
+    });
+    apiMock.terminalStatus.mockResolvedValue(onReader("failed", "3.00", "TIMEOUT"));
+    act(() => markUnreachable());
+    show();
+    await ready();
+    expect(apiMock.terminalStatus).not.toHaveBeenCalled();
+
+    await act(async () => markReachable());
+
+    await waitFor(() => expect(loadOrphans()).toEqual([]));
+    expect(apiMock.terminalStatus).toHaveBeenCalledWith(expect.anything(), "k-aside");
+  });
+});
+
+describe("a payment the till was in the middle of when it stopped", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    clearBasket();
+  });
+
+  /** Take the card payment as far as the reader, then kill the till. */
+  async function killedAtTheReader() {
+    apiMock.config.mockResolvedValue(terminalTill());
+    apiMock.terminalStart.mockResolvedValue(onReader("pending"));
+    apiMock.terminalStatus.mockResolvedValue(onReader("pending"));
+    const user = userEvent.setup();
+    const first = render(<App />);
+    await ready();
+    await payByCard(user);
+    await screen.findByText(t("payment.readerPrompt"));
+    // iOS reclaims the app while the customer holds their card.
+    first.unmount();
+    apiMock.terminalStatus.mockClear();
+    return readerKey();
+  }
+
+  it("asks how the reader payment ended rather than putting the basket on the reader again", async () => {
+    const key = await killedAtTheReader();
+
+    render(<App />);
+
+    await waitFor(() => expect(apiMock.terminalStatus).toHaveBeenCalledWith(expect.anything(), key));
+    expect(await screen.findByText(t("payment.resumed"))).toBeDefined();
+    expect(await screen.findByText(t("payment.readerPrompt"))).toBeDefined();
+    expect(apiMock.terminalStart).toHaveBeenCalledOnce();
+  });
+
+  it("records the sale the customer paid for while the till was away, under the reader's key", async () => {
+    const key = await killedAtTheReader();
+    apiMock.terminalStatus.mockResolvedValue(onReader("successful"));
+
+    render(<App />);
+
+    await waitFor(() => expect(apiMock.checkout).toHaveBeenCalledOnce());
+    expect(apiMock.checkout.mock.calls[0][1]).toMatchObject({
+      idempotency_key: key, payment_type: "card", expected_total: "3.00",
+    });
+    expect(await screen.findByRole("button", { name: t("done.next") })).toBeDefined();
+    expect(loadPendingPayment()).toBeNull();
+  });
+
+  it("gives the basket back, saying why, when the card was refused meanwhile", async () => {
+    await killedAtTheReader();
+    apiMock.terminalStatus.mockResolvedValue(onReader("failed", "3.00", "FAILED"));
+
+    render(<App />);
+
+    expect(await screen.findByText(t("payment.readerRefused"))).toBeDefined();
+    expect(apiMock.checkout).not.toHaveBeenCalled();
+    await waitFor(() => expect(loadPendingPayment()).toBeNull());
+  });
+
+  it("offers the way out at once when the server cannot be asked", async () => {
+    // Nobody knows how long ago the server last answered: the till was not
+    // running to hear it.
+    await killedAtTheReader();
+    apiMock.terminalStatus.mockImplementation(unreachable);
+
+    render(<App />);
+
+    expect(await screen.findByText(t("payment.readerUnanswered"))).toBeDefined();
+    expect(screen.getByRole("button", { name: t("payment.cash") })).toHaveProperty("disabled", false);
+  });
+
+  it("sends a sale that was on its way again, under the same key, and says why", async () => {
+    // Killed while "Recording…" spun. The next try used to carry a new key,
+    // and a request that had in fact arrived became a second sale.
+    apiMock.checkout.mockReturnValueOnce(new Promise(() => {}));
+    const user = userEvent.setup();
+    const first = render(<App />);
+    await ready();
+    await ringUp(user);
+    await confirm(user);
+    await waitFor(() => expect(apiMock.checkout).toHaveBeenCalledOnce());
+    const key = apiMock.checkout.mock.calls[0][1].idempotency_key;
+    first.unmount();
+    apiMock.checkout.mockResolvedValue(sold({ replayed: true }));
+
+    render(<App />);
+
+    await waitFor(() => expect(apiMock.checkout).toHaveBeenCalledTimes(2));
+    expect(apiMock.checkout.mock.calls[1][1].idempotency_key).toBe(key);
+    expect(await screen.findByText(t("done.resumed"))).toBeDefined();
+    expect(loadPendingPayment()).toBeNull();
+  });
+
+  it("queues it under that key when the network is gone", async () => {
+    apiMock.checkout.mockReturnValueOnce(new Promise(() => {}));
+    const user = userEvent.setup();
+    const first = render(<App />);
+    await ready();
+    await ringUp(user);
+    await confirm(user);
+    await waitFor(() => expect(apiMock.checkout).toHaveBeenCalledOnce());
+    const key = apiMock.checkout.mock.calls[0][1].idempotency_key;
+    first.unmount();
+    act(() => markUnreachable());
+
+    render(<App />);
+
+    expect(await screen.findByText(t("done.resumed"))).toBeDefined();
+    expect(loadQueue()).toEqual([expect.objectContaining({ kind: "sale", id: key })]);
+    expect(apiMock.checkout).toHaveBeenCalledOnce();
+  });
+
+  it("picks up a card sale that was being recorded, locked on it until it is", async () => {
+    // The reader had taken the money: only the sale is left, and a cash tap
+    // meanwhile would record the same money twice.
+    apiMock.config.mockResolvedValue(terminalTill());
+    savePendingPayment(pendingPayment({ key: "k-card", paymentType: "card", charged: "3.50" }));
+    const recorded = later<SaleResult>();
+    apiMock.checkout.mockReturnValue(recorded.promise);
+    show();
+
+    await waitFor(() => expect(apiMock.checkout).toHaveBeenCalledOnce());
+    expect(apiMock.checkout.mock.calls[0][1]).toMatchObject({
+      idempotency_key: "k-card", payment_type: "card", expected_total: "3.50",
+    });
+    expect(screen.getByText(t("payment.readerPaid"))).toBeDefined();
+    expect(screen.getByRole("button", { name: t("payment.cash") })).toHaveProperty("disabled", true);
+    await act(async () => recorded.resolve(sold({ payment_type: "card" })));
+    expect(await screen.findByText(t("done.resumed"))).toBeDefined();
+    expect(apiMock.terminalStatus).not.toHaveBeenCalled();
+  });
+
+  it("files a sale left from an earlier evening in the queue, under its key, with nothing on screen", async () => {
+    const at = new Date(Date.now() - 3 * 3600_000).toISOString();
+    savePendingPayment(pendingPayment({ key: "k-old", at }));
+    apiMock.checkout.mockResolvedValue(sold({ replayed: true }));
+    show();
+    await ready();
+
+    await waitFor(() => expect(apiMock.checkout).toHaveBeenCalledWith(pairing, expect.objectContaining({
+      idempotency_key: "k-old", offline: expect.objectContaining({ recorded_at: at }),
+    })));
+    expect(screen.queryByRole("heading", { name: t("payment.title") })).toBeNull();
+    expect(loadPendingPayment()).toBeNull();
+  });
+
+  it("keeps a sale from an earlier evening where it is when the queue cannot take it", async () => {
+    // Tried again at the next launch: dropped, it would exist nowhere.
+    savePendingPayment(pendingPayment({ key: "k-old", at: new Date(Date.now() - 3 * 3600_000).toISOString() }));
+    fillStorage();
+    show();
+    await ready();
+
+    expect(loadPendingPayment()).toMatchObject({ key: "k-old" });
+    expect(loadQueue()).toEqual([]);
+  });
+
+  it("sets a reader payment from an earlier evening aside, to be asked about", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    savePendingPayment(pendingPayment({
+      key: "k-old", stage: "reader", paymentType: "card",
+      at: new Date(Date.now() - 3 * 3600_000).toISOString(),
+    }));
+    apiMock.terminalStatus.mockResolvedValue(onReader("failed", "3.00", "TIMEOUT"));
+    show();
+    await ready();
+    expect(loadOrphans()).toEqual([expect.objectContaining({ key: "k-old", amount: "3.00" })]);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ORPHAN_CHECK_MS);
+    });
+
+    await waitFor(() => expect(loadOrphans()).toEqual([]));
+    expect(apiMock.terminalStatus).toHaveBeenCalledWith(expect.anything(), "k-old");
+    expect(apiMock.terminalCancel).not.toHaveBeenCalled();
+    expect(screen.queryByRole("heading", { name: t("payment.title") })).toBeNull();
+  });
+
+  it("keeps the sale on its way through a request to wait, and sends it again under the same key", async () => {
+    const wait = new ApiError(429, "Too many requests.");
+    apiMock.checkout.mockRejectedValueOnce(wait).mockResolvedValueOnce(sold());
+    const { user } = show();
+    await ready();
+    await ringUp(user);
+    await confirm(user);
+
+    expect(await screen.findByText(describeError(wait))).toBeDefined();
+    const key = apiMock.checkout.mock.calls[0][1].idempotency_key;
+    expect(loadPendingPayment()).toMatchObject({ key, stage: "sale" });
+    expect(loadQueue()).toEqual([]);
+    await user.click(screen.getByRole("button", { name: t("payment.confirm") }));
+
+    await waitFor(() => expect(apiMock.checkout).toHaveBeenCalledTimes(2));
+    expect(apiMock.checkout.mock.calls[1][1].idempotency_key).toBe(key);
+    expect(await screen.findByRole("button", { name: t("done.next") })).toBeDefined();
+  });
+
+  it("forgets the payment on its way when the cashier goes back", async () => {
+    apiMock.checkout.mockRejectedValue(new ApiError(429, "Too many requests."));
+    const { user } = show();
+    await ready();
+    await ringUp(user);
+    await confirm(user);
+    await waitFor(() => expect(loadPendingPayment()).not.toBeNull());
+
+    await user.click(screen.getByRole("button", { name: t("payment.back") }));
+
+    expect(loadPendingPayment()).toBeNull();
+  });
+
+  it("lets go of a card payment the server refuses to record for good", async () => {
+    // Sending it again would only be refused again; the payment is in the back
+    // office's list of card payments with no sale.
+    apiMock.config.mockResolvedValue(terminalTill());
+    apiMock.terminalStart.mockResolvedValue(onReader("successful"));
+    apiMock.checkout.mockRejectedValue(new ApiError(400, "Sold out.", { detail: "Sold out." }));
+    const { user } = show();
+    await ready();
+    await payByCard(user);
+
+    expect(await screen.findByText(`${t("payment.readerPaidNotRecorded")} Sold out.`)).toBeDefined();
+    expect(loadPendingPayment()).toMatchObject({ stage: "sale", charged: "3.00" });
+    await user.click(screen.getByRole("button", { name: t("payment.back") }));
+
+    expect(loadPendingPayment()).toBeNull();
+    expect(screen.queryByRole("heading", { name: t("payment.title") })).toBeNull();
+  });
+});
+
+describe("a till the server turns away", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("keeps every sale it holds for when it is paired again, and says so", async () => {
+    // A revoked till used to file each of them as refused, one after the
+    // other, and have nothing left to send once it was paired again.
+    saveQueue([queuedSale("k-1"), queuedSale("k-2"), queuedSale("k-3")]);
+    const refused = new ApiError(403, "Invalid token.");
+    apiMock.config.mockRejectedValue(refused);
+    apiMock.catalog.mockRejectedValue(refused);
+    apiMock.checkout.mockRejectedValue(refused);
+    show();
+
+    expect(await screen.findByText(tn("error.keptForRepair", 3))).toBeDefined();
+    await waitFor(() => expect(apiMock.checkout).toHaveBeenCalledOnce());
+    expect(loadQueue().map((entry) => entry.id)).toEqual(["k-1", "k-2", "k-3"]);
+    expect(loadFailures()).toEqual([]);
+  });
+
+  it("waits as long as the server asked before sending again, unless somebody asks", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    saveQueue([queuedSale("k-1")]);
+    apiMock.checkout
+      .mockRejectedValueOnce(new ApiError(429, "Too many requests.", null, 60_000))
+      .mockResolvedValue(sold());
+    const { user } = show();
+    await ready();
+    await waitFor(() => expect(apiMock.checkout).toHaveBeenCalledOnce());
+
+    // Two of the till's own retries go by without a request.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+    expect(apiMock.checkout).toHaveBeenCalledOnce();
+
+    await user.click(screen.getByRole("button", { name: t("offline.badgePending", { n: 1 }) }));
+    await user.click(screen.getByRole("button", { name: t("offline.sync") }));
+
+    await waitFor(() => expect(loadQueue()).toEqual([]));
+    expect(apiMock.checkout).toHaveBeenCalledTimes(2);
+  });
+
+  it("sends again by itself once the wait is over", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    saveQueue([queuedSale("k-1")]);
+    apiMock.checkout
+      .mockRejectedValueOnce(new ApiError(429, "Too many requests.", null, 20_000))
+      .mockResolvedValue(sold());
+    show();
+    await ready();
+    await waitFor(() => expect(apiMock.checkout).toHaveBeenCalledOnce());
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(31_000);
+    });
+
+    await waitFor(() => expect(loadQueue()).toEqual([]));
+  });
+});
+
+describe("what the back office is told about this device", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("hears what it holds as soon as it opens", async () => {
+    saveQueue([queuedSale("k-1", "2026-08-16T21:00:00.000Z"), queuedSale("k-2", "2026-08-16T21:30:00.000Z")]);
+    apiMock.checkout.mockRejectedValue(new ApiError(0, "network"));
+    show();
+    await ready();
+
+    await waitFor(() => expect(apiMock.deviceStatus).toHaveBeenCalled());
+    expect(apiMock.deviceStatus.mock.calls[0]).toEqual([pairing, {
+      pending_sales: 2,
+      oldest_pending_at: "2026-08-16T21:00:00.000Z",
+      last_sync_at: null,
+      version: __APP_VERSION__,
+    }]);
+  });
+
+  it("hears again a few seconds after the queue has moved", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    apiMock.checkout.mockRejectedValue(new ApiError(0, "network"));
+    const { user } = show();
+    await ready();
+    await waitFor(() => expect(apiMock.deviceStatus).toHaveBeenCalledOnce());
+    await ringUp(user);
+    await confirm(user);
+    await screen.findByText(/kept on this till/);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(STATUS_SETTLE_MS + 500);
+    });
+
+    await waitFor(() => expect(apiMock.deviceStatus).toHaveBeenCalledTimes(2));
+    expect(apiMock.deviceStatus.mock.calls[1][1]).toMatchObject({ pending_sales: 1 });
+  });
+
+  it("is not something the cashier hears about when it fails", async () => {
+    apiMock.deviceStatus.mockRejectedValue(new ApiError(502, "Bad gateway"));
+    show();
+    await ready();
+
+    await waitFor(() => expect(apiMock.deviceStatus).toHaveBeenCalled());
+    expect(screen.queryByText("Bad gateway")).toBeNull();
+    expect(screen.queryByRole("button", { name: t("offline.badgeOffline", { n: 0 }) })).toBeNull();
+  });
+});
+
+describe("a device whose clock is off", () => {
+  afterEach(() => {
+    // Module state: set back to a clock that agrees, for the next test.
+    const now = Date.now();
+    act(() => noteServerTime(new Date(now).toISOString(), now, now));
+  });
+
+  /** One reading of the server's clock, `offMs` behind this device's. */
+  function serverBehindBy(offMs: number) {
+    const now = Date.now();
+    act(() => noteServerTime(new Date(now - offMs).toISOString(), now, now));
+  }
+
+  it("says it is ahead, by how much, and where to set it", async () => {
+    show();
+    await ready();
+
+    serverBehindBy(7 * 60_000);
+
+    expect(await screen.findByText(t("clock.ahead", { drift: "7 min" }))).toBeDefined();
+  });
+
+  it("says it is behind, in hours past an hour", async () => {
+    show();
+    await ready();
+
+    serverBehindBy(-(2 * 60 + 5) * 60_000);
+
+    expect(await screen.findByText(t("clock.behind", { drift: "2 h 05" }))).toBeDefined();
+  });
+
+  it("says nothing of a minute or so, which is only the network", async () => {
+    show();
+    await ready();
+
+    serverBehindBy(90_000);
+
+    expect(screen.queryByText(/Set Automatically/)).toBeNull();
   });
 });

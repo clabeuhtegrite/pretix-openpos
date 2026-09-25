@@ -179,6 +179,38 @@ describe("moving on by hand", () => {
   });
 });
 
+describe("a sale the till picked up after restarting", () => {
+  it("says why the screen changed by itself, above the headline", () => {
+    const onDismiss = vi.fn();
+    render(
+      <DoneScreen sale={sale()} currency="EUR" note={t("done.resumed")} onDismiss={onDismiss} />,
+    );
+
+    const note = screen.getByText(t("done.resumed"));
+    const headline = screen.getByText(t("done.admitted"));
+    expect(note.compareDocumentPosition(headline) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("waits to be read rather than moving on by itself", () => {
+    // Nobody tapped anything to get here: the cashier may not even be
+    // looking yet.
+    vi.useFakeTimers();
+    const onDismiss = vi.fn();
+    render(
+      <DoneScreen
+        sale={sale({ checked_in: 0 })}
+        currency="EUR"
+        note={t("done.resumed")}
+        onDismiss={onDismiss}
+      />,
+    );
+
+    vi.advanceTimersByTime(60_000);
+
+    expect(onDismiss).not.toHaveBeenCalled();
+  });
+});
+
 describe("a deposit handed back", () => {
   it("names the amount to count out when nothing was sold", () => {
     show({
