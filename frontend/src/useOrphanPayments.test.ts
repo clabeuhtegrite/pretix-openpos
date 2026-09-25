@@ -1,4 +1,5 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { terminalStatus, terminalCancel } = vi.hoisted(() => ({
@@ -140,6 +141,18 @@ describe("a payment that went through after all", () => {
 
     expect(result.current.latePaid).toEqual([]);
     expect(loadOrphans()).toEqual([]);
+  });
+
+  it("is shown at once under StrictMode, where the first round outlives the effect that started it", async () => {
+    // The effect runs twice on mount; the second run skips its first round
+    // while the first one is still out, and what that one learns is the
+    // screen's all the same — not twenty seconds later.
+    terminalStatus.mockResolvedValue(reader("successful"));
+    addOrphan(aside("k-1", ORPHAN_CANCEL_WITHIN_MS + 1000));
+    const { result } = renderHook(() => useOrphanPayments(pairing, true, false), { wrapper: StrictMode });
+
+    await waitFor(() => expect(result.current.latePaid).toHaveLength(1));
+    expect(terminalStatus).toHaveBeenCalledOnce();
   });
 
   it("is found by the stop itself when the card was tapped in the meantime", async () => {

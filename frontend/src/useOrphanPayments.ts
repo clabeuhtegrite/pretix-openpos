@@ -85,6 +85,20 @@ export function useOrphanPayments(pairing: Pairing | null, online: boolean, read
   const busyRef = useRef(readerBusy);
   busyRef.current = readerBusy;
   const runningRef = useRef(false);
+  /**
+   * Whether anything is still on screen to be told, as opposed to whether the
+   * run of the effect that asked is: a round outlives the run that started
+   * it whenever the network flickers mid-round — or, under StrictMode, on
+   * every launch — and the run after it skips its own first round while that
+   * one is still out. What that round learned is the screen's to show.
+   */
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!pairing || !online) return;
@@ -106,7 +120,7 @@ export function useOrphanPayments(pairing: Pairing | null, online: boolean, read
         }
       } finally {
         runningRef.current = false;
-        if (!stopped) setOrphans(loadOrphans());
+        if (mountedRef.current) setOrphans(loadOrphans());
       }
     };
 
