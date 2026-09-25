@@ -1,11 +1,26 @@
 import { useEffect, useRef, useState } from "react";
 
 import { api } from "../api";
+import { describeError } from "../errors";
 import { t } from "../i18n";
 import type { AttendeeMatch, Pairing } from "../types";
 
-/** Below this, a search matches half the guest list and helps nobody. */
-const MIN_QUERY = 2;
+/**
+ * How many letters a search needs before it is sent.
+ *
+ * Below this, a search matches half the guest list and helps nobody — and the
+ * server refuses it anyway, since every hit carries the ticket's secret and a
+ * short term hands out a good part of the list: it answers only a term with
+ * three characters that are not spaces. Counted the same way here, so the
+ * till never sends what will be refused and never puts that refusal in front
+ * of a queue.
+ */
+export const MIN_QUERY = 3;
+
+/** Whether a query carries enough to be worth sending — see MIN_QUERY. */
+export function searchable(query: string): boolean {
+  return query.replace(/\s/g, "").length >= MIN_QUERY;
+}
 /** Let the operator finish typing a name before asking the server. */
 const DEBOUNCE_MS = 300;
 /** How long the confirmation ignores the tap that opened it. */
@@ -57,7 +72,7 @@ export default function AttendeeSearch({ pairing, listId, onPick, onClose }: Pro
 
   useEffect(() => {
     const trimmed = query.trim();
-    if (trimmed.length < MIN_QUERY) {
+    if (!searchable(trimmed)) {
       setResults(null);
       setError(null);
       return;
@@ -78,7 +93,9 @@ export default function AttendeeSearch({ pairing, listId, onPick, onClose }: Pro
         setResults(data.results);
       } catch (e) {
         if (e instanceof DOMException && e.name === "AbortError") return;
-        setError(t("error.offline"));
+        // Not always the network: a pretix restarting answers 502, a busy one
+        // 429, and "no connection" sent the operator looking for the wifi.
+        setError(describeError(e));
       } finally {
         setBusy(false);
       }

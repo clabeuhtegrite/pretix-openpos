@@ -730,7 +730,10 @@ une liste. C'est [CheckinScreen.tsx](../frontend/src/components/CheckinScreen.ts
   pretix refuse avec un motif explicite au lieu de renvoyer un « incomplet »
   inexploitable.
 - **Recherche par nom** (`checkinrpc/search`) quand un code ne passe pas : nom
-  partiel, e-mail ou code de commande dans un seul champ.
+  partiel, e-mail ou code de commande dans un seul champ, **à partir de trois
+  caractères** hors espaces. Le serveur refuse une recherche plus courte — elle
+  ramènerait une bonne part de la liste des invités, et chaque réponse porte le
+  secret du billet — et la caisse n'envoie donc jamais moins.
 - **QR uniquement.** jsQR ne lit ni Code128 ni PDF417 ; un billet imprimé avec un
   code-barres non-QR doit passer par un lecteur douchette en mode clavier.
 
