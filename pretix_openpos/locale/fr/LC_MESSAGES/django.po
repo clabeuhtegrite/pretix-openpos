@@ -132,6 +132,10 @@ msgstr "Un montant libre doit être supérieur à zéro."
 msgid "Open POS is not enabled for the event {slug}."
 msgstr "Open POS n’est pas activé sur l’événement {slug}."
 
+#: api/views.py:852
+msgid "Only a paired device can report its status."
+msgstr "Seul un appareil appairé peut donner son état."
+
 #: api/views.py:1012
 msgid "Uncategorised"
 msgstr "Sans catégorie"
@@ -280,6 +284,37 @@ msgstr "Autre motif"
 #: channels.py:13
 msgid "On-site sales made at the till through the Open POS cash register."
 msgstr "Ventes sur place faites à la caisse Open POS."
+
+#: devices.py:70
+#, python-brace-format
+msgid "{count} sale waiting to be sent"
+msgid_plural "{count} sales waiting to be sent"
+msgstr[0] "{count} vente en attente d’envoi"
+msgstr[1] "{count} ventes en attente d’envoi"
+
+#: devices.py:74
+#, python-brace-format
+msgid "{count} sale waiting since {time}"
+msgid_plural "{count} sales waiting since {time}"
+msgstr[0] "{count} vente en attente depuis {time}"
+msgstr[1] "{count} ventes en attente depuis {time}"
+
+#: devices.py:77
+#, python-brace-format
+msgid "{count} sale waiting since {date}"
+msgid_plural "{count} sales waiting since {date}"
+msgstr[0] "{count} vente en attente depuis le {date}"
+msgstr[1] "{count} ventes en attente depuis le {date}"
+
+#: devices.py:92
+#, python-brace-format
+msgid "reported at {time}"
+msgstr "signalé à {time}"
+
+#: devices.py:93
+#, python-brace-format
+msgid "reported on {date}"
+msgstr "signalé le {date}"
 
 #: devices.py:165
 #, python-brace-format
@@ -1574,6 +1609,19 @@ msgstr ""
 "Les rôles ci-dessous restent modifiables, et un lecteur déjà donné à une "
 "caisse reste où il est."
 
+#: templates/pretix_openpos/devices.html:38
+msgid ""
+"A device below says it is holding sales it has not managed to send yet — "
+"rung up with no network, waiting for it to come back. They are not in the "
+"amount its cash drawer should hold until they arrive: before counting that "
+"drawer, bring the device back online and let it send them."
+msgstr ""
+"Un appareil ci-dessous dit garder des ventes qu’il n’a pas encore réussi à "
+"envoyer — enregistrées sans réseau, en attendant qu’il revienne. Elles ne "
+"sont pas dans le montant que sa caisse espèces devrait contenir tant "
+"qu’elles ne sont pas arrivées : avant de compter cette caisse, remettez "
+"l’appareil en ligne et laissez-le les envoyer."
+
 #: templates/pretix_openpos/devices.html:41
 msgid "Device"
 msgstr "Appareil"
@@ -1586,6 +1634,15 @@ msgstr "Lecteur de carte"
 #: templates/pretix_openpos/devices.html:80
 msgid "None"
 msgstr "Aucun"
+
+#: templates/pretix_openpos/devices.html:70
+#, python-format
+msgid "Last contact %(ago)s (%(when)s)"
+msgstr "Dernier contact %(ago)s (%(when)s)"
+
+#: templates/pretix_openpos/devices.html:74
+msgid "No contact recorded yet"
+msgstr "Aucun contact enregistré pour l’instant"
 
 #: templates/pretix_openpos/devices.html:89
 msgid "unknown to SumUp"
@@ -2815,6 +2872,10 @@ msgstr ""
 "n’est demandé. Les paiements sont alors réglés en interrogeant SumUp à "
 "intervalle régulier, ce qui prend une ou deux secondes de plus et revient au "
 "même."
+
+#: templates/pretix_openpos/waiting_sales.html:8
+msgid "Not in this amount yet, still on a till:"
+msgstr "Pas encore dans ce montant, encore sur une caisse :"
 
 #: views.py:127
 msgid "A till device sells:"

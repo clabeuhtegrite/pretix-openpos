@@ -1,5 +1,6 @@
 {% extends "pretixcontrol/organizers/base.html" %}
 {% load i18n %}
+{% load humanize %}
 {% block title %}{% trans "Till devices" %}{% endblock %}
 {% block content %}
     <h1>{% trans "Till devices" %}</h1>
@@ -32,6 +33,17 @@
             </div>
         {% endif %}
 
+        {% if any_waiting %}
+            <div class="alert alert-warning">
+                {% blocktrans trimmed %}
+                    A device below says it is holding sales it has not managed to send yet —
+                    rung up with no network, waiting for it to come back. They are not in the
+                    amount its cash drawer should hold until they arrive: before counting that
+                    drawer, bring the device back online and let it send them.
+                {% endblocktrans %}
+            </div>
+        {% endif %}
+
         <form action="" method="post">
             {% csrf_token %}
             <div class="table-responsive">
@@ -52,6 +64,24 @@
                                 <td>
                                     <strong>{{ row.device.name }}</strong><br>
                                     <small class="text-muted">{{ row.device.unique_serial }}</small>
+                                    <br>
+                                    <small class="text-muted">
+                                        {% if row.last_seen %}
+                                            {% blocktrans trimmed with ago=row.last_seen|naturaltime when=row.last_seen|date:"SHORT_DATETIME_FORMAT" %}
+                                                Last contact {{ ago }} ({{ when }})
+                                            {% endblocktrans %}
+                                        {% else %}
+                                            {% trans "No contact recorded yet" %}
+                                        {% endif %}
+                                    </small>
+                                    {% if row.waiting %}
+                                        <br>
+                                        <span class="text-warning">
+                                            <span class="fa fa-exclamation-triangle"></span>
+                                            <strong>{{ row.waiting }}</strong>
+                                        </span>
+                                        <small class="text-muted">({{ row.reported }})</small>
+                                    {% endif %}
                                 </td>
                                 {% for value, label in roles %}
                                     <td>

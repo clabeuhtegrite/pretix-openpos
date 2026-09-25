@@ -127,6 +127,9 @@ def test_reading_the_guest_list_costs_the_same_whatever_its_size(
     test that counts queries rather than one that compares JSON.
     """
     admit(event, ticket, ["Solo Ticket"])
+    # The device's first call writes its row, to say when it was last heard
+    # from; every later one updates it. Out of the way before counting.
+    till.get("offline", list=checkin_list.pk)
     with CaptureQueriesContext(connection) as one_ticket:
         assert till.get("offline", list=checkin_list.pk).status_code == 200
 

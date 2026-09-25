@@ -217,6 +217,25 @@ class CancelSerializer(serializers.Serializer):
     )
 
 
+class DeviceStatusSerializer(serializers.Serializer):
+    """
+    What a till says about itself: the sales it has not managed to send yet.
+
+    Its own account, on its own clock, and stored as such — the server has no
+    way to count sales that never reached it, which is the whole point of
+    asking. Strict all the same: a report that does not parse is an app bug
+    worth a 400, not a number to show an organizer.
+    """
+
+    #: The column's own limit; a queue anywhere near it is a bug, not a night.
+    pending_sales = serializers.IntegerField(min_value=0, max_value=2147483647)
+    #: When the oldest unsent sale was rung up. ``null`` when nothing waits.
+    oldest_pending_at = serializers.DateTimeField(allow_null=True, required=False, default=None)
+    #: When the queue last went through, whole. ``null`` before it ever did.
+    last_sync_at = serializers.DateTimeField(allow_null=True, required=False, default=None)
+    version = serializers.CharField(max_length=64, allow_blank=True)
+
+
 class DrawerCountSerializer(serializers.Serializer):
     """
     Cash counted into or out of a drawer: the float at opening, or a count.

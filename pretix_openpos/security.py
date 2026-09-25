@@ -30,6 +30,9 @@ class OpenPosSecurityProfile(AllowListSecurityProfile):
         ("GET", "api-v1:event-detail"),
         # The POS endpoints themselves.
         ("GET", "api-v1:openpos-orga-list"),
+        # The till's own account of the sales it has not sent yet, for the
+        # back office. Writes to this device's row and to nothing else.
+        ("POST", "api-v1:openpos-orga-status"),
         ("GET", "api-v1:openpos-config"),
         ("GET", "api-v1:openpos-catalog"),
         ("POST", "api-v1:openpos-checkout"),

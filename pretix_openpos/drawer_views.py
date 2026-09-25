@@ -36,6 +36,7 @@ from django.utils.translation import gettext_lazy as _
 from django.views.generic import TemplateView
 from pretix.control.views.organizer import OrganizerDetailViewMixin
 
+from .devices import reported, waiting_sales
 from .drawers import DrawerError, archive_drawer, close_drawer, figures, open_session_of, restore_drawer
 from .models import PosDrawer, PosDrawerEntry, PosDrawerSession, PosSale
 from .views import Echo, text_cell
@@ -83,6 +84,59 @@ def organizer_currency(organizer):
 
 def _money_or_blank(value):
     return "" if value is None else value
+
+
+def holding_devices(drawer):
+    """
+    The devices feeding this drawer whose last report says sales are waiting on them.
+
+    Asked once per page and then matched against each opening by
+    :func:`waiting_for`. A revoked device is left out, like everywhere else on
+    these screens: it can send nothing any more.
+    """
+    return [
+        pos_device
+        for pos_device in drawer.devices.select_related("device").order_by("device__name", "pk")
+        if pos_device.holds_sales and not pos_device.device.revoked
+    ]
+
+
+def waiting_for(session, holders):
+    """
+    Which of ``holders`` may be sitting on sales of this opening, and what they said.
+
+    The amount a drawer should hold is computed from the sales the server
+    has. A cash sale rung up with no network is still on the tablet, so it is
+    in nobody's figure until it arrives, and whoever counts the drawer in the
+    meantime finds more money than expected and no explanation. The tablet
+    says so itself (see the status endpoint), and this says it here, next to
+    the amount.
+
+    For the opening still running, any such device: its sales go into this
+    drawer when they arrive. For a closed one, only a device whose waiting
+    sales may fall inside it — the oldest rung up before it closed, and
+    reported after it opened — so that an old evening does not carry a
+    warning about tonight. The times the app gives are on its own clock, so
+    this is a hint and is worded as one.
+    """
+    held = []
+    for pos_device in holders:
+        if session.closed_at is not None and (
+            pos_device.status_reported_at < session.opened_at
+            or (
+                pos_device.oldest_pending_at is not None
+                and pos_device.oldest_pending_at > session.closed_at
+            )
+        ):
+            continue
+        held.append(
+            {
+                "device": pos_device.device,
+                "waiting": waiting_sales(pos_device),
+                "reported": reported(pos_device),
+            }
+        )
+    return held
 
 
 class DrawerForm(forms.Form):
@@ -249,6 +303,8 @@ class DrawersView(DrawerAccessMixin, OrganizerDetailViewMixin, TemplateView):
                     # What it should hold right now: the float, and every euro
                     # that went in or out of it since, by sale or by hand.
                     "expected_now": figures(session)["expected"] if session else None,
+                    # And what is not in that yet, by the tills' own account.
+                    "waiting": waiting_for(session, holding_devices(drawer)) if session else [],
                     "has_history": session is not None or last is not None,
                     "form": (
                         edit_form
@@ -443,11 +499,13 @@ class DrawerView(DrawerAccessMixin, OrganizerDetailViewMixin, TemplateView):
             ]
         )
         ctx["drawer"] = drawer
+        holders = holding_devices(drawer)
         ctx["rows"] = [
             {**summarise(session, sorted(session.entries.all(), key=lambda e: e.seq)),
              # The one opening still running says what it should hold now; the
              # others what their closing said then.
              "expected_now": figures(session)["expected"] if session.is_open else None,
+             "waiting": waiting_for(session, holders),
              "url": self._session_url(session)}
             for session in sessions[:SESSIONS_PER_PAGE]
         ]
@@ -603,6 +661,8 @@ class DrawerSessionView(DrawerAccessMixin, OrganizerDetailViewMixin, TemplateVie
                 # was closed: it belongs to this evening, and the count never
                 # saw it. Said rather than silently folded into the figures.
                 "late": closing is not None and closing.expected != fig["expected"],
+                # Sales that have not even arrived yet, by the tills' account.
+                "waiting": waiting_for(session, holding_devices(session.drawer)),
                 "difference_now": (
                     closing.amount - fig["expected"]
                     if closing is not None and closing.amount is not None else None

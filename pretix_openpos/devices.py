@@ -6,6 +6,10 @@ One screen, organizer-level because that is where pretix keeps devices: a till
 is paired once and sells for whichever event is running tonight, so what it is
 *for* belongs to the device and not to any one event.
 
+It also says when each device was last heard from, and whether it said it was
+holding sales it had not sent yet — the one question to ask before counting a
+drawer, whose expected amount only knows the sales that reached the server.
+
 Rendered as a plain table rather than a formset, for the same reason the price
 screen is a table of number inputs: there is one question per device, the
 answer is short, and an organizer setting up a night wants to see every device
@@ -15,7 +19,9 @@ from django.contrib import messages
 from django.db import transaction
 from django.shortcuts import redirect
 from django.urls import reverse
-from django.utils.translation import gettext_lazy as _
+from django.utils.formats import date_format
+from django.utils.timezone import localtime, now
+from django.utils.translation import gettext_lazy as _, ngettext
 from django.views.generic import TemplateView
 from pretix.base.models import Device
 from pretix.control.permissions import OrganizerPermissionRequiredMixin
@@ -27,6 +33,64 @@ from .sumup_views import SumUpView
 
 #: What may be stored, so a hand-made POST cannot invent a role.
 VALID_ROLES = {choice for choice, _label in PosDevice.ROLE_CHOICES}
+
+
+def is_today(value):
+    """Whether ``value`` falls on today's date, where the organizer is."""
+    return localtime(value).date() == localtime(now()).date()
+
+
+def clock(value):
+    """
+    ``21:14`` for a moment today, the date as well for any other day.
+
+    The way somebody behind a bar says it; a queue that has been waiting since
+    yesterday is worth more than an ambiguous hour.
+    """
+    value = localtime(value)
+    if is_today(value):
+        return date_format(value, "TIME_FORMAT")
+    return date_format(value, "SHORT_DATETIME_FORMAT")
+
+
+def waiting_sales(pos_device):
+    """
+    "15 sales waiting since 21:14", from the device's last report, or ``None``.
+
+    ``None`` when it said nothing was waiting, or never said anything: silence
+    on this line has to mean "nothing to worry about", so it is never made to
+    say "we do not know" — the last contact, shown next to it, does that.
+    """
+    if not pos_device.holds_sales:
+        return None
+    count = pos_device.pending_sales
+    since = pos_device.oldest_pending_at
+    if since is None:
+        return ngettext(
+            "{count} sale waiting to be sent", "{count} sales waiting to be sent", count
+        ).format(count=count)
+    if is_today(since):
+        return ngettext(
+            "{count} sale waiting since {time}", "{count} sales waiting since {time}", count
+        ).format(count=count, time=clock(since))
+    return ngettext(
+        "{count} sale waiting since {date}", "{count} sales waiting since {date}", count
+    ).format(count=count, date=clock(since))
+
+
+def reported(pos_device):
+    """
+    When the device said so, on the server's clock, or ``None``.
+
+    Shown next to what it said, so that a report an hour old does not pass
+    for the state of the till now.
+    """
+    when = pos_device.status_reported_at
+    if when is None:
+        return None
+    if is_today(when):
+        return _("reported at {time}").format(time=clock(when))
+    return _("reported on {date}").format(date=clock(when))
 
 
 class DevicesView(OrganizerDetailViewMixin, OrganizerPermissionRequiredMixin, TemplateView):
@@ -112,6 +176,9 @@ class DevicesView(OrganizerDetailViewMixin, OrganizerPermissionRequiredMixin, Te
                     "role": pos_device.role,
                     "drawer": pos_device.drawer_id,
                     "reader": pos_device.sumup_reader_id,
+                    "last_seen": pos_device.last_seen_at,
+                    "waiting": waiting_sales(pos_device),
+                    "reported": reported(pos_device),
                     # A reader assigned here but not in SumUp's list — unpaired
                     # from their dashboard, or simply unreachable right now. It
                     # is offered as an option of its own so that saving this
@@ -131,6 +198,7 @@ class DevicesView(OrganizerDetailViewMixin, OrganizerPermissionRequiredMixin, Te
         for row in rows:
             row["shares_reader"] = row["reader"] in shared
         ctx["rows"] = rows
+        ctx["any_waiting"] = any(row["waiting"] for row in rows)
         ctx["roles"] = PosDevice.ROLE_CHOICES
         ctx["drawers"] = self._drawers()
         ctx["drawers_url"] = reverse(
@@ -200,8 +268,10 @@ class DevicesView(OrganizerDetailViewMixin, OrganizerPermissionRequiredMixin, Te
                     continue
                 if not current.pk and role == PosDevice.ROLE_UNSET and not reader and not drawer:
                     # Leave the unassigned unassigned rather than writing a row
-                    # that says nothing: "nobody has said" is a state of its own
-                    # and the absence of a row is how it is spelled.
+                    # that says nothing: "nobody has said" is a state of its own,
+                    # spelled as a blank role — or as no row at all, for a device
+                    # that has not reached the server since contacts were
+                    # written down.
                     continue
                 PosDevice.objects.update_or_create(
                     device=device,

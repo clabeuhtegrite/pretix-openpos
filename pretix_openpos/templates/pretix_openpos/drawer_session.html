@@ -86,6 +86,11 @@
                     <th>{% if closing %}{% trans "Expected at the closing" %}{% else %}{% trans "Expected now" %}{% endif %}</th>
                     <th class="text-right">{% if closing %}{{ closing.expected|money:currency }}{% else %}{{ figures.expected|money:currency }}{% endif %}</th>
                 </tr>
+                {% if waiting %}
+                    <tr>
+                        <td colspan="2">{% include "pretix_openpos/waiting_sales.html" %}</td>
+                    </tr>
+                {% endif %}
                 {% if closing and first_count and first_count.amount != closing.amount %}
                     <tr class="text-muted">
                         <td>{% trans "First count" %}</td>

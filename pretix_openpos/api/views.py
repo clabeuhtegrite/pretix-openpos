@@ -1,7 +1,8 @@
 import logging
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone as dt_timezone
 from decimal import Decimal
 
+from django.core.cache import cache
 from django.db import IntegrityError, transaction
 from django.utils.timezone import make_aware, now
 from django.utils.translation import gettext_lazy as _
@@ -711,6 +712,71 @@ def hold_drawer_session(session, payment_type):
     return held
 
 
+#: How often, at most, a device's last contact is written down, in seconds.
+#:
+#: A till polls several endpoints a minute. One write a minute per device is
+#: plenty to say "last heard from at 21:14", and keeps a busy evening from
+#: turning every read the tills make into a write.
+CONTACT_EVERY = 60
+
+#: Cache key holding a device's contact throttle; see :func:`note_contact`.
+CONTACT_KEY = "pretix_openpos:seen:{}"
+
+
+def note_contact(request):
+    """
+    Write down that the device behind this request has just reached the server.
+
+    Called from the viewsets' ``initial``, once authentication, permissions and
+    throttling have let the request through, so it covers every Open POS
+    endpoint and nothing else writes it. At most once a minute per device:
+    ``cache.add`` succeeds for the first caller of the minute only, so the
+    database sees one short UPDATE a minute per tablet whatever the app is
+    polling. Anything that is not a device — a team token, somebody logged in
+    trying the API — is nobody's till and is not recorded.
+
+    It must never cost the till its request. The sale being rung up matters
+    more than knowing when the tablet was last heard from, so a cache that is
+    down, a database hiccup, or two first calls racing to create the row are
+    logged and forgotten. The write runs in a savepoint of its own for the
+    same reason: a failed statement inside a transaction the request already
+    holds would poison everything after it.
+
+    The row is created by id rather than through the device object: that way
+    the device keeps no cached copy of a row that might not have been
+    written, and whatever reads its role next reads it from the database —
+    the role and the reader are what decide which card payments this till may
+    take.
+    """
+    device = request.auth
+    if not isinstance(device, Device):
+        return
+    try:
+        if not cache.add(CONTACT_KEY.format(device.pk), True, CONTACT_EVERY):
+            return
+        moment = now()
+        with transaction.atomic():
+            if not PosDevice.objects.filter(device_id=device.pk).update(last_seen_at=moment):
+                PosDevice.objects.create(device_id=device.pk, last_seen_at=moment)
+    except Exception:
+        logger.warning(
+            "Open POS could not write down the last contact of device %s", device.pk,
+            exc_info=True,
+        )
+
+
+def utc_timestamp(moment):
+    """
+    ``2026-09-25T21:14:03.120Z``: the shape of JavaScript's ``toISOString()``.
+
+    Milliseconds rather than Python's microseconds, because that is the one
+    form every browser's ``Date`` is required to parse, Safari included.
+    """
+    return moment.astimezone(dt_timezone.utc).isoformat(timespec="milliseconds").replace(
+        "+00:00", "Z"
+    )
+
+
 class OpenPosOrganizerViewSet(viewsets.ViewSet):
     """
     Organizer-level endpoint, so a till can find out which events it may sell for.
@@ -734,6 +800,10 @@ class OpenPosOrganizerViewSet(viewsets.ViewSet):
     exactly the kind of event a till gets taken to.
     """
 
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        note_contact(request)
+
     def list(self, request, **kwargs):
         results = []
         unavailable = []
@@ -756,6 +826,52 @@ class OpenPosOrganizerViewSet(viewsets.ViewSet):
         # running an older build — which offers every result it is given —
         # never offers one its endpoints would refuse.
         return Response({"results": results, "unavailable": unavailable})
+
+    @action(detail=False, methods=["post"], url_path="status", url_name="status")
+    def device_status(self, request, **kwargs):
+        """
+        A till's own account of the sales it holds and has not sent yet.
+
+        The server can count every sale that reached it and none that did not,
+        and the ones that did not are exactly what an organizer needs to know
+        about before counting a drawer: the amount the drawer should hold is
+        computed from the journal, and a cash sale still queued on a tablet is
+        not in it. So the app says so itself, and the back office shows it —
+        as the app's word, with the time it was given.
+
+        Organizer-level, like the device: a till holds sales for whichever
+        events it sold for, and the report is about the tablet, not about one
+        of them. A device only; nothing else has a queue.
+
+        Answers with the server's clock, so the app can tell whether its own
+        is wrong — the times it reports, and the ones it stamps its offline
+        sales with, are read on that clock.
+        """
+        device = request.auth
+        if not isinstance(device, Device):
+            raise PermissionDenied(_("Only a paired device can report its status."))
+        from .serializers import DeviceStatusSerializer
+
+        serializer = DeviceStatusSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        reported = now()
+        PosDevice.objects.update_or_create(
+            device_id=device.pk,
+            defaults={
+                "status_reported_at": reported,
+                "pending_sales": data["pending_sales"],
+                # Nothing waiting has no oldest: a leftover time from an app
+                # that did not clear it would read as a sale lost since then.
+                "oldest_pending_at": data["oldest_pending_at"] if data["pending_sales"] else None,
+                "last_sync_at": data["last_sync_at"],
+                "app_version": data["version"],
+                # A report is a contact, whatever the once-a-minute throttle
+                # in note_contact decided.
+                "last_seen_at": reported,
+            },
+        )
+        return Response({"server_time": utc_timestamp(reported)})
 
 
 def reachable_events(request):
@@ -810,6 +926,7 @@ class OpenPosViewSet(viewsets.ViewSet):
 
     def initial(self, request, *args, **kwargs):
         super().initial(request, *args, **kwargs)
+        note_contact(request)
         # A device may well have access to events that do not run the POS.
         # Refusing here is what keeps a stale app from selling on an event the
         # organizer never opened a till for.
