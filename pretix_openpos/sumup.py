@@ -58,6 +58,22 @@ API_BASE = "https://api.sumup.com"
 #: happens with somebody standing at a counter.
 TIMEOUT = (5, 15)
 
+#: Connect and read timeouts for the questions a waiting till has answered.
+#:
+#: ``terminal/status`` is polled every couple of seconds for as long as a
+#: cardholder is in front of the reader, and it asks SumUp up to twice. A
+#: pretix runs on a handful of worker processes — two, on the installation this
+#: was written for — so a SumUp that takes its time held one worker per
+#: waiting till for the whole of :data:`TIMEOUT`, and two tills waiting on a
+#: slow SumUp were enough to leave the other tills, the door, the web shop and
+#: the health probe queueing behind them. Nothing is lost by giving up early
+#: on these: a question that gets no answer leaves the payment exactly as it
+#: was stored — still waiting — and the next poll asks again. Starting a
+#: payment, refunding one and the periodic comparison keep :data:`TIMEOUT`:
+#: those are not repeated every two seconds, and an answer lost there costs
+#: more than a few seconds of somebody's time.
+POLL_TIMEOUT = (3, 5)
+
 #: Transaction statuses that mean the customer's money moved.
 #:
 #: ``PAID_OUT`` is a successful payment that has since been settled to the
@@ -204,8 +220,12 @@ class SumUpAccount:
     devices it is attached to are organizer-level too.
     """
 
-    def __init__(self, organizer):
+    def __init__(self, organizer, *, timeout=TIMEOUT):
         self.organizer = organizer
+        #: What every call through this account is bounded by, unless the
+        #: call says otherwise: :data:`TIMEOUT`, or :data:`POLL_TIMEOUT` for
+        #: an account built to answer a till that is polling.
+        self.timeout = timeout
         settings = organizer.settings
         self.merchant_code = (settings.get("openpos_sumup_merchant_code") or "").strip()
         # Read but never exposed: no property, no repr, and nothing that
@@ -244,7 +264,7 @@ class SumUpAccount:
                     "Authorization": f"Bearer {self._api_key}",
                     "Accept": "application/json",
                 },
-                timeout=timeout or TIMEOUT,
+                timeout=timeout or self.timeout,
             )
         except requests.RequestException as exc:
             # Includes both timeouts and DNS/TLS failures. Retryable: the till

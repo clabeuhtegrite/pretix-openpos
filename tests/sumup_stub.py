@@ -108,6 +108,9 @@ class FakeSumUp:
         self.refunds = []
         #: Every call made, as (method, path, json body).
         self.calls = []
+        #: The timeout every call was made with, as (method, path, timeout):
+        #: how long the server was prepared to wait for the answer.
+        self.timeouts = []
         #: Answer the next call with this ``FakeResponse`` instead of acting.
         self.next_response = None
         #: Raise this instead of answering — a timeout, a DNS failure.
@@ -257,6 +260,7 @@ class FakeSumUp:
     def request(self, method, url, *, json=None, params=None, headers=None, timeout=None):
         path = url.replace("https://api.sumup.com", "")
         self.calls.append((method, path, json))
+        self.timeouts.append((method, path, timeout))
 
         if self.next_exception is not None:
             exception, self.next_exception = self.next_exception, None

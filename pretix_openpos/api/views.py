@@ -1,23 +1,27 @@
+import copy
+import hashlib
 import logging
 from datetime import datetime, time, timedelta, timezone as dt_timezone
 from decimal import Decimal
 
 from django.core.cache import cache
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, OperationalError, connection, transaction
+from django.db.models import Q
 from django.utils.timezone import make_aware, now
 from django.utils.translation import gettext_lazy as _
 from django_scopes import scopes_disabled
 from i18nfield.strings import LazyI18nString
-from pretix.api.serializers.order import OrderCreateSerializer
+from pretix.api.serializers.order import OrderCreateSerializer, OrderPositionCreateSerializer
 from pretix.base.models import Checkin, Device, Order, Quota, TeamAPIToken
 from pretix.base.models.orders import OrderPayment, OrderRefund
 from pretix.base.services.checkin import CheckInError, RequiredMediaExchangeError, perform_checkin
 from pretix.base.services.invoices import generate_invoice, invoice_qualified
 from pretix.base.services.orders import OrderError, cancel_order
 from pretix.base.signals import order_paid, order_placed
+from pretix.helpers import OF_SELF
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import APIException, PermissionDenied, ValidationError
 from rest_framework.response import Response
 
 from .. import __version__
@@ -35,8 +39,9 @@ from ..models import (
 )
 from ..payment import CARD, CASH
 from ..reconcile import mark_pending
-from ..sumup import CHECKOUT_CLOSED, ERR_CONFLICT, SumUpAccount, SumUpError, still_running, succeeded
+from ..sumup import CHECKOUT_CLOSED, ERR_CONFLICT, POLL_TIMEOUT, SumUpAccount, SumUpError, still_running, succeeded
 from ..webhook import webhook_url
+from .throttling import DeviceThrottleMixin
 
 logger = logging.getLogger(__name__)
 
@@ -433,7 +438,7 @@ class ResolvedLine:
 
 def resolve_line(
     line, *, sellable, custom_item, deposit, settled, subevent=None,
-    off_limits=frozenset(),
+    off_limits=frozenset(), pinned=False,
 ):
     """
     Price one line of a basket, and refuse the ones that may not be sold.
@@ -453,11 +458,24 @@ def resolve_line(
     ``off_limits`` is the categories this device is not the one to sell. A line
     from one of them is refused outright while nothing has been taken, and only
     reported once something has — see :func:`_outside_role`.
+
+    ``pinned`` says the basket was priced by this server, when the card reader
+    was asked for the money: the lines are its own, read back. A settled line
+    that is *not* pinned is a till's word — a sale it rang up with no network —
+    and that word is bounded to what a till could genuinely have produced: a
+    product it could have shown (see :func:`sellable_items`), nothing below
+    zero but a deposit handed back, a reason only on the free-amount product.
+    Everything else it is taken at, and anything off the tariff is reported.
     """
     item = sellable.get(line["item"])
     if item is None:
         raise ValidationError(
-            {"positions": [_("Product {id} is not on sale at the till.").format(id=line["item"])]}
+            {
+                "positions": [
+                    _("Product {id} is not on sale at the till.").format(id=line["item"])
+                ],
+                "code": "item_not_sold",
+            }
         )
 
     # What this till is for, before what it costs. Checked here rather than
@@ -502,6 +520,21 @@ def resolve_line(
         sent_price = Decimal(str(sent_price))
 
     tariff = resolve_price(item, variation, subevent)
+    replayed = settled and not pinned
+    if replayed and not is_refund and sent_price is not None and sent_price < Decimal("0.00"):
+        # Only a deposit handed back takes money out of the drawer, and it
+        # says so with its own flag. A product line below zero is a till
+        # inventing a refund, which no screen of the app can produce.
+        raise ValidationError(
+            {
+                "positions": [
+                    _("{name} cannot be sold for less than nothing.").format(
+                        name=str(item.name)
+                    )
+                ],
+                "code": "negative_price",
+            }
+        )
     if is_refund:
         # A deposit handed back is worth exactly what the deposit costs,
         # negated here rather than sent: the till names the product, the server
@@ -511,19 +544,33 @@ def resolve_line(
             raise ValidationError(
                 {"positions": [_("This product is not the one deposits are taken on.")]}
             )
-    elif description and not settled:
-        if custom_item is None or item.pk != custom_item.pk:
+    elif description:
+        free_amount = custom_item is not None and item.pk == custom_item.pk
+        # A reason is what marks a free amount, and the free-amount product is
+        # the one place a till decides a price. On any other line it used to
+        # be a way to charge anything and have it pass unreported — so it is
+        # refused, from a replayed queue as well as live. Only a basket the
+        # reader was paid for keeps it, since that one was checked when the
+        # amount went on the reader; it is then reported like any other line
+        # whose price is not the tariff, below.
+        if not free_amount and not pinned:
             raise ValidationError(
-                {"positions": [_("Free amounts can only be sold on the product set aside for them.")]}
+                {
+                    "positions": [
+                        _("Free amounts can only be sold on the product set aside for them.")
+                    ],
+                    "code": "free_amount_elsewhere",
+                }
             )
-        if sent_price is None or sent_price <= Decimal("0.00"):
+        if not settled and (sent_price is None or sent_price <= Decimal("0.00")):
             raise ValidationError(
                 {"positions": [_("A free amount has to be more than nothing.")]}
             )
-        # The one price the till decides. It is not compared with the tariff and
-        # never reported as off-tariff: the product's own price is a placeholder
-        # that no free-amount sale is charged at.
-        tariff = sent_price
+        if free_amount:
+            # The one price the till decides. It is not compared with the
+            # tariff and never reported as off-tariff: the product's own price
+            # is a placeholder that no free-amount sale is charged at.
+            tariff = sent_price
 
     # A settled line always has one: an offline sale is refused whole by
     # CheckoutSerializer unless every line carries what was charged, and a
@@ -542,7 +589,34 @@ def resolve_line(
     )
 
 
-def sellable_items(event, channel, *, settled):
+def refuse_oversized(positions):
+    """
+    Refuse a basket of more than MAX_ITEMS items, all lines together.
+
+    Raised from the view rather than from the serializer, where the ``code``
+    would come back wrapped in a list. Live and replayed sales alike: a till
+    whose queue holds a sale this size recorded it wrongly, and a queued sale
+    refused goes to the list of refusals the operator is shown, with this
+    sentence — it is not lost. A basket the card reader has already been paid
+    for is never asked: it was capped by ``terminal/start`` before any card
+    came near it.
+    """
+    from .serializers import MAX_ITEMS
+
+    if sum(line["count"] for line in positions) > MAX_ITEMS:
+        raise ValidationError(
+            {
+                "positions": [
+                    _("A sale can hold at most {max} items. Split it into several sales.").format(
+                        max=MAX_ITEMS
+                    )
+                ],
+                "code": "too_many_items",
+            }
+        )
+
+
+def sellable_items(event, channel, *, settled, pinned=False):
     """
     What may be sold — and, for a sale already paid for, what may be recorded.
 
@@ -550,10 +624,32 @@ def sellable_items(event, channel, *, settled):
     now: nothing has been taken, so refusing costs a tap. A sale that has
     already been paid for is a different question — the catalogue may well have
     moved since, and refusing then does not undo the sale.
+
+    Moved, but not beyond what a till could ever have offered. A sale replayed
+    from a till that was cut off is the till's word, and a till only ever sells
+    from the grid it was served: products on the Open POS channel, that pretix
+    would show without a voucher, sold on their own. Whether one of them is
+    still switched on, or still within its sale period, is exactly what may
+    have changed since the evening, and is not asked. Anything outside that
+    set is something no till could have rung up — a tablet that only claims to
+    have been offline — and is refused. A basket the card reader has been paid
+    for (``pinned``) was priced here, from this very list, when the reader was
+    asked; it is recorded whatever has happened to the catalogue since.
     """
     items = event.items.all()
     if not settled:
         items = items.filter_available(channel=channel)
+    elif not pinned:
+        # pretix' own filter_available, less the conditions that change in
+        # the course of an evening: switched on, available from, available
+        # until. What is left describes the product rather than the moment.
+        items = items.filter(
+            Q(all_sales_channels=True) | Q(limit_sales_channels=channel),
+            Q(category__isnull=True) | Q(category__is_addon=False),
+            Q(category__isnull=True) | ~Q(category__cross_selling_mode="only"),
+            require_bundling=False,
+            hide_without_voucher=False,
+        )
     # The category rides along because every line is now asked which one it is
     # in, and naming it in a refusal is the difference between "this till does
     # not sell Bar" and a product id.
@@ -570,9 +666,25 @@ def settle_terminal_payment(payment, account):
     The only place a payment is allowed to become successful, and the reason
     the unsigned callback is harmless: that callback causes this to run, and
     this asks the Transactions API over an authenticated connection. The till
-    polls into the same function on a timer, so an installation SumUp cannot
-    reach settles every payment anyway, a second or two later.
+    polls into the same function on a timer — through
+    :func:`poll_terminal_payment`, which keeps that to one question at a time —
+    so an installation SumUp cannot reach settles every payment anyway, a
+    second or two later.
+
+    One call to SumUp, and a second only when the first cannot answer: the
+    request on the reader is asked about only while no transaction exists, and
+    never after a question that got no answer at all. Every call here is bounded
+    by the timeout of ``account``; a poll's account gives up early, and giving
+    up leaves the row as it was.
+
+    Giving up is said, though, on the payment itself: ``sumup_unreachable`` is
+    left on it — not a column, only an answer to this call — true when SumUp
+    could not be asked this time: no answer in time, no connection, or SumUp
+    failing on its side. The row then says "pending" because nobody could find
+    out otherwise, which is not the same news for a cashier as a cardholder
+    still looking for their card, and the till is told so.
     """
+    payment.sumup_unreachable = False
     if payment.settled:
         return payment
     if not payment.client_transaction_id:
@@ -588,6 +700,7 @@ def settle_terminal_payment(payment, account):
             # Nothing is written. "We could not ask" is not "it failed", and
             # writing the latter would lose a payment that went through while
             # a cable was out — money taken, no sale, and nothing to point at.
+            payment.sumup_unreachable = True
             return payment
         payment.status = PosTerminalPayment.STATUS_FAILED
         payment.failure = str(exc.message)[:190]
@@ -631,6 +744,113 @@ def settle_terminal_payment(payment, account):
         payment.failure = str(transaction_data.get("status") or "")[:190]
     payment.save(update_fields=["status", "transaction_id", "failure", "updated"])
     return payment
+
+
+#: How often, at most, SumUp is asked about any one reader payment, in seconds.
+#:
+#: The till polls on a timer while the cardholder looks for their card, and a
+#: till that reloads, or a second tab on the same tablet, polls on a timer of
+#: its own. A poll arriving sooner than this after the last question is
+#: answered from the row as it stands, which is what the question would almost
+#: always have said. When SumUp can reach this server, its callback is what
+#: brings the answer in sooner.
+ASK_SUMUP_EVERY = 2
+
+#: How long a question about one reader payment is taken to be under way when
+#: nothing says it has finished, in seconds.
+#:
+#: The mark is taken off the moment the answer is in; this only bounds what a
+#: worker that died in the middle of a question costs. Longer than the slowest
+#: a poll can be — two calls to SumUp, each bounded by POLL_TIMEOUT — and short
+#: enough that such a death costs a waiting till a few polls, not the payment.
+ASKING_FOR_AT_MOST = 20
+
+
+def poll_terminal_payment(payment, account):
+    """
+    :func:`settle_terminal_payment`, for a till waiting on its reader.
+
+    One question to SumUp at a time about any one payment, and no more than one
+    every :data:`ASK_SUMUP_EVERY` seconds. A poll that finds a question already
+    under way, or one asked a moment ago, is answered from the row as it
+    stands: the same shape and the same meaning as any other answer, "still
+    waiting" until the question in flight writes otherwise. Without this,
+    every poll of every waiting till held a worker for as long as SumUp took to
+    answer, and a pretix runs on a handful of workers: two tills waiting on a
+    slow SumUp were enough to leave every other request of the evening — the
+    other tills, the door, the web shop, the health probe — queueing behind
+    them.
+
+    Through the cache because that is the one thing every worker process
+    shares: Redis or memcached, on a pretix set up for production. On one
+    with neither, pretix' cache keeps nothing, every poll asks as it always
+    did, and the short timeouts of the polling account are what bound it.
+
+    SumUp's callback does not come through here. It says the payment has just
+    ended, and a question already under way may have been asked the moment
+    before and come back "pending": skipping the callback's own question on its
+    account would leave the payment waiting for the next poll — or for nothing,
+    once the till has gone.
+
+    A poll answered from the row says whether the last question got through,
+    as one that asks does (``sumup_unreachable``, see
+    :func:`settle_terminal_payment`): a till whose every other poll was
+    answered from the row would otherwise hear that SumUp is out of reach only
+    every other time.
+    """
+    if payment.settled:
+        return payment
+    marks = f"pretix_openpos:terminal:{payment.pk}"
+    unreachable = f"{marks}:unreachable"
+    asking = f"{marks}:asking"
+    if not (
+        cache.add(f"{marks}:asked", True, timeout=ASK_SUMUP_EVERY)
+        and cache.add(asking, True, timeout=ASKING_FOR_AT_MOST)
+    ):
+        payment.sumup_unreachable = bool(cache.get(unreachable))
+        return payment
+    try:
+        # Read again now that this is the one question. Another may have
+        # settled the payment between this request reading the row and taking
+        # the mark, and asking SumUp once more would only hear the same answer
+        # a second time.
+        payment.refresh_from_db()
+        settle_terminal_payment(payment, account)
+        # Kept for as long as a question may take: the polls answered from the
+        # row while the next one is under way repeat what this one found.
+        if payment.sumup_unreachable:
+            cache.set(unreachable, True, timeout=ASKING_FOR_AT_MOST)
+        else:
+            cache.delete(unreachable)
+        return payment
+    finally:
+        cache.delete(asking)
+
+
+def reader_moved_on(payment, organizer):
+    """
+    Whether the reader this payment was put on is no longer this payment's.
+
+    SumUp's terminate stops whatever is on the reader, not a payment of our
+    choosing, and two tills can share one machine. So a stop is only sent while
+    this payment can still be the one on it. Not once a newer payment has been
+    put on the same reader, whichever till it belongs to: the stop would be
+    that payment's. And not past :data:`READER_HELD_FOR`: by then the prompt
+    has long timed out on the device, and the machine counts as free for any
+    till that asks for it. A till tidying up a payment it left aside — the
+    cashier took cash while the reader was not answering, and the network is
+    back — meets exactly this, some minutes later.
+    """
+    if payment.created <= now() - READER_HELD_FOR:
+        return True
+    return PosTerminalPayment.objects.filter(
+        # Two tills pressing card in the same instant can write the same
+        # timestamp; the row written second is then the newer one, so that
+        # of two such payments exactly one may still stop the reader.
+        Q(created__gt=payment.created) | Q(created=payment.created, pk__gt=payment.pk),
+        event__organizer=organizer,
+        reader_id=payment.reader_id,
+    ).exists()
 
 
 def card_mode(pos_device) -> str:
@@ -777,7 +997,135 @@ def utc_timestamp(moment):
     )
 
 
-class OpenPosOrganizerViewSet(viewsets.ViewSet):
+class _PaidPositionSerializer(OrderPositionCreateSerializer):
+    def validate_item(self, item):
+        # pretix refuses a product that is switched off, force or no force,
+        # and that is the one refusal a sale already paid for cannot satisfy:
+        # the organiser switched the product off after the evening — as one
+        # does — and the till that sold it that evening replays the next
+        # morning. Judged as it would be if it were still on, so that every
+        # other check pretix makes of an item still applies.
+        if not item.active:
+            switched_on = copy.copy(item)
+            switched_on.active = True
+            super().validate_item(switched_on)
+            return item
+        return super().validate_item(item)
+
+
+class PaidOrderSerializer(OrderCreateSerializer):
+    """
+    pretix' own order serializer, for a sale whose money has already moved.
+
+    Replayed from a till that was cut off, or paid on the card reader before
+    the order could be written. It differs in one respect only — see
+    :class:`_PaidPositionSerializer` — and is otherwise exactly what a sale
+    being rung up now goes through, ``force`` included.
+    """
+
+    positions = _PaidPositionSerializer(many=True, required=True)
+
+
+#: How long an attempt at a sale waits for another attempt at the same sale.
+#:
+#: The other one is creating an order, which takes a fraction of a second; one
+#: still holding the key after this is stuck rather than busy, and the till is
+#: better off told to come back than kept waiting on it — which a 503 does,
+#: because the app retries anything the server could not take, under the same
+#: key, and that retry is a replay once the first attempt has committed.
+KEY_WAIT_SECONDS = 5
+
+#: The first half of every advisory lock taken on an idempotency key.
+#:
+#: PostgreSQL has two kinds of advisory lock key: one 64-bit number, which is
+#: what pretix' own quota and event locks use, and a pair of 32-bit numbers,
+#: which is a separate space entirely. The pair is used here so that no key of
+#: ours can ever collide with one of pretix' — a collision would not be wrong,
+#: only slow, but it would be slow in the middle of somebody's order. The
+#: number itself is "OPOS" in ASCII, so it names itself in ``pg_locks``.
+KEY_LOCK_CLASS = 0x4F504F53
+
+
+class SaleInProgress(APIException):
+    """Another attempt at this very sale is still being written."""
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+
+    def __init__(self):
+        super().__init__(
+            {
+                "detail": _("This sale is still being recorded. Try again in a moment."),
+                "code": "sale_in_progress",
+            }
+        )
+        # Sent as Retry-After. The 503 itself is what makes the app treat this
+        # as "not now" rather than "no": it retries a 5xx under the same key,
+        # and lists a 4xx among the refusals.
+        self.wait = 2
+
+
+def recorded_sale(event, idempotency_key):
+    """The journal row a till's transaction was recorded under, or ``None``."""
+    return PosSale.objects.filter(event=event, idempotency_key=idempotency_key).first()
+
+
+def hold_idempotency_key(event, idempotency_key):
+    """
+    Queue behind any other attempt at the same sale, then look for it again.
+
+    Called first thing inside the transaction that writes a sale. A key looked
+    up before that transaction only says nobody had *finished* this sale: two
+    attempts overlapping on two workers — a till whose request timed out while
+    the server was still working, polls stacking up behind a slow SumUp and
+    confirming twice — both passed that look-up, both created an order, and
+    the second found out only when the journal refused its row. By then its
+    order existed, paid, with a ticket in it and no line in the journal.
+
+    So the second attempt waits here until the first has committed or given
+    up, and then reads again. Under PostgreSQL's default isolation that read
+    sees the first attempt's row, and the caller answers as a replay without
+    having written anything — not even the quota check, which would otherwise
+    refuse a paid customer because the first attempt had just taken the last
+    place. Returns that row, or ``None`` when this attempt is the one to write.
+
+    A transaction-scoped lock rather than a session one, so it can never
+    outlive the request that took it: connections are pooled and reused, and
+    a session lock left on one would hold that key against every later
+    attempt. Only PostgreSQL has advisory locks; the database pretix runs on in
+    production does, and SQLite, which the tests run on, lets one writer in
+    at a time anyway. On any backend the journal's unique key stays the last
+    word — see ``existing_ok`` in :meth:`PosSale.record`.
+    """
+    if connection.vendor == "postgresql":
+        _lock_idempotency_key(event, idempotency_key)
+    return recorded_sale(event, idempotency_key)
+
+
+def _lock_idempotency_key(event, idempotency_key):
+    # Stable across processes and restarts, unlike hash(): every worker has to
+    # arrive at the same number for the same key. Four bytes because that is
+    # the size of the second half of the lock key; two different keys landing
+    # on the same number only ever makes one wait for the other.
+    digest = hashlib.blake2b(
+        f"{event.pk}:{idempotency_key}".encode(), digest_size=4
+    ).digest()
+    try:
+        # A savepoint of its own, so that giving up on the wait leaves the
+        # surrounding transaction usable for the rollback — and the lock
+        # outlives it: a transaction-level lock taken in a savepoint that is
+        # released belongs to the transaction until it ends.
+        with transaction.atomic(), connection.cursor() as cursor:
+            cursor.execute(f"SET LOCAL lock_timeout = '{KEY_WAIT_SECONDS}s'")
+            cursor.execute(
+                "SELECT pg_advisory_xact_lock(%s, %s)",
+                [KEY_LOCK_CLASS, int.from_bytes(digest, "big", signed=True)],
+            )
+            cursor.execute("SET LOCAL lock_timeout TO DEFAULT")
+    except OperationalError as exc:
+        raise SaleInProgress() from exc
+
+
+class OpenPosOrganizerViewSet(DeviceThrottleMixin, viewsets.ViewSet):
     """
     Organizer-level endpoint, so a till can find out which events it may sell for.
 
@@ -912,7 +1260,7 @@ def offline_restrictions(position):
     return restrictions
 
 
-class OpenPosViewSet(viewsets.ViewSet):
+class OpenPosViewSet(DeviceThrottleMixin, viewsets.ViewSet):
     """
     Everything the till needs, and nothing else.
 
@@ -969,6 +1317,14 @@ class OpenPosViewSet(viewsets.ViewSet):
                 # festival weekend, routinely — compares this against its own
                 # build on the idle refresh and offers a reload.
                 "version": __version__,
+                # The server's clock, in UTC, for the till to compare its own
+                # with. A tablet whose clock is off dates every sale it queues
+                # offline by it; the checkout corrects that on replay (see
+                # ``offline.sent_at``), and this is how the till can say so to
+                # whoever is holding it before it matters.
+                "server_time": now().astimezone(dt_timezone.utc).isoformat(
+                    timespec="milliseconds"
+                ),
                 "event": {
                     "slug": event.slug,
                     "organizer": event.organizer.slug,
@@ -1138,39 +1494,97 @@ class OpenPosViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=["post"], url_path="checkout", url_name="checkout")
     def checkout(self, request, **kwargs):
+        from .serializers import KeySerializer
+
+        event = request.event
+
+        # The key, and only the key, before anything else is judged. A retry
+        # of a sale already recorded has to get that sale back whatever the
+        # rest of it says now: the tariff may have moved since, the last place
+        # may have gone to this very sale, the date may be over — and a retry
+        # answered with any of those refusals told the till that a sale which
+        # went through had not, so the cashier took the money a second time.
+        keyed = KeySerializer(data=request.data)
+        keyed.is_valid(raise_exception=True)
+        idempotency_key = keyed.validated_data["idempotency_key"]
+
+        replay = recorded_sale(event, idempotency_key)
+        if replay is not None:
+            return self._replay(request, replay)
+
+        try:
+            return self._checkout(request, idempotency_key)
+        except PosSale.AlreadyRecorded:
+            # Another attempt at this sale committed while this one was being
+            # written, and everything this one wrote has been rolled back with
+            # the exception — its order included. What is left to do is what a
+            # retry arriving a second later would have got.
+            replay = recorded_sale(event, idempotency_key)
+            if replay is None:
+                # The row in the way held a key derived from this one rather
+                # than this one. Nothing written here survived, which is the
+                # part that matters; the rest is a fault to look at.
+                raise
+            return self._replay(request, replay)
+        except ValidationError:
+            # A refusal is an answer only for a sale nobody recorded. One
+            # decided while another attempt was committing this same sale —
+            # judged before the transaction, against a catalogue the first
+            # attempt had just moved — would tell the till "not sold" about a
+            # sale that was.
+            replay = recorded_sale(event, idempotency_key)
+            if replay is None:
+                raise
+            return self._replay(request, replay)
+
+    def _replay(self, request, replay):
+        """
+        The answer to a sale already recorded: the original one, finished.
+
+        The original attempt may have died between committing the order and
+        the best-effort tail: the connection that carried this very retry is
+        proof that connections die at the worst moment. Whatever is missing —
+        the invoice, the check-ins, and nothing else — is done now. Idempotent:
+        a second retry finds nothing left to do.
+        """
+        body = self._checkout_payload(request.event, replay, replayed=True)
+        if replay.kind == PosSale.KIND_SALE and replay.order is not None:
+            checked_in, checkin_errors = self._finish(
+                request,
+                replay.order,
+                offline_at=replay.datetime if replay.offline else None,
+                replayed=True,
+            )
+            body["checked_in"] = checked_in
+            body["checkin_errors"] = checkin_errors
+        return Response(body, status=status.HTTP_200_OK)
+
+    def _checkout(self, request, idempotency_key):
         from .serializers import CheckoutSerializer
 
         event = request.event
         device = request.auth if isinstance(request.auth, Device) else None
 
-        serializer = CheckoutSerializer(data=request.data)
+        # The reader payment this key names, when this till's reader has been
+        # paid for it. Looked up before the request is judged, because it
+        # changes what there is to judge: its basket is the one booked, so the
+        # lines of a sale queued after the reader said "paid" are not read.
+        pos_device = PosDevice.for_device(device)
+        paid_on_reader = None
+        if pos_device.drives_terminal:
+            paid_on_reader = PosTerminalPayment.objects.filter(
+                event=event,
+                idempotency_key=idempotency_key,
+                status=PosTerminalPayment.STATUS_SUCCESSFUL,
+            ).first()
+            if paid_on_reader is not None and not paid_on_reader.belongs_to(device):
+                paid_on_reader = None
+
+        serializer = CheckoutSerializer(
+            data=request.data, context={"pinned": paid_on_reader is not None}
+        )
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
-        idempotency_key = data["idempotency_key"]
-
-        # A retry of a sale we already committed must hand back the original
-        # rather than sell a second set of tickets.
-        replay = PosSale.objects.filter(
-            event=event, idempotency_key=idempotency_key
-        ).first()
-        if replay:
-            body = self._checkout_payload(event, replay, replayed=True)
-            # The original attempt may have died between committing the order
-            # and the best-effort tail: the connection that carried this very
-            # retry is proof that connections die at the worst moment. Whatever
-            # is missing — the invoice, the check-ins, and nothing else — is
-            # done now. Idempotent: a second retry finds nothing left to do.
-            if replay.kind == PosSale.KIND_SALE and replay.order is not None:
-                self._ensure_invoice(request, replay.order)
-                checked_in, checkin_errors = self._check_in(
-                    request,
-                    replay.order,
-                    only_missing=True,
-                    offline_at=replay.datetime if replay.offline else None,
-                )
-                body["checked_in"] = checked_in
-                body["checkin_errors"] = checkin_errors
-            return Response(body, status=status.HTTP_200_OK)
 
         # A till that drives a card reader may not record a card payment the
         # reader did not validate.
@@ -1190,20 +1604,13 @@ class OpenPosViewSet(viewsets.ViewSet):
         # reader payment cannot happen while the till is cut off anyway — the
         # reader is driven through SumUp's cloud, so a till with no network
         # cannot start one.
-        pos_device = PosDevice.for_device(device)
         terminal = None
         if (
             data["payment_type"] == PosSale.PAYMENT_CARD
             and pos_device.drives_terminal
         ):
-            terminal = PosTerminalPayment.objects.filter(
-                event=event, idempotency_key=idempotency_key
-            ).first()
-            if (
-                terminal is None
-                or terminal.status != PosTerminalPayment.STATUS_SUCCESSFUL
-                or not terminal.belongs_to(device)
-            ):
+            terminal = paid_on_reader
+            if terminal is None:
                 raise ValidationError(
                     {
                         "payment_type": [
@@ -1216,6 +1623,8 @@ class OpenPosViewSet(viewsets.ViewSet):
                         "code": "terminal_required",
                     }
                 )
+        if terminal is None:
+            refuse_oversized(data["positions"])
 
         offline = data.get("offline")
         drawer_session = drawer_session_for(
@@ -1249,7 +1658,7 @@ class OpenPosViewSet(viewsets.ViewSet):
             settled=settled,
         )
 
-        sellable = sellable_items(event, channel, settled=settled)
+        sellable = sellable_items(event, channel, settled=settled, pinned=terminal is not None)
         # The same answer the catalogue was drawn from, asked again here
         # because that is the only place it binds. A live line from one of
         # these categories is refused; a line whose money has already changed
@@ -1287,6 +1696,7 @@ class OpenPosViewSet(viewsets.ViewSet):
                 settled=settled,
                 subevent=subevent,
                 off_limits=off_limits,
+                pinned=terminal is not None,
             )
             item = resolved.item
             variation = resolved.variation
@@ -1300,12 +1710,14 @@ class OpenPosViewSet(viewsets.ViewSet):
             # cached, and the customer has already paid that. The order is
             # therefore created at what was charged — anything else would print
             # an invoice for a sum nobody handed over — and the divergence is
-            # reported rather than smoothed away. A free amount is the same
-            # story with no tariff to diverge from, so it is left out of the
-            # comparison. A card payment the reader has already taken is priced
-            # from the row written when the cardholder was asked, so it can
-            # diverge the same way and is reported the same way.
-            if settled and price != tariff and not description:
+            # reported rather than smoothed away. A free amount on its own
+            # product has no tariff to diverge from (resolve_line makes its
+            # tariff the amount itself); a reason on any other line hides
+            # nothing any more, and used to hide everything. A card payment
+            # the reader has already taken is priced from the row written when
+            # the cardholder was asked, so it can diverge the same way and is
+            # reported the same way.
+            if settled and price != tariff:
                 off_tariff.append(
                     {
                         "item": item.pk,
@@ -1352,7 +1764,7 @@ class OpenPosViewSet(viewsets.ViewSet):
                 # a few lines further down.
                 journal_line["description"] = description
                 notes.append(f"{count}× {item.name} — {description}")
-            if settled and price != tariff and not description:
+            if settled and price != tariff:
                 # Kept on the line itself, so the divergence survives in the
                 # journal even after the tariff has been edited again.
                 journal_line["tariff_price"] = str(tariff)
@@ -1486,8 +1898,22 @@ class OpenPosViewSet(viewsets.ViewSet):
         sale = None
         refund = None
         recorded_at = offline["recorded_at"] if offline else None
+        #: What the till's clock was off by, already taken out of recorded_at.
+        correction = offline["clock_correction"] if offline else timedelta(0)
+        correction_seconds = round(correction.total_seconds())
+        if correction_seconds:
+            logger.info(
+                "Offline sale %s from %s dated by the server's clock: the till's was %+d s out",
+                idempotency_key, device.name if device else "?", -correction_seconds,
+            )
 
         with transaction.atomic():
+            # Before anything is locked or written: an attempt that finds this
+            # sale recorded meanwhile leaves with nothing to undo.
+            earlier = hold_idempotency_key(event, idempotency_key)
+            if earlier is not None:
+                raise PosSale.AlreadyRecorded(earlier)
+
             if not offline:
                 drawer_session = hold_drawer_session(drawer_session, data["payment_type"])
 
@@ -1495,7 +1921,7 @@ class OpenPosViewSet(viewsets.ViewSet):
             # the whole of the queue at the end of an evening. There is nothing
             # for pretix to hold: an order cannot be worth less than nothing.
             if api_positions:
-                order_serializer = OrderCreateSerializer(
+                order_serializer = (PaidOrderSerializer if settled else OrderCreateSerializer)(
                     data=payload,
                     context={
                         "event": event,
@@ -1543,6 +1969,26 @@ class OpenPosViewSet(viewsets.ViewSet):
                         auth=request.auth,
                     )
 
+                if correction_seconds:
+                    # The order and the journal carry the corrected moment and
+                    # nothing else would ever say it was corrected: the till's
+                    # own figure is gone by the time anybody wonders why a sale
+                    # is dated two minutes before the one rung up after it.
+                    # Both clocks' readings are kept, so the entry explains
+                    # itself without the till.
+                    order.log_action(
+                        "pretix_openpos.order.clock_corrected",
+                        data={
+                            "seconds": correction_seconds,
+                            "recorded_at": offline["recorded_at"].isoformat(),
+                            "claimed_at": offline["claimed_at"].isoformat(),
+                            "sent_at": offline["sent_at"].isoformat(),
+                            "device": device.name if device else "",
+                        },
+                        user=request.user if request.user.is_authenticated else None,
+                        auth=request.auth,
+                    )
+
                 sale = PosSale.record(
                     event=event,
                     order=order,
@@ -1558,6 +2004,11 @@ class OpenPosViewSet(viewsets.ViewSet):
                     offline=bool(offline),
                     recorded_at=recorded_at,
                     drawer_session=drawer_session,
+                    # A row under this key that this transaction did not write
+                    # belongs to another attempt at the same sale, and keeping
+                    # the order just created beside it would sell the tickets
+                    # twice. Raised instead, which undoes that order.
+                    existing_ok=False,
                 )
 
                 # Cross-reference the journal entry from the payment so the
@@ -1592,6 +2043,8 @@ class OpenPosViewSet(viewsets.ViewSet):
                     offline=bool(offline),
                     recorded_at=recorded_at,
                     drawer_session=drawer_session,
+                    # Either half, for the same reason as the sale's.
+                    existing_ok=False,
                 )
 
         # Everything below runs after the sale is durably committed: a failure
@@ -1599,7 +2052,7 @@ class OpenPosViewSet(viewsets.ViewSet):
         checked_in, checkin_errors = None, []
         if order is not None:
             self._post_commit(request, order)
-            checked_in, checkin_errors = self._check_in(
+            checked_in, checkin_errors = self._finish(
                 request, order, offline_at=recorded_at
             )
 
@@ -1614,14 +2067,26 @@ class OpenPosViewSet(viewsets.ViewSet):
         # its role covers, and the resync panel is where the operator holding
         # the tablet finds out.
         body["off_role"] = off_role
+        # Seconds added to the moment the till said the sale was rung up, to
+        # put it on the server's clock: negative when the till's clock runs
+        # fast. Zero on everything but an offline sale from a till whose clock
+        # was more than a minute out — which the till can then say out loud.
+        body["clock_correction_seconds"] = correction_seconds
         return Response(body, status=status.HTTP_201_CREATED)
 
     # -- offline snapshot ---------------------------------------------------
 
     # -- the card reader ---------------------------------------------------
 
-    def _terminal_context(self, request):
-        """The reader this till drives, refusing every till that drives none."""
+    def _terminal_context(self, request, *, waiting=False):
+        """
+        The reader this till drives, refusing every till that drives none.
+
+        ``waiting`` is for the calls a till makes while a cardholder is in front
+        of the reader — asking how the payment is going, stopping it — whose
+        account gives up on SumUp after :data:`~pretix_openpos.sumup.POLL_TIMEOUT`
+        rather than the full timeout a payment is started with. See there.
+        """
         device = request.auth if isinstance(request.auth, Device) else None
         pos_device = PosDevice.for_device(device)
         if not pos_device.drives_terminal:
@@ -1629,7 +2094,12 @@ class OpenPosViewSet(viewsets.ViewSet):
                 {"detail": [_("No card reader is assigned to this till.")],
                  "code": "no_terminal"}
             )
-        return device, pos_device, SumUpAccount(request.event.organizer)
+        account = (
+            SumUpAccount(request.event.organizer, timeout=POLL_TIMEOUT)
+            if waiting
+            else SumUpAccount(request.event.organizer)
+        )
+        return device, pos_device, account
 
     def _terminal_payload(self, payment):
         return {
@@ -1637,6 +2107,14 @@ class OpenPosViewSet(viewsets.ViewSet):
             "amount": str(payment.amount),
             "currency": payment.currency,
             "failure": payment.failure,
+            # True when this answer is the stored row because SumUp could not
+            # be asked — this time, or by the question a moment ago this poll
+            # was answered from. "pending" then means "nobody could find out",
+            # and a till that has been told that long enough can offer the
+            # cashier a way out rather than a reader that seems to wait
+            # forever. False whenever SumUp answered, and on a payment just
+            # put on the reader, which nobody has asked about yet.
+            "sumup_unreachable": getattr(payment, "sumup_unreachable", False),
         }
 
     @staticmethod
@@ -1675,7 +2153,10 @@ class OpenPosViewSet(viewsets.ViewSet):
         # looked since it was written, which is not the same as the cardholder
         # still standing there; this is the very call the other till's poll
         # makes, and it is how a finished payment stops holding the machine.
-        held = settle_terminal_payment(held, account)
+        # Made the way that poll makes it, too: when the other till has just
+        # asked, or is asking right now, its answer is the one read here — at
+        # worst a moment old, which costs this cashier a second tap.
+        held = poll_terminal_payment(held, account)
         if held.status != PosTerminalPayment.STATUS_PENDING:
             return
 
@@ -1728,6 +2209,10 @@ class OpenPosViewSet(viewsets.ViewSet):
                 self._terminal_payload(settle_terminal_payment(existing, account)),
                 status=status.HTTP_200_OK,
             )
+
+        # Here, before any card is asked for: the checkout that follows books
+        # this basket as it was pinned, and asks nothing of its size again.
+        refuse_oversized(data["positions"])
 
         self._refuse_if_reader_is_busy(
             event, _pos_device.sumup_reader_id, idempotency_key, account
@@ -1869,8 +2354,16 @@ class OpenPosViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=["get"], url_path="terminal/status", url_name="terminal-status")
     def terminal_status(self, request, **kwargs):
-        """Where a payment has got to. Polled by the till while it waits."""
-        device, _pos_device, account = self._terminal_context(request)
+        """
+        Where a payment has got to. Polled by the till while it waits.
+
+        Answered from the row as it stands whenever SumUp cannot be asked in
+        good time — no answer within POLL_TIMEOUT, a question about this payment
+        already under way, one asked a moment ago (:func:`poll_terminal_payment`)
+        — so a slow SumUp makes a till wait a little longer for its answer, and
+        never makes it read a failure.
+        """
+        device, _pos_device, account = self._terminal_context(request, waiting=True)
         payment = PosTerminalPayment.objects.filter(
             event=request.event, idempotency_key=request.query_params.get("idempotency_key", "")
         ).first()
@@ -1881,7 +2374,7 @@ class OpenPosViewSet(viewsets.ViewSet):
                 {"detail": [_("No card payment was started for this basket.")],
                  "code": "no_payment"}
             )
-        return Response(self._terminal_payload(settle_terminal_payment(payment, account)))
+        return Response(self._terminal_payload(poll_terminal_payment(payment, account)))
 
     @action(detail=False, methods=["post"], url_path="terminal/cancel", url_name="terminal-cancel")
     def terminal_cancel(self, request, **kwargs):
@@ -1893,8 +2386,22 @@ class OpenPosViewSet(viewsets.ViewSet):
         is whatever the payment turns out to be afterwards, not whatever was
         asked for — a card tapped in the same second is a payment, and the till
         has to be told that rather than a cancellation that did not happen.
+
+        The stop is sent whenever the reader can still be this payment's, and
+        what the payment became is then asked the way a poll asks it: the till
+        reads a "pending" here exactly as it reads one from a poll, and its
+        next poll says how it ended.
+
+        When the reader has moved on (:func:`reader_moved_on`), nothing is sent
+        to it, and SumUp is asked directly what became of this payment: a card
+        charged is answered as such, a request SumUp calls over closes the
+        payment as any poll would, and one still open by SumUp's account — or
+        one SumUp could not be asked about — is answered ``reader_moved_on``.
+        The row is not written off then: only SumUp says whether a card was
+        charged, and a payment left open is still settled by the next question
+        anybody asks about it.
         """
-        device, _pos_device, account = self._terminal_context(request)
+        device, _pos_device, account = self._terminal_context(request, waiting=True)
         payment = PosTerminalPayment.objects.filter(
             event=request.event,
             idempotency_key=request.data.get("idempotency_key", ""),
@@ -1904,6 +2411,25 @@ class OpenPosViewSet(viewsets.ViewSet):
                 {"detail": [_("No card payment was started for this basket.")],
                  "code": "no_payment"}
             )
+        if not payment.settled and reader_moved_on(payment, request.event.organizer):
+            # Directly rather than through the poll's guard: this answer says
+            # whether a card was charged for a basket the cashier may since have
+            # taken in cash, and a one-off request like this one is not what
+            # the guard protects the workers from.
+            settle_terminal_payment(payment, account)
+            if not payment.settled:
+                return Response(
+                    {
+                        "detail": [
+                            _("This payment is no longer the one on the card reader, so the "
+                              "reader was left alone.")
+                        ],
+                        "code": "reader_moved_on",
+                        **self._terminal_payload(payment),
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            return Response(self._terminal_payload(payment))
         if not payment.settled:
             try:
                 # The reader this payment was put on, not whichever one the
@@ -1915,7 +2441,7 @@ class OpenPosViewSet(viewsets.ViewSet):
                 # Already finished, already gone, or unreachable. Asking SumUp
                 # what actually happened answers all three.
                 pass
-        return Response(self._terminal_payload(settle_terminal_payment(payment, account)))
+        return Response(self._terminal_payload(poll_terminal_payment(payment, account)))
 
     @action(detail=False, methods=["get"], url_path="offline", url_name="offline")
     def offline(self, request, **kwargs):
@@ -2941,16 +3467,12 @@ class OpenPosViewSet(viewsets.ViewSet):
             else str(sale.total)
         )
         return {
-            "order": {
-                "code": sale.order_code,
-                "total": total,
-                "url": (
-                    f"/{sale.event.organizer.slug}/{sale.event.slug}/order/"
-                    f"{sale.order_code}/{sale.order.secret}/"
-                    if sale.order
-                    else None
-                ),
-            },
+            # No link to the order. It used to be here, built from the order's
+            # secret: the customer's own page, tickets and invoice included,
+            # handed to every device that could replay a key. The till never
+            # read it, and a till has no business holding what the customer
+            # alone should.
+            "order": {"code": sale.order_code, "total": total},
             "journal_seq": sale.seq,
             "payment_type": sale.payment_type,
             "cash_given": None if sale.cash_given is None else str(sale.cash_given),
@@ -2994,7 +3516,13 @@ class OpenPosViewSet(viewsets.ViewSet):
         return body
 
     def _post_commit(self, request, order):
-        """Fire the signals and invoicing that pretix' own order API fires."""
+        """
+        Fire the signals pretix' own order API fires, once, for a new order.
+
+        Only ever for the attempt that created the order. The invoice pretix'
+        API would also issue here is left to :meth:`_finish`, which every
+        request for this sale goes through, retries included.
+        """
         payment = order.payments.last()
         if payment and payment.state == OrderPayment.PAYMENT_STATE_CONFIRMED:
             order.log_action(
@@ -3019,7 +3547,32 @@ class OpenPosViewSet(viewsets.ViewSet):
                 auth=request.auth,
             )
 
-        self._ensure_invoice(request, order)
+    def _finish(self, request, order, *, offline_at=None, replayed=False):
+        """
+        What is left once a sale is committed: its invoice and its check-ins.
+
+        Run by the attempt that recorded the sale, and again by every request
+        that finds it recorded — a retry, or a second attempt that overlapped
+        the first and lost — because the first may have died between its
+        commit and this. Each part looks at what exists before doing anything,
+        and the order's row is held while it does: the attempt that lost the
+        race gets here at the same moment as the one that won, and without the
+        lock both saw no invoice and no entry, and wrote one each — two
+        invoices for one sale, and one customer counted in twice.
+
+        A transaction of its own, never the sale's: nothing here may undo an
+        order the customer has paid for. A step that fails is rolled back to
+        its own savepoint and reported, and the steps after it still run.
+        """
+        with transaction.atomic():
+            # Only the order's own row: pretix' order manager joins the event
+            # for its scope, and a plain FOR UPDATE would lock the event row
+            # too — every till's tail waiting on every other's.
+            order = Order.objects.select_for_update(of=OF_SELF).get(pk=order.pk)
+            self._ensure_invoice(request, order)
+            return self._check_in(
+                request, order, offline_at=offline_at, replayed=replayed
+            )
 
     def _ensure_invoice(self, request, order):
         """
@@ -3027,7 +3580,7 @@ class OpenPosViewSet(viewsets.ViewSet):
 
         Called on the first attempt, and again on a replay: it checks what
         exists before doing anything, so running it twice costs a query, never
-        a second invoice.
+        a second invoice — and never both at once, see :meth:`_finish`.
         """
         settings = request.event.settings
         # The plugin answers for its own channel. An event set to invoice "by
@@ -3051,14 +3604,17 @@ class OpenPosViewSet(viewsets.ViewSet):
         # A zero-total order is not invoiceable anywhere, whatever the switch says.
         if wants_invoice and order.total and not order.invoices.last():
             try:
-                generate_invoice(order, trigger_pdf=True)
+                # Its own savepoint, so that a database error on the way leaves
+                # the check-ins after it a transaction they can still use.
+                with transaction.atomic():
+                    generate_invoice(order, trigger_pdf=True)
             except Exception as e:
                 logger.exception("Could not generate invoice for POS order %s", order.code)
                 order.log_action(
                     "pretix.event.order.invoice.failed", data={"exception": str(e)}
                 )
 
-    def _check_in(self, request, order, only_missing=False, offline_at=None):
+    def _check_in(self, request, order, *, offline_at=None, replayed=False):
         """
         Walk the customer straight in.
 
@@ -3066,10 +3622,16 @@ class OpenPosViewSet(viewsets.ViewSet):
         check-in that fails is reported back to the app for the operator to sort
         out, never a reason to fail the sale.
 
-        With ``only_missing`` — the replay-repair case — positions that already
-        have an entry on the list are left alone. The customer may have walked
-        to the door and been scanned there in the meantime, and forcing a second
-        entry would count one person twice.
+        Positions that already have an entry on the list are left alone,
+        whoever made it. On a replay the customer may have walked to the door
+        and been scanned there in the meantime; on the first attempt, a retry
+        that overlapped it may have finished the tail first. Forcing a second
+        entry would count one person twice either way.
+
+        The count answered is what the till announces. The first attempt says
+        how many of the order's tickets are in, whoever let them in, so a till
+        whose own retry got there first still says "let them in". A replay
+        says only what it did itself — nothing, when nothing was missing.
 
         ``offline_at`` is when a sale rung up with no network happened: the
         customer walked in then, not when the till found the network again.
@@ -3084,27 +3646,27 @@ class OpenPosViewSet(viewsets.ViewSet):
         # line has no door. Left unfiltered it also made the till announce
         # "let them in" after a pure shop sale.
         positions = [p for p in order.positions.select_related("item") if p.item.admission]
-        if only_missing and positions:
-            already = set(
-                Checkin.objects.filter(
-                    position__in=positions, list=clist, type=Checkin.TYPE_ENTRY
-                ).values_list("position_id", flat=True)
-            )
-            positions = [p for p in positions if p.pk not in already]
-        if not positions:
-            return 0, []
+        already = set(
+            Checkin.objects.filter(
+                position__in=positions, list=clist, type=Checkin.TYPE_ENTRY
+            ).values_list("position_id", flat=True)
+        ) if positions else set()
+        missing = [p for p in positions if p.pk not in already]
 
-        checked_in = 0
+        checked_in = 0 if replayed else len(already)
         errors = []
-        for position in positions:
+        for position in missing:
             try:
-                walk_in(
-                    position,
-                    clist,
-                    auth=request.auth,
-                    user=request.user if request.user.is_authenticated else None,
-                    offline_at=offline_at,
-                )
+                # A savepoint per ticket: one that fails in the database rolls
+                # back alone, and the next customer's ticket is still tried.
+                with transaction.atomic():
+                    walk_in(
+                        position,
+                        clist,
+                        auth=request.auth,
+                        user=request.user if request.user.is_authenticated else None,
+                        offline_at=offline_at,
+                    )
                 checked_in += 1
             except CheckInError as e:
                 errors.append(str(e))

@@ -100,6 +100,13 @@ def main():
         check("currency present", config.get("event", {}).get("currency") == "EUR", str(config))
         # What lets a till that stays open across a deploy notice it is stale.
         check("plugin version announced", bool(config.get("version")), str(config.get("version")))
+        # And what lets it notice its own clock is wrong.
+        server_time = config.get("server_time") or ""
+        check("server clock announced, in UTC",
+              server_time.endswith("+00:00")
+              and abs(datetime.fromisoformat(server_time) - datetime.now(timezone.utc))
+              < timedelta(minutes=2),
+              server_time)
         check("check-in configured", config.get("checkin", {}).get("enabled") is True, str(config.get("checkin")))
         # The scanning screen needs these to tell an entry from a T-shirt, and
         # they must cover the whole event, not just what the till may sell.
@@ -158,6 +165,9 @@ def main():
           f"got {sale['order']['total']}, expected {expected_total:.2f}")
     check("change correct", float(sale["cash_change"]) == 50.00 - expected_total,
           f"got {sale['cash_change']}")
+    # The order's secret opens the customer's own page; a till never needed it.
+    check("no link to the order in the answer", set(sale["order"]) == {"code", "total"},
+          f"order carries {sorted(sale['order'])}")
     # Two admission tickets and three beers: only the tickets are an entry.
     # Checking in the beers would put merch on the door list and make the till
     # announce "let them in" after a pure shop sale.
@@ -186,6 +196,18 @@ def main():
     check("replay is flagged", replay.get("replayed") is True, str(replay))
     check("replay is the same order", replay.get("order", {}).get("code") == sale["order"]["code"],
           f"{replay.get('order', {}).get('code')} vs {sale['order']['code']}")
+
+    print("\n-- a sale has a size limit ---------------------------------")
+    # Five hundred items at most, all lines together: one request used to be
+    # able to ask for a hundred lines of 999 tickets each.
+    status, huge = call("POST", f"/organizers/{ORG}/events/{EVENT}/openpos/checkout/", {
+        "idempotency_key": str(uuid.uuid4()),
+        "positions": [{"item": beer["id"], "count": 300}, {"item": beer["id"], "count": 201}],
+        "payment_type": "cash",
+        "cash_given": "5000.00",
+    }, token)
+    check("a basket of 501 items is refused", status == 400 and huge.get("code") == "too_many_items",
+          f"HTTP {status}: {huge}")
 
     print("\n-- price is not client-controlled --------------------------")
     # A price sent without declaring the sale offline is refused outright. It
@@ -241,7 +263,14 @@ def main():
     # Une vente encaissée pendant la coupure : elle porte son heure réelle et le
     # prix effectivement payé — ici volontairement à côté du tarif, ce qui doit
     # être signalé plutôt que lissé.
-    sold_at = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat()
+    #
+    # Et l'horloge de cette tablette avance d'une demi-heure, comme celle d'un
+    # iPad réglé à la main : la vente d'il y a vingt minutes y est datée de dans
+    # dix minutes. La caisse dit l'heure de son horloge en envoyant (sent_at),
+    # et le serveur remet la vente à son heure au lieu de la refuser comme datée
+    # dans le futur.
+    skew = timedelta(minutes=30)
+    sold_at = (datetime.now(timezone.utc) - timedelta(minutes=20) + skew).isoformat()
     off_price = round(float(full["price"]) - 1.00, 2)
     offline_key = str(uuid.uuid4())
     offline_body = {
@@ -250,11 +279,18 @@ def main():
         "payment_type": "cash",
         "cash_given": f"{off_price:.2f}",
         "cashier": "Alice",
-        "offline": {"recorded_at": sold_at, "charged_total": f"{off_price:.2f}"},
+        "offline": {
+            "recorded_at": sold_at,
+            "charged_total": f"{off_price:.2f}",
+            "sent_at": (datetime.now(timezone.utc) + skew).isoformat(),
+        },
     }
     status, offline_sale = call("POST", f"/organizers/{ORG}/events/{EVENT}/openpos/checkout/", offline_body, token)
     check("offline sale accepted", status == 201, f"HTTP {status}: {offline_sale}")
     if status == 201:
+        check("and put back on the server's clock",
+              -1810 <= offline_sale.get("clock_correction_seconds", 0) <= -1790,
+              str(offline_sale.get("clock_correction_seconds")))
         check("it is recorded at the price actually charged",
               float(offline_sale["order"]["total"]) == off_price,
               f"{offline_sale['order']['total']} vs {off_price:.2f}")

@@ -13,6 +13,14 @@ production.
 
 What must hold afterwards: every sale committed, sequence numbers gapless and
 unique, and no two sales sharing an order.
+
+Then the other race: one sale, sent several times at once under one idempotency
+key — a till whose retries overlap its first attempt. Exactly one of them may
+create the sale; every other one answers with it (200, ``replayed``), or is
+told to come back (503 ``sale_in_progress``) and then answers with it; and the
+journal grows by one line. Two answers naming two orders is the bug this
+checks for, and PostgreSQL, where the attempts really do run side by side, is
+the only place it can show.
 """
 import json
 import os
@@ -107,6 +115,8 @@ def main():
     status, after = call("GET", f"/organizers/{ORG}/events/{EVENT}/openpos/summary/", token=token)
     print(f"after  : {after['event']}")
 
+    same_key_ok, same_key_refused = same_sale_at_once(token, item, parallel)
+
     # Two different things can go wrong, and conflating them makes the result
     # useless. A refused request is a capacity problem — the SQLite dev stack
     # serialises writers and answers "database is locked" under load, where
@@ -123,14 +133,74 @@ def main():
     if not integrity:
         print("JOURNAL BROKEN — committed sales do not form a clean sequence")
         sys.exit(1)
-    if failed:
+    if not same_key_ok:
+        print("ONE SALE RECORDED TWICE — overlapping attempts under one key made "
+              "more than one order or journal line")
+        sys.exit(1)
+    if failed or same_key_refused:
         print(f"JOURNAL INTACT for the {len(created)} sales that committed, "
-              f"but {len(failed)} request(s) were refused.")
+              f"but {len(failed) + same_key_refused} request(s) were refused.")
         print("On SQLite that is the writer lock, not a defect; re-run against "
               "PostgreSQL to exercise real concurrency.")
         sys.exit(2)
     print("JOURNAL INTACT")
     sys.exit(0)
+
+
+def same_sale_at_once(token, item, parallel):
+    """
+    One sale, ``parallel`` times at once, under one key.
+
+    Returns whether it was recorded once — one order, one journal line, every
+    answer naming the same order — and how many requests were refused outright,
+    which the SQLite dev stack does under load and PostgreSQL must not.
+    """
+    summary = f"/organizers/{ORG}/events/{EVENT}/openpos/summary/"
+    checkout = f"/organizers/{ORG}/events/{EVENT}/openpos/checkout/"
+    key = str(uuid.uuid4())
+    body = {
+        "idempotency_key": key,
+        "positions": [{"item": item["id"], "count": 1}],
+        "payment_type": "cash",
+        "cash_given": item["price"],
+        "cashier": "load",
+    }
+
+    _status, before = call("GET", summary, token=token)
+    print()
+    print(f"firing {parallel} concurrent attempts at ONE sale (key {key[:8]}…)")
+    with ThreadPoolExecutor(max_workers=parallel) as pool:
+        results = list(pool.map(lambda _index: call("POST", checkout, body, token), range(parallel)))
+
+    # Told to come back while the first attempt held the key: come back, once,
+    # the way the app does — and it has to be the replay by then.
+    settled = []
+    for status, answer in results:
+        if status == 503 and isinstance(answer, dict) and answer.get("code") == "sale_in_progress":
+            status, answer = call("POST", checkout, body, token)
+        settled.append((status, answer))
+
+    created = [answer for status, answer in settled if status == 201]
+    replayed = [
+        answer for status, answer in settled
+        if status == 200 and isinstance(answer, dict) and answer.get("replayed") is True
+    ]
+    refused = len(settled) - len(created) - len(replayed)
+    codes = {answer["order"]["code"] for answer in created + replayed}
+    _status, after = call("GET", summary, token=token)
+    grew = after["event"]["count"] - before["event"]["count"]
+
+    print(f"created        : {len(created)} (expected 1)")
+    print(f"replayed       : {len(replayed)}")
+    print(f"refused        : {refused}")
+    for status, answer in settled:
+        if status not in (200, 201):
+            print(f"    HTTP {status}: {str(answer)[:200]}")
+    print(f"orders named   : {sorted(codes)} (expected one)")
+    print(f"journal grew by: {grew} (expected 1)")
+    # At most once, whatever else happened: a refusal is a capacity problem,
+    # reported apart, and a second order is the defect.
+    return len(created) <= 1 and len(codes) <= 1 and grew <= 1, refused
 
 
 if __name__ == "__main__":

@@ -36,6 +36,10 @@ msgstr "Cette vente est datée dans le futur."
 msgid "This sale is too old to be replayed automatically."
 msgstr "Cette vente est trop ancienne pour être rejouée automatiquement."
 
+#: api/serializers.py:167
+msgid "This key is reserved for the deposit half of another sale."
+msgstr "Cette clé est réservée à la consigne rendue d’une autre vente."
+
 #: api/serializers.py:134
 msgid "A deposit refund carries no free-text amount."
 msgstr "Un rendu de consigne ne porte pas de montant libre."
@@ -114,6 +118,18 @@ msgstr "Déclinaison inconnue pour le produit {name}."
 msgid "Product {name} requires an option to be chosen."
 msgstr "Le produit {name} demande de choisir une déclinaison."
 
+#: api/views.py:610
+#, python-brace-format
+msgid "A sale can hold at most {max} items. Split it into several sales."
+msgstr ""
+"Une vente ne peut pas compter plus de {max} articles. Répartissez-la en "
+"plusieurs ventes."
+
+#: api/views.py:531
+#, python-brace-format
+msgid "{name} cannot be sold for less than nothing."
+msgstr "Impossible de vendre {name} en dessous de zéro."
+
 #: api/views.py:510
 msgid "This product is not the one deposits are taken on."
 msgstr "Ce produit n’est pas celui sur lequel les consignes sont prises."
@@ -126,6 +142,15 @@ msgstr ""
 #: api/views.py:519
 msgid "A free amount has to be more than nothing."
 msgstr "Un montant libre doit être supérieur à zéro."
+
+#: api/views.py:992
+msgid "This sale is still being recorded. Try again in a moment."
+msgstr ""
+"Cette vente est encore en cours d’enregistrement. Réessayez dans un instant."
+
+#: api/throttling.py:69
+msgid "This device is sending too many requests. Try again in a moment."
+msgstr "Cet appareil envoie trop de requêtes. Réessayez dans un instant."
 
 #: api/views.py:817
 #, python-brace-format
@@ -186,6 +211,14 @@ msgstr "Rien n’est dû sur ce panier. Réglez-le en espèces."
 #: api/views.py:1763 api/views.py:1786
 msgid "No card payment was started for this basket."
 msgstr "Aucun paiement par carte n’a été lancé pour ce panier."
+
+#: api/views.py:2308
+msgid ""
+"This payment is no longer the one on the card reader, so the reader was left "
+"alone."
+msgstr ""
+"Ce paiement n’est plus celui qui occupe le lecteur de carte : le lecteur n’a "
+"pas été touché."
 
 #: api/views.py:1820 api/views.py:2461
 msgid "Unknown check-in list."
@@ -916,6 +949,43 @@ msgstr "{count}× {item}, dans {category}"
 #: logdisplay.py:569
 msgid "no category"
 msgstr "aucune catégorie"
+
+#: logdisplay.py:585
+#, python-brace-format
+msgid "{minutes} min {seconds} s"
+msgstr "{minutes} min {seconds} s"
+
+#: logdisplay.py:589
+#, python-brace-format
+msgid "{hours} h {minutes} min"
+msgstr "{hours} h {minutes} min"
+
+#: logdisplay.py:592
+#, python-brace-format
+msgid "{days} d {hours} h"
+msgstr "{days} j {hours} h"
+
+#: logdisplay.py:626
+#, python-brace-format
+msgid ""
+"Rung up offline on {device}, whose clock was {offset} fast. Dated "
+"{recorded_at}, not {claimed_at} as the till had it."
+msgstr ""
+"Encaissée hors ligne sur {device}, dont l’horloge avançait de {offset}. "
+"Datée du {recorded_at}, et non du {claimed_at} comme le disait la caisse."
+
+#: logdisplay.py:629
+#, python-brace-format
+msgid ""
+"Rung up offline on {device}, whose clock was {offset} slow. Dated "
+"{recorded_at}, not {claimed_at} as the till had it."
+msgstr ""
+"Encaissée hors ligne sur {device}, dont l’horloge retardait de {offset}. "
+"Datée du {recorded_at}, et non du {claimed_at} comme le disait la caisse."
+
+#: logdisplay.py:633
+msgid "a till"
+msgstr "une caisse"
 
 #: logdisplay.py:586
 #, python-brace-format

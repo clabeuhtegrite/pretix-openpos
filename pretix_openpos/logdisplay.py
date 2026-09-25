@@ -35,6 +35,8 @@ what something is called today.
 from decimal import Decimal, InvalidOperation
 
 from django.dispatch import receiver
+from django.utils.dateparse import parse_datetime
+from django.utils.formats import date_format
 from django.utils.html import escape, format_html, format_html_join
 from django.utils.translation import gettext_lazy as _
 from pretix.base.logentrytypes import (
@@ -573,6 +575,65 @@ class SoldOutsideRole(NoOpShredderMixin, OrderLogEntryType):
                     for line in lines
                 ),
             ),
+        )
+
+
+def _clock_offset(seconds):
+    """How far a clock was out, in the units a person would say it in."""
+    seconds = abs(int(seconds))
+    if seconds < 3600:
+        return _("{minutes} min {seconds} s").format(
+            minutes=seconds // 60, seconds=seconds % 60
+        )
+    if seconds < 86400:
+        return _("{hours} h {minutes} min").format(
+            hours=seconds // 3600, minutes=seconds % 3600 // 60
+        )
+    return _("{days} d {hours} h").format(days=seconds // 86400, hours=seconds % 86400 // 3600)
+
+
+def _moment(value, tz):
+    """A stored ISO timestamp, in the event's own time, or as it was written."""
+    moment = parse_datetime(value) if isinstance(value, str) else None
+    if moment is None:
+        return value or "?"
+    return date_format(moment.astimezone(tz), "SHORT_DATETIME_FORMAT")
+
+
+@log_entry_types.new()
+class ClockCorrected(NoOpShredderMixin, OrderLogEntryType):
+    """
+    A sale replayed from a till whose clock was wrong, dated by the server's.
+
+    A till writes down when each sale happened by its own clock, and one set
+    by hand, or one whose battery ran flat, can be minutes or days out. The
+    till says what its clock reads when it sends the sale, the server knows
+    what its own reads, and the difference is taken out of the sale's time
+    before anything is judged or stored. Without it, a tablet six minutes fast
+    had every sale it queued refused as dated in the future.
+
+    The order and its journal line carry the corrected time only. This entry
+    is what says it was corrected, from what, and by how much.
+    """
+
+    action_type = "pretix_openpos.order.clock_corrected"
+
+    def display(self, logentry, data):
+        seconds = data.get("seconds") or 0
+        tz = logentry.event.timezone
+        text = (
+            # A negative correction took time off: the till was ahead.
+            _("Rung up offline on {device}, whose clock was {offset} fast. "
+              "Dated {recorded_at}, not {claimed_at} as the till had it.")
+            if seconds < 0
+            else _("Rung up offline on {device}, whose clock was {offset} slow. "
+                   "Dated {recorded_at}, not {claimed_at} as the till had it.")
+        )
+        return text.format(
+            device=data.get("device") or _("a till"),
+            offset=_clock_offset(seconds),
+            recorded_at=_moment(data.get("recorded_at"), tz),
+            claimed_at=_moment(data.get("claimed_at"), tz),
         )
 
 
