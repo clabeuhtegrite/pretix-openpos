@@ -81,6 +81,9 @@
                             <strong>{{ row.expected_now|money:currency }}</strong>
                             <br><small class="text-muted">{% trans "now" context "cash drawer" %}</small>
                         {% else %}—{% endif %}
+                        {% if row.waiting %}
+                            <br>{% include "pretix_openpos/waiting_sales.html" with waiting=row.waiting %}
+                        {% endif %}
                     </td>
                     <td class="text-right">
                         {% if row.counted is not None %}

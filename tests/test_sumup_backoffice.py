@@ -619,3 +619,148 @@ def test_sumup_being_down_does_not_stop_a_role_being_changed(
 
     assert response.status_code == 302
     assert PosDevice.objects.get(device=device).role == PosDevice.ROLE_DOOR
+
+
+# -- who may change the account ------------------------------------------------
+
+
+def organizer_staff(organizer, event, email, permissions):
+    """A back-office user whose team holds exactly these organizer permissions."""
+    from django.test import Client
+    from pretix.base.models import Team, User
+
+    user = User.objects.create_user(email, "dummy")
+    team = Team.objects.create(
+        organizer=organizer,
+        name="Matériel",
+        all_event_permissions=True,
+        all_organizer_permissions=False,
+        limit_organizer_permissions=dict.fromkeys(permissions, True),
+    )
+    team.members.add(user)
+    team.limit_events.add(event)
+    client = Client()
+    assert client.login(email=email, password="dummy")
+    return client
+
+
+@pytest.fixture
+def device_manager(organizer, event):
+    """Whoever pairs the tablets on the evening: devices, and nothing else."""
+    return organizer_staff(organizer, event, "materiel@example.org", ["organizer.devices:write"])
+
+
+@pytest.fixture
+def settings_manager(organizer, event):
+    return organizer_staff(
+        organizer, event, "bureau@example.org", ["organizer.settings.general:write"]
+    )
+
+
+@pytest.mark.django_db
+def test_pairing_tablets_is_not_enough_to_change_the_sumup_account(
+    device_manager, organizer, sumup
+):
+    """
+    Whoever holds the merchant code and the key decides whose account every
+    card payment lands in. The devices permission is the one handed to whoever
+    sets the tablets up; it used to be enough to put in their own.
+    """
+    assert device_manager.get(sumup_url(organizer)).status_code == 403
+
+    response = device_manager.post(sumup_url(organizer), {
+        "action": "settings",
+        "openpos_sumup_merchant_code": "THEIRS",
+        "openpos_sumup_api_key": "sup_sk_theirs",
+    })
+
+    assert response.status_code == 403
+    organizer.settings.flush()
+    assert organizer.settings.get("openpos_sumup_merchant_code") == sumup.merchant
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("action", ["pair", "forget", "free"])
+def test_nor_to_pair_or_remove_the_account_s_readers(device_manager, organizer, sumup, action):
+    sumup.add_reader("rdr_A")
+
+    response = device_manager.post(
+        sumup_url(organizer), {"action": action, "reader_id": "rdr_A", "pairing_code": "ABC123"}
+    )
+
+    assert response.status_code == 403
+    assert sumup.calls == []
+
+
+@pytest.mark.django_db
+def test_the_organizer_settings_permission_opens_it(settings_manager, organizer, sumup):
+    """The permission pretix asks for its own organizer settings pages."""
+    from pretix.control.views.organizer import OrganizerSettingsFormView
+
+    from pretix_openpos.sumup_views import SumUpView
+
+    assert SumUpView.permission == OrganizerSettingsFormView.permission
+    assert settings_manager.get(sumup_url(organizer)).status_code == 200
+
+
+@pytest.mark.django_db
+def test_the_menu_offers_the_card_readers_to_whoever_may_open_them(
+    device_manager, settings_manager, organizer, event
+):
+    page = device_manager.get(devices_url(organizer)).content.decode()
+    assert sumup_url(organizer) not in page
+    # The device screen is still theirs.
+    assert "Till devices" in page
+
+    page = settings_manager.get(f"/control/organizer/{organizer.slug}/").content.decode()
+    assert sumup_url(organizer) in page
+
+
+@pytest.mark.django_db
+def test_the_device_screen_links_the_card_readers_for_whoever_may_open_them(
+    backoffice, organizer, device
+):
+    assert sumup_url(organizer) in backoffice.get(devices_url(organizer)).content.decode()
+
+
+# -- a reader id is a reader id --------------------------------------------------
+
+
+#: What a hand-made form could post as a reader id to turn one call into
+#: another: up the path, into another path, into a query, into a fragment.
+FORGED = [
+    "rdr_A/../../../v1.0/merchants/MERCH1/payments/tx_1/refunds",
+    "../../v1.0/merchants/MERCH1/payments/tx_1/refunds",
+    "rdr_A/terminate",
+    "rdr_A?status=1",
+    "rdr_A#fragment",
+    "..",
+    ".",
+    "rdr_A%2F..",
+    "rdr_",
+    "reader_A",
+    "",
+]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("action", ["forget", "free"])
+@pytest.mark.parametrize("forged", FORGED)
+def test_a_forged_reader_id_never_reaches_sumup(
+    backoffice, organizer, device, sumup, action, forged
+):
+    sumup.add_reader("rdr_A")
+    PosDevice.objects.create(device=device, role=PosDevice.ROLE_TILL, sumup_reader_id="rdr_A")
+
+    response = backoffice.post(
+        sumup_url(organizer), {"action": action, "reader_id": forged}, follow=True
+    )
+
+    assert "This is not a SumUp reader." in response.content.decode()
+    # Not one call — and so not one made with the organizer's key.
+    assert [call for call in sumup.calls if call[0] != "GET"] == []
+    assert "rdr_A" in sumup.readers
+    assert PosDevice.objects.get(device=device).sumup_reader_id == "rdr_A"
+    assert not organizer.all_logentries().filter(
+        action_type__startswith="pretix_openpos.sumup.reader."
+    ).exists()

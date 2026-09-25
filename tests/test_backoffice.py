@@ -2,6 +2,8 @@
 The screens the organiser uses: the journal, and pretix' own order page — which
 the plugin renders part of, and once turned into a 500 for every cash sale.
 """
+import csv
+import io
 from decimal import Decimal
 
 import pytest
@@ -9,6 +11,7 @@ import pytest
 from pretix_openpos.models import PosSale
 
 from .conftest import sell
+from .test_drawers import give_drawer, open_it
 
 
 def sales_url(event):
@@ -58,6 +61,46 @@ def test_the_journal_exports_as_one_file(backoffice, till, event, ticket, beer):
     assert "seq;kind;datetime" in body
     assert "2× Entrée + 1× Bière" in body
     assert "Camille" in body
+
+
+@pytest.mark.django_db
+def test_what_people_typed_does_not_run_as_a_formula_in_the_export(
+    backoffice, till, device, event, ticket
+):
+    """
+    CSV injection, through every column somebody gets to type into.
+
+    A cashier's name and a reason come from a till, a till's name and a
+    drawer's from the back office; the file is opened in a spreadsheet by
+    whoever keeps the books. A cell starting with ``=``, ``+``, ``-`` or
+    ``@`` is a formula there, so it goes out behind an apostrophe and reads
+    as the text that was typed. The amounts do not: a cancellation is worth
+    -10.00, and a figure turned into text is a column that no longer adds up.
+    """
+    device.name = "+33 caisse"
+    device.save()
+    give_drawer(device, name="@Bar")
+    open_it(till)
+    sell(till, [{"item": ticket.pk, "count": 1}], cashier='=HYPERLINK("http://x";"clic")',
+         idempotency_key="sale-formula")
+    till.post("cancel", {"seq": 1, "idempotency_key": "cancel-formula",
+                         "cashier": "@Léa", "reason": "-2+3"})
+
+    body = b"".join(
+        backoffice.get(sales_url(event) + "?export=csv").streaming_content
+    ).decode("utf-8")
+
+    header, *rows = csv.reader(io.StringIO(body.lstrip("﻿")), delimiter=";")
+    sale, cancellation = (dict(zip(header, row)) for row in rows)
+    assert sale["cashier"] == "'=HYPERLINK(\"http://x\";\"clic\")"
+    assert sale["till"] == "'+33 caisse"
+    assert sale["drawer"] == "'@Bar"
+    assert sale["kind"] == "sale"
+    assert sale["positions"] == "1× Entrée"
+    assert cancellation["cashier"] == "'@Léa"
+    assert cancellation["reason"] == "'-2+3"
+    assert cancellation["total"] == "-10.00"
+    assert cancellation["cancels_seq"] == "1"
 
 
 @pytest.mark.django_db
@@ -366,6 +409,33 @@ def test_a_card_payment_that_became_a_sale_is_not_listed(
     assert "Card payments with no sale" not in backoffice.get(
         sales_url(event)
     ).content.decode()
+
+
+@pytest.mark.django_db
+def test_a_card_charged_after_the_basket_went_through_in_cash_is_listed(
+    backoffice, till, event, ticket, reader_till, sumup
+):
+    """
+    The reader seemed to hang, so the till gave up and took cash — under the
+    same key, as the app used to. Then the card went through after all.
+    The cash sale carries the key, and any sale with it used to count as the
+    reader payment's own: the one charge nobody knows about vanished from the
+    one list that could show it. Only a card sale settles a reader payment.
+    """
+    from pretix_openpos.models import PosTerminalPayment
+
+    put_on_reader(till, [{"item": ticket.pk, "count": 1}], "en-especes-01")
+    sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="en-especes-01")
+    payment = PosTerminalPayment.objects.get(idempotency_key="en-especes-01")
+    sumup.pay(payment.client_transaction_id, transaction_id="tx_en_trop")
+    till.get("terminal/status", idempotency_key="en-especes-01")
+
+    context = backoffice.get(sales_url(event)).context
+
+    assert [row["payment"].idempotency_key for row in context["unresolved_card"]] == [
+        "en-especes-01"
+    ]
+    assert context["unresolved_card"][0]["paid"] is True
 
 
 @pytest.mark.django_db

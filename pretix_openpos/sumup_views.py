@@ -18,7 +18,7 @@ from pretix.control.views.organizer import OrganizerSettingsFormView
 
 from .forms import SumUpSettingsForm
 from .models import PosDevice
-from .sumup import SumUpAccount, SumUpError
+from .sumup import SumUpAccount, SumUpError, is_reader_id
 from .webhook import webhook_url
 
 logger = logging.getLogger(__name__)
@@ -38,7 +38,20 @@ class SumUpView(OrganizerSettingsFormView):
     model = Organizer
     form_class = SumUpSettingsForm
     template_name = "pretix_openpos/sumup.html"
-    permission = "organizer.devices:write"
+    #: The permission pretix asks for its own organizer settings — the one
+    #: ``OrganizerSettingsFormView`` declares, spelt out here so that nobody
+    #: reading this class has to go and look, and so that the menu entry can
+    #: ask for the same thing.
+    #:
+    #: It used to be the devices one, because readers felt like devices. But
+    #: this page holds the merchant code and the key, and whoever holds those
+    #: decides whose account every card payment at every till lands in. The
+    #: devices permission is the one handed to whoever pairs the tablets on
+    #: the evening; it must not be enough to send the takings somewhere else.
+    #: Attaching a reader to a till stays on the devices screen, under the
+    #: devices permission: it can only pick among the readers of the account
+    #: this page set up.
+    permission = "organizer.settings.general:write"
 
     def get_success_url(self):
         return reverse(
@@ -194,6 +207,22 @@ class SumUpView(OrganizerSettingsFormView):
             )
         return redirect(self.get_success_url())
 
+    @staticmethod
+    def _posted_reader(request):
+        """
+        The reader a form names, or ``None`` after saying it is not one.
+
+        The id goes into the path of a call made with the organizer's key, so
+        it is held to the shape of a SumUp reader id before anything else
+        happens. The page only ever posts ids SumUp itself listed; anything
+        else was typed by hand, and is not echoed back.
+        """
+        reader_id = (request.POST.get("reader_id") or "").strip()
+        if is_reader_id(reader_id):
+            return reader_id
+        messages.error(request, _("This is not a SumUp reader."))
+        return None
+
     def _free(self, request):
         """
         Take whatever is on a reader's screen off it.
@@ -209,7 +238,9 @@ class SumUpView(OrganizerSettingsFormView):
         that is what settling asks. Writing "failed" here on a guess is exactly
         the mistake this plugin has already made once.
         """
-        reader_id = (request.POST.get("reader_id") or "").strip()
+        reader_id = self._posted_reader(request)
+        if reader_id is None:
+            return redirect(self.get_success_url())
         account = SumUpAccount(request.organizer)
         try:
             account.terminate_checkout(reader_id)
@@ -230,7 +261,9 @@ class SumUpView(OrganizerSettingsFormView):
         return redirect(self.get_success_url())
 
     def _forget(self, request):
-        reader_id = (request.POST.get("reader_id") or "").strip()
+        reader_id = self._posted_reader(request)
+        if reader_id is None:
+            return redirect(self.get_success_url())
         account = SumUpAccount(request.organizer)
         try:
             account.forget_reader(reader_id)

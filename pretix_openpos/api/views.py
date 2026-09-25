@@ -1,7 +1,8 @@
 import logging
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone as dt_timezone
 from decimal import Decimal
 
+from django.core.cache import cache
 from django.db import IntegrityError, transaction
 from django.utils.timezone import make_aware, now
 from django.utils.translation import gettext_lazy as _
@@ -711,6 +712,71 @@ def hold_drawer_session(session, payment_type):
     return held
 
 
+#: How often, at most, a device's last contact is written down, in seconds.
+#:
+#: A till polls several endpoints a minute. One write a minute per device is
+#: plenty to say "last heard from at 21:14", and keeps a busy evening from
+#: turning every read the tills make into a write.
+CONTACT_EVERY = 60
+
+#: Cache key holding a device's contact throttle; see :func:`note_contact`.
+CONTACT_KEY = "pretix_openpos:seen:{}"
+
+
+def note_contact(request):
+    """
+    Write down that the device behind this request has just reached the server.
+
+    Called from the viewsets' ``initial``, once authentication, permissions and
+    throttling have let the request through, so it covers every Open POS
+    endpoint and nothing else writes it. At most once a minute per device:
+    ``cache.add`` succeeds for the first caller of the minute only, so the
+    database sees one short UPDATE a minute per tablet whatever the app is
+    polling. Anything that is not a device — a team token, somebody logged in
+    trying the API — is nobody's till and is not recorded.
+
+    It must never cost the till its request. The sale being rung up matters
+    more than knowing when the tablet was last heard from, so a cache that is
+    down, a database hiccup, or two first calls racing to create the row are
+    logged and forgotten. The write runs in a savepoint of its own for the
+    same reason: a failed statement inside a transaction the request already
+    holds would poison everything after it.
+
+    The row is created by id rather than through the device object: that way
+    the device keeps no cached copy of a row that might not have been
+    written, and whatever reads its role next reads it from the database —
+    the role and the reader are what decide which card payments this till may
+    take.
+    """
+    device = request.auth
+    if not isinstance(device, Device):
+        return
+    try:
+        if not cache.add(CONTACT_KEY.format(device.pk), True, CONTACT_EVERY):
+            return
+        moment = now()
+        with transaction.atomic():
+            if not PosDevice.objects.filter(device_id=device.pk).update(last_seen_at=moment):
+                PosDevice.objects.create(device_id=device.pk, last_seen_at=moment)
+    except Exception:
+        logger.warning(
+            "Open POS could not write down the last contact of device %s", device.pk,
+            exc_info=True,
+        )
+
+
+def utc_timestamp(moment):
+    """
+    ``2026-09-25T21:14:03.120Z``: the shape of JavaScript's ``toISOString()``.
+
+    Milliseconds rather than Python's microseconds, because that is the one
+    form every browser's ``Date`` is required to parse, Safari included.
+    """
+    return moment.astimezone(dt_timezone.utc).isoformat(timespec="milliseconds").replace(
+        "+00:00", "Z"
+    )
+
+
 class OpenPosOrganizerViewSet(viewsets.ViewSet):
     """
     Organizer-level endpoint, so a till can find out which events it may sell for.
@@ -734,6 +800,10 @@ class OpenPosOrganizerViewSet(viewsets.ViewSet):
     exactly the kind of event a till gets taken to.
     """
 
+    def initial(self, request, *args, **kwargs):
+        super().initial(request, *args, **kwargs)
+        note_contact(request)
+
     def list(self, request, **kwargs):
         results = []
         unavailable = []
@@ -756,6 +826,52 @@ class OpenPosOrganizerViewSet(viewsets.ViewSet):
         # running an older build — which offers every result it is given —
         # never offers one its endpoints would refuse.
         return Response({"results": results, "unavailable": unavailable})
+
+    @action(detail=False, methods=["post"], url_path="status", url_name="status")
+    def device_status(self, request, **kwargs):
+        """
+        A till's own account of the sales it holds and has not sent yet.
+
+        The server can count every sale that reached it and none that did not,
+        and the ones that did not are exactly what an organizer needs to know
+        about before counting a drawer: the amount the drawer should hold is
+        computed from the journal, and a cash sale still queued on a tablet is
+        not in it. So the app says so itself, and the back office shows it —
+        as the app's word, with the time it was given.
+
+        Organizer-level, like the device: a till holds sales for whichever
+        events it sold for, and the report is about the tablet, not about one
+        of them. A device only; nothing else has a queue.
+
+        Answers with the server's clock, so the app can tell whether its own
+        is wrong — the times it reports, and the ones it stamps its offline
+        sales with, are read on that clock.
+        """
+        device = request.auth
+        if not isinstance(device, Device):
+            raise PermissionDenied(_("Only a paired device can report its status."))
+        from .serializers import DeviceStatusSerializer
+
+        serializer = DeviceStatusSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+        reported = now()
+        PosDevice.objects.update_or_create(
+            device_id=device.pk,
+            defaults={
+                "status_reported_at": reported,
+                "pending_sales": data["pending_sales"],
+                # Nothing waiting has no oldest: a leftover time from an app
+                # that did not clear it would read as a sale lost since then.
+                "oldest_pending_at": data["oldest_pending_at"] if data["pending_sales"] else None,
+                "last_sync_at": data["last_sync_at"],
+                "app_version": data["version"],
+                # A report is a contact, whatever the once-a-minute throttle
+                # in note_contact decided.
+                "last_seen_at": reported,
+            },
+        )
+        return Response({"server_time": utc_timestamp(reported)})
 
 
 def reachable_events(request):
@@ -810,6 +926,7 @@ class OpenPosViewSet(viewsets.ViewSet):
 
     def initial(self, request, *args, **kwargs):
         super().initial(request, *args, **kwargs)
+        note_contact(request)
         # A device may well have access to events that do not run the POS.
         # Refusing here is what keeps a stale app from selling on an event the
         # organizer never opened a till for.
@@ -1815,7 +1932,28 @@ class OpenPosViewSet(viewsets.ViewSet):
         order code, no price. A device token already reaches the same data one
         scan at a time through pretix' own search endpoint; this only makes it
         usable when there is nothing to ask.
+
+        Only for a device that works at the door. Every ticket's secret is in
+        it, and a secret is a ticket: whoever holds the list can print their
+        way in. The bar till has no door to keep and scans nothing, yet it
+        used to fetch the whole list every five minutes and keep it in the
+        browser, where it stays after the tablet is unpaired. Refused with a
+        code rather than an empty list, so the app knows to throw away the
+        copy it already has — which an empty answer, or a plain 403 it would
+        read as a network problem, would not tell it.
         """
+        device = request.auth if isinstance(request.auth, Device) else None
+        if not PosDevice.for_device(device).serves_door:
+            return Response(
+                {
+                    "code": "door_role_required",
+                    "detail": str(_(
+                        "This device is set up as a till, not for the door: it is not given "
+                        "the guest list."
+                    )),
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
         clist = self._requested_checkin_list(request)
         if clist is None:
             raise ValidationError({"list": [_("Unknown check-in list.")]})
@@ -1938,29 +2076,21 @@ class OpenPosViewSet(viewsets.ViewSet):
             event=event, idempotency_key=data["idempotency_key"]
         ).first()
         if replay:
-            original = PosSale.objects.filter(event=event, seq=replay.cancels_seq).first()
-            body = self._cancellation_payload(replay, original, replayed=True)
-            # Asked again rather than remembered, and for a reason: the first
-            # attempt may have committed the cancellation and then lost the
-            # connection before it refunded the card. This is what finishes the
-            # job — and when it did run, it answers "already" rather than
-            # sending the money a second time.
-            body["card_refund"], refusal = (
-                self._refund_card(event, original) if original else ("none", "")
-            )
-            # And the books are brought in line with what just happened. A
-            # cancellation whose card refund was refused the first time leaves a
-            # failed refund on the order; succeeding on the retry has to clear
-            # it, or the order page keeps saying the customer was never paid
-            # back long after they were.
-            if original is not None and original.order_id:
-                self._settle_refund(
-                    request,
-                    original.order.refunds.order_by("-local_id").first(),
-                    body["card_refund"],
-                    refusal,
+            if device is None or replay.device_id != device.pk or replay.kind != PosSale.KIND_CANCELLATION:
+                # A key names one request, and this one names somebody else's
+                # entry: a sale, another till's cancellation, or one the back
+                # office wrote — whose keys are spelt out in backoffice.py, so
+                # anybody can type one. Answering it as a replay would hand
+                # this till that entry, and ask SumUp to finish a refund the
+                # back office may have chosen not to make.
+                raise ValidationError(
+                    {"idempotency_key": [_("This key already names another entry of the journal.")]}
                 )
-            return Response(body, status=status.HTTP_200_OK)
+            original = PosSale.objects.filter(event=event, seq=replay.cancels_seq).first()
+            return Response(
+                self._found_cancellation(request, replay, original, already_cancelled=False),
+                status=status.HTTP_200_OK,
+            )
 
         sale = PosSale.objects.filter(event=event, seq=data["seq"]).select_related("order").first()
         if sale is None:
@@ -1973,8 +2103,20 @@ class OpenPosViewSet(viewsets.ViewSet):
             )
         if sale.kind != PosSale.KIND_SALE:
             raise ValidationError({"seq": [_("This journal entry is not a sale.")]})
-        if PosSale.cancelled_seqs(event, [sale.seq]):
-            raise ValidationError({"seq": [_("This sale has already been cancelled.")]})
+        standing = self._standing_cancellation(event, sale)
+        if standing is not None:
+            # Cancelled already, under another key: a first attempt that went
+            # through and timed out on the way back, retried by a till that
+            # could no longer tell it was the same one — the history panel
+            # closed and reopened, the app reloaded. Refusing it with "already
+            # cancelled" was the whole answer once, and the till never showed
+            # the amount to hand back nor offered to ring the order up again.
+            # So the cancellation that stands is answered as a fresh one would
+            # be, with what it was, and how it came to be there.
+            return Response(
+                self._found_cancellation(request, standing, sale, already_cancelled=True),
+                status=status.HTTP_200_OK,
+            )
         if sale.order is None:
             raise ValidationError({"seq": [_("The order behind this sale no longer exists.")]})
 
@@ -2557,16 +2699,126 @@ class OpenPosViewSet(viewsets.ViewSet):
             ),
         }
 
-    def _cancellation_payload(self, cancellation, sale, replayed):
+    def _cancellation_payload(self, cancellation, sale, replayed, already_cancelled=False):
+        """
+        A cancellation as the till reads it, however it was reached.
+
+        One shape for all three ways, so the till has one screen for them, and
+        three flags to say which way it was:
+
+        ``replayed``
+            The cancellation was already in the journal before this request:
+            nothing was written this time.
+        ``already_cancelled``
+            …and it was not this request's own, retried under the same key:
+            the sale had been cancelled before, under another key.
+        ``by_back_office``
+            …by somebody in pretix' back office rather than by a till. The money
+            was dealt with there, if at all, and the till is told so it can
+            say so rather than offer to hand anything back.
+        """
         return {
             "cancellation": self._journal_payload(cancellation),
             # The lines of the sale that was reversed, so the till can put them
             # straight back in the basket for the operator to correct.
             "sale": self._journal_payload(sale, {sale.seq}) if sale else None,
             "replayed": replayed,
+            "already_cancelled": already_cancelled,
+            "by_back_office": cancellation.from_back_office,
             "credit_note": None,
             "refunded": False,
         }
+
+    @staticmethod
+    def _standing_cancellation(event, sale):
+        """
+        The cancellation of this sale that stands, or ``None``.
+
+        The latest one no reactivation has undone — the journal's own rule, as
+        :meth:`PosSale.cancelled_seqs` applies it: pretix' back office can
+        bring a cancelled order back, and the till cancel it again afterwards.
+        """
+        cancellations = list(
+            PosSale.objects.filter(
+                event=event, kind=PosSale.KIND_CANCELLATION, cancels_seq=sale.seq
+            ).order_by("-seq")
+        )
+        if not cancellations:
+            return None
+        undone = set(
+            PosSale.objects.filter(
+                event=event,
+                kind=PosSale.KIND_REACTIVATION,
+                cancels_seq__in=[c.seq for c in cancellations],
+            ).values_list("cancels_seq", flat=True)
+        )
+        return next((c for c in cancellations if c.seq not in undone), None)
+
+    def _found_cancellation(self, request, cancellation, sale, *, already_cancelled):
+        """
+        A cancellation already in the journal, answered as it was the first time.
+
+        With the credit note and what became of the money, which the till needs
+        to show the same screen: the amount to hand back, the credit to ring the
+        order up again with. And the job finished where it was left: a first
+        attempt may have committed the cancellation and lost the connection
+        before it refunded the card. Asked again rather than remembered — when
+        the refund did go through, the answer is "already", never a second one.
+
+        Except for a cancellation made in the back office. Whoever made it
+        decided about the money there, and pretix' own refund dialog is where
+        a card is given back from it: asking SumUp from here could refund a
+        card somebody chose not to. So that one only says where the card
+        stands, and asks nobody.
+        """
+        body = self._cancellation_payload(
+            cancellation, sale, replayed=True, already_cancelled=already_cancelled
+        )
+        order = sale.order if sale is not None else None
+        if order is not None:
+            body["credit_note"] = self._credit_note_number(order)
+            body["refunded"] = order.refunds.exists()
+        if sale is None:
+            body["card_refund"] = "none"
+            return body
+        if cancellation.from_back_office:
+            body["card_refund"] = self._card_refund_state(sale)
+            return body
+        body["card_refund"], refusal = self._refund_card(request.event, sale)
+        # And the books are brought in line with what just happened. A
+        # cancellation whose card refund was refused the first time leaves a
+        # failed refund on the order; succeeding on the retry has to clear it,
+        # or the order page keeps saying the customer was never paid back long
+        # after they were.
+        if order is not None:
+            self._settle_refund(
+                request, order.refunds.order_by("-local_id").first(), body["card_refund"], refusal
+            )
+        return body
+
+    @staticmethod
+    def _card_refund_state(sale):
+        """
+        What became of a sale's card money, from what is written down alone.
+
+        The words of :meth:`_refund_card`, for a cancellation this server did
+        not refund itself: ``none`` when no reader took the money, ``already``
+        once the reader payment was refunded, ``pending`` while a refund of it
+        waits for SumUp, ``failed`` when the last one was refused. A reader
+        payment nobody has tried to refund is ``none`` as well: nothing was
+        asked of SumUp, so there is nothing to report.
+        """
+        payment = PosTerminalPayment.settling(sale)
+        if payment is None:
+            return "none"
+        if payment.refunded:
+            return "already"
+        latest = sale.order.refunds.order_by("-local_id").first() if sale.order_id else None
+        if latest is not None and latest.state == OrderRefund.REFUND_STATE_TRANSIT:
+            return "pending"
+        if latest is not None and latest.state == OrderRefund.REFUND_STATE_FAILED:
+            return "failed"
+        return "none"
 
     def _record_refund(self, request, order, sale, reason, *, settle_now):
         """

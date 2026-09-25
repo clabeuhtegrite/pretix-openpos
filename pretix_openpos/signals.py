@@ -11,9 +11,11 @@ from pretix.helpers.periodic import minimum_interval
 
 from .arrivals import EventArrivalsView
 from .channels import PosSalesChannelType
+from .devices import DevicesView
 from .drawer_views import can_read_drawers
 from .payment import OpenPosCardProvider, OpenPosCashProvider
 from .security import OpenPosSecurityProfile
+from .sumup_views import SumUpView
 from .views import CategoriesView, SalesView
 
 
@@ -79,10 +81,20 @@ def openpos_sumup_reconcile(sender, **kwargs):
     minute and every hour. This asks SumUp at most every five minutes of it.
     See :mod:`.reconcile` for what is compared, and why nothing it does can
     send money twice; the Sales page says when it last did.
-    """
-    from .reconcile import reconcile_all
 
-    reconcile_all()
+    A failure is logged here, with the marker an alert looks for, and then
+    raised again, so that what surrounds the task still sees it for what it
+    is: ``minimum_interval`` records the run as an error rather than a
+    success, and pretix' ``runperiodic`` prints its own line for it — before
+    carrying on and exiting 0, which is why the marker is needed at all.
+    """
+    from .reconcile import describe, log_failure, reconcile_all
+
+    try:
+        reconcile_all()
+    except Exception as exc:
+        log_failure("reconcile", describe(exc), exc_info=True)
+        raise
 
 
 @receiver(nav_event, dispatch_uid="openpos_nav_event")
@@ -157,11 +169,13 @@ def openpos_nav_organizer(sender, request=None, **kwargs):
             "active": here and url.url_name == "arrivals",
         }
     ]
-    # Assigning a role is a device setting, so it is offered to whoever may
-    # change devices — the same gate the screen itself enforces. Anyone else
-    # simply does not see the entry, rather than finding a 403 behind it.
+    # Each entry asks the permission its screen's own view enforces, read off
+    # that view rather than copied: anyone else simply does not see the entry,
+    # rather than finding a 403 behind it. Assigning a role is a device
+    # setting; the card readers page holds the SumUp account, which is the
+    # organizer's settings.
     if request.user.has_organizer_permission(
-        request.organizer, "organizer.devices:write", request=request
+        request.organizer, DevicesView.permission, request=request
     ):
         nav.append(
             {
@@ -174,6 +188,9 @@ def openpos_nav_organizer(sender, request=None, **kwargs):
                 "active": here and url.url_name == "devices",
             }
         )
+    if request.user.has_organizer_permission(
+        request.organizer, SumUpView.permission, request=request
+    ):
         nav.append(
             {
                 "label": _("Card readers"),

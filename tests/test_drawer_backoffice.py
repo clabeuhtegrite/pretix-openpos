@@ -8,6 +8,7 @@ the permissions they would hold in production — a report readable only by an
 admin, or a form a treasurer could submit, are both bugs this suite exists to
 catch.
 """
+import csv
 from datetime import timedelta
 from decimal import Decimal
 from io import StringIO
@@ -418,6 +419,35 @@ def test_a_drawer_s_evenings_export_as_one_file(backoffice, evening):
     assert fields["difference"] == "-1.00"
     assert fields["card"] == "3.00"
     assert fields["note"] == "Manque un euro"
+
+
+@pytest.mark.django_db
+def test_names_and_notes_typed_on_a_till_do_not_run_as_formulas_in_the_export(
+    backoffice, till, device
+):
+    """
+    The same guard as the journal's export (see test_backoffice): the names
+    and the note are typed on a till, and a spreadsheet runs a cell starting
+    with ``=``, ``+``, ``-`` or ``@``. The figures stay numbers, the negative
+    difference included.
+    """
+    drawer = give_drawer(device)
+    open_it(till, cashier="=1+1")
+    count = count_it(till, "99.00").json()["entry"]
+    till.post("drawer/close", {"idempotency_key": "close-00001", "count_seq": count["seq"],
+                               "cashier": "@Léa", "reason": "-1 € manquant"})
+
+    body = b"".join(
+        backoffice.get(drawer_url(drawer) + "?export=csv").streaming_content
+    ).decode("utf-8")
+
+    header, row = csv.reader(StringIO(body.lstrip("﻿")), delimiter=";")
+    fields = dict(zip(header, row))
+    assert fields["opened_by"] == "'=1+1"
+    assert fields["closed_by"] == "'@Léa"
+    assert fields["note"] == "'-1 € manquant"
+    assert fields["difference"] == "-1.00"
+    assert fields["counted"] == "99.00"
 
 
 @pytest.mark.django_db
