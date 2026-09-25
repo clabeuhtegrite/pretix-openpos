@@ -304,6 +304,24 @@ describe("getting to the till", () => {
     expect(loadPairing()).not.toBeNull();
   });
 
+  it("says a refusal pretix did not write is not pretix refusing the till", async () => {
+    // A CDN's challenge page: no JSON, so the API layer can only call it by
+    // its status. "The server refused this till: HTTP 403" read like a
+    // revocation and sent people to the unpair button; the next retry is what
+    // usually gets past it.
+    const page = new ApiError(403, "HTTP 403", "<!DOCTYPE html><title>Just a moment…</title>");
+    apiMock.config.mockRejectedValue(page);
+    apiMock.catalog.mockRejectedValue(page);
+    show();
+
+    expect(await screen.findByText(t("error.denied", { status: 403 }))).toBeDefined();
+    expect(screen.queryByText(/HTTP 403 /)).toBeNull();
+    // Still a refusal: the way out stays next to it, and the pairing stays.
+    expect(screen.getByRole("button", { name: t("error.retry") })).toBeDefined();
+    expect(screen.getByRole("button", { name: t("settings.unpair") })).toBeDefined();
+    expect(loadPairing()).not.toBeNull();
+  });
+
   it("does not open on the cached catalogue when the till has been refused", async () => {
     // A revoked device selling from a stale catalogue would only be refused
     // again at the first sale, in front of a customer.

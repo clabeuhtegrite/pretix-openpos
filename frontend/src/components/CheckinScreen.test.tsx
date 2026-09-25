@@ -620,6 +620,20 @@ describe("when pretix cannot answer a scan", () => {
     expect(loadQueue()).toEqual([expect.objectContaining({ id: sent.nonce, secret: "alice" })]);
   });
 
+  it("answers a scan a proxy stopped waiting for from the list, and keeps it", async () => {
+    // A 408 never reached pretix whole: nothing was redeemed, and the queue
+    // settles it under the same nonce.
+    redeem.mockRejectedValue(new ApiError(408, "HTTP 408"));
+    show();
+
+    await scan("alice");
+
+    expect(screen.getByText(t("checkin.ok"))).toBeDefined();
+    expect(screen.getByText(t("checkin.offline"))).toBeDefined();
+    const [[, sent]] = redeem.mock.calls;
+    expect(loadQueue()).toEqual([expect.objectContaining({ id: sent.nonce, secret: "alice" })]);
+  });
+
   it("still stops on pretix refusing the device itself", async () => {
     // "No" rather than "not now": answering it from the guest list would hide
     // a phone that has been revoked.

@@ -16,7 +16,7 @@ import SaleScreen, { type Sellable } from "./components/SaleScreen";
 import SettingsPanel from "./components/SettingsPanel";
 import SyncPanel from "./components/SyncPanel";
 import { briefOf, cashBlockedBy, drawerIcon } from "./drawer";
-import { describeError } from "./errors";
+import { describeError, wordlessRefusal } from "./errors";
 import { t } from "./i18n";
 import { fromCents, toCents } from "./money";
 import { newNonce } from "./nonce";
@@ -406,8 +406,17 @@ export default function App() {
       // at the back office minting a new code. Nor does it fall back on the
       // cache below: a revoked device selling from a stale catalogue would
       // only be refused again at the first sale, in front of a customer.
+      // Worded by who said it: pretix explains its refusals, and "The server
+      // refused this till: HTTP 403" was all the screen could make of a page
+      // from a CDN — which says nothing of this till, and sent people to the
+      // unpair button for a refusal that the next retry gets past.
       if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
-        setLoadError({ text: t("error.refused", { detail: err.message }), refused: true });
+        setLoadError({
+          text: wordlessRefusal(err)
+            ? describeError(err)
+            : t("error.refused", { detail: err.message }),
+          refused: true,
+        });
         return false;
       }
 

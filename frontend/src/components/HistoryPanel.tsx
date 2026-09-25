@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, ApiError, isRetryable } from "../api";
+import { api } from "../api";
 import {
   cancellationKeys, clearCancellationResult, loadCancellationResult, saveCancellationResult,
 } from "../cancellation";
-import { describeError } from "../errors";
+import { describeError, unanswered } from "../errors";
 import { locale, t } from "../i18n";
 import { formatMoney, toCents } from "../money";
 import type { CancelResult, JournalLine, JournalPosition, Pairing } from "../types";
@@ -50,18 +50,6 @@ function lineLabel(position: JournalPosition): string {
   return position.variation_name
     ? `${position.item_name} · ${position.variation_name}`
     : position.item_name;
-}
-
-/**
- * Whether the server may never have heard of a request that failed.
- *
- * A transport failure or a fault: we cannot know, and the next press has to
- * carry the same key to find out. A 429 too — the server turned the request
- * away before looking at it, so nothing was spent. Anything else is the
- * server's answer, and final.
- */
-function unanswered(error: unknown): boolean {
-  return isRetryable(error) || (error instanceof ApiError && error.status === 429);
 }
 
 export default function HistoryPanel({ pairing, currency, cashier, onReuse, onClose }: Props) {
@@ -131,8 +119,9 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
       await load();
     } catch (e) {
       // A refusal is final, so the key has been spent; a network failure, a
-      // server fault or a 429 means we still do not know, and the next press
-      // has to carry the same key to find out.
+      // server fault, a 408 or a 429 means we still do not know, or that
+      // nothing was done — and the next press has to carry the same key to
+      // find out (errors.ts, unanswered).
       if (!unanswered(e)) keys.settle(line.seq);
       setError(describeError(e));
     } finally {

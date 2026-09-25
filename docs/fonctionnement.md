@@ -982,7 +982,8 @@ même annulation — et rendre son montant, son avoir et la correction — plut�
 que comme une seconde, que le serveur refuserait. La clé est frappée au premier
 appui, **gardée sur l'appareil** (par caisse et par événement) et oubliée
 seulement quand le serveur a répondu, oui ou non. Réseau coupé, erreur 5xx,
-« trop de demandes » (429) : elle reste, et l'appui suivant renvoie la même,
+proxy qui abandonne la requête (408), « trop de demandes » (429) : elle reste,
+et l'appui suivant renvoie la même,
 panneau refermé et app rechargée entre-temps compris. Elle vivait auparavant
 dans le panneau, qui l'emportait en se fermant.
 
@@ -1156,7 +1157,8 @@ aller vérifier.
 | Historique, annulation, effectif | Non — ils demandent le serveur, et l'écran le dit |
 
 Un scan tenté en ligne qui n'aboutit pas — réseau coupé pendant le scan, pretix
-qui redémarre, pas de réponse en 8 s — est répondu de la même façon, contre la
+qui redémarre, pas de réponse en 8 s, un proxy qui abandonne la requête (408),
+un serveur qui demande de ralentir (429) — est répondu de la même façon, contre la
 liste embarquée, et gardé sous le `nonce` avec lequel il était parti : si la
 requête était bien arrivée, pretix reconnaît le rejeu au lieu de compter la
 personne deux fois. Il finissait sur un message d'erreur au bout de 30 s, sans
@@ -2955,7 +2957,7 @@ l'installation — donc `npm i --no-save playwright` avant de s'en servir.
 | Aucun produit dans le catalogue | Canal **Open POS** non coché sur les produits, ou produits sans quota disponible |
 | Les photos de produits ne s'affichent pas | Le produit n'a pas d'image dans pretix — ou les médias sont servis depuis un autre domaine (S3, CDN) : la coquille annonce `img-src 'self' data:`, et une image d'ailleurs est bloquée. La case reste vide, la vente n'est pas gênée |
 | Un produit reste « Épuisé » alors qu'aucune limite n'est atteinte | Il n'est rattaché à aucun quota : pretix ne peut pas le vendre, et la caisse le montre comme épuisé plutôt que de le laisser au panier pour être refusé au paiement. Créer un quota (illimité au besoin) et l'y rattacher |
-| « Une erreur est survenue » avec un 401 ou 403 au lancement | Device révoqué ou supprimé, plugin désactivé sur l'événement — ou un CDN / pare-feu qui conteste la requête. *Réessayer* d'abord ; *Dépairer* seulement si le device a bien été révoqué |
+| « Une erreur est survenue » avec un 401 ou 403 au lancement | Device révoqué ou supprimé, plugin désactivé sur l'événement — ou un CDN / pare-feu qui conteste la requête. pretix motive toujours ses refus ; une réponse sans motif (une page, pas du JSON) s'affiche « Accès refusé par le serveur (HTTP 403) — peut-être un pare-feu devant pretix… », et c'est presque toujours le second cas. *Réessayer* d'abord ; *Dépairer* seulement si le device a bien été révoqué |
 | L'événement n'apparaît pas au moment de l'appairage ou dans *Réglages → Événement* | Plugin non activé sur l'événement (l'app le nomme alors, sous le champ), ou device sans accès à l'événement (*Appareils → cet appareil*). Que la boutique soit en ligne ne compte pas |
 | « Faites entrer » ne s'affiche jamais | Aucune liste de contrôle choisie dans *Open POS → Réglages*, ou aucun produit d'admission dans la vente |
 | Un billet refuse de se scanner | Code-barres non-QR : passer par la recherche par nom ou une douchette clavier |

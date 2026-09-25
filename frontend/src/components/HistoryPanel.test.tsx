@@ -352,6 +352,22 @@ describe("cancelling", () => {
     expect(second.idempotency_key).toBe(first.idempotency_key);
   });
 
+  it("carries the same key when a proxy stopped waiting for it", async () => {
+    // A 408 is a proxy giving up on the request before pretix saw it whole:
+    // nothing was cancelled, and the next press is still this cancellation.
+    cancelSale.mockRejectedValueOnce(new ApiError(408, "HTTP 408"));
+    const { user } = show();
+    await open(user);
+
+    await user.click(screen.getByRole("button", { name: t("history.cancel") }));
+    await screen.findByText(t("error.timeout"));
+    await user.click(screen.getByRole("button", { name: t("history.cancel") }));
+
+    await waitFor(() => expect(cancelSale).toHaveBeenCalledTimes(2));
+    const [[, first], [, second]] = cancelSale.mock.calls;
+    expect(second.idempotency_key).toBe(first.idempotency_key);
+  });
+
   it("carries the same key when the panel was closed in between", async () => {
     // The key used to live in the panel: closed by a tap beside it, by the
     // back gesture, by iOS reloading the app, it went with it — and the retry

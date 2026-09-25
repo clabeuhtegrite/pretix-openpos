@@ -124,6 +124,9 @@ export const MESSAGES = {
     "error.offline": "No connection to the server.",
     "error.server": "The server is having trouble (HTTP {status}). Try again in a moment.",
     "error.tooMany": "Too many requests at once. Wait a few seconds, then try again.",
+    "error.timeout": "The request took too long to reach the server (HTTP 408). Try again in a moment.",
+    "error.denied":
+      "Access refused by the server (HTTP {status}) — possibly a firewall in front of pretix rather than pretix itself. Try again in a moment; if it keeps refusing, tell the organizer.",
     "error.refused":
       "The server refused this till: {detail} Try again; if the till has been revoked, unpair it and pair it again with a new code.",
     "error.retry": "Retry",
@@ -541,6 +544,9 @@ export const MESSAGES = {
     "error.offline": "Pas de connexion au serveur.",
     "error.server": "Le serveur a un souci (HTTP {status}). Réessayez dans un instant.",
     "error.tooMany": "Trop de demandes à la fois. Attendez quelques secondes, puis réessayez.",
+    "error.timeout": "La demande a mis trop de temps à parvenir au serveur (HTTP 408). Réessayez dans un instant.",
+    "error.denied":
+      "Accès refusé par le serveur (HTTP {status}) — peut-être un pare-feu devant pretix plutôt que pretix lui-même. Réessayez dans un instant ; s’il refuse encore, prévenez l’organisateur.",
     "error.refused":
       "Le serveur a refusé cette caisse : {detail} Réessayez ; si la caisse a été révoquée, dépairez-la et appairez-la avec un nouveau code.",
     "error.retry": "Réessayer",

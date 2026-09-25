@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { api, ApiError, isRetryable } from "../api";
+import { api } from "../api";
 import { useConnectivity } from "../connectivity";
 import { addScans, doorCount, NO_SCANS, subtractScans, waitingScans } from "../doorCount";
-import { describeError } from "../errors";
+import { describeError, unanswered } from "../errors";
 import { locale, t, type MessageKey } from "../i18n";
 import { newNonce } from "../nonce";
 import {
@@ -139,14 +139,13 @@ function offlineLine(snapshot: OfflineSnapshot, count: number, now = new Date())
 /**
  * Whether a failed scan is worth answering from the guest list here.
  *
- * "Not now" rather than "no": the network died under the scan, pretix is
- * restarting, or it is asking this device to slow down (429) — none of which
- * processed the scan, and all of which a queued replay under the same nonce
- * settles. A refusal of the device itself is still an error.
+ * "Not now" rather than "no" (errors.ts, unanswered): the network died under
+ * the scan, pretix is restarting, a proxy stopped waiting for it (408), or it
+ * is asking this device to slow down (429) — none of which processed the scan,
+ * and all of which a queued replay under the same nonce settles. A refusal of
+ * the device itself is still an error.
  */
-function answerable(error: unknown): boolean {
-  return isRetryable(error) || (error instanceof ApiError && error.status === 429);
-}
+const answerable = unanswered;
 
 interface Props {
   pairing: Pairing;
