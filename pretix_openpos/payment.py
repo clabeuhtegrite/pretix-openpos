@@ -138,8 +138,7 @@ class OpenPosCardProvider(OpenPosPaymentProvider):
         return False
 
     def execute_refund(self, refund):
-        from .reconcile import mark_pending
-        from .sumup import ERR_CONFLICT, SumUpAccount, SumUpError
+        from .reconcile import refund_in_hand
 
         terminal = self._terminal_payment(refund.payment)
         if terminal is None:
@@ -156,15 +155,35 @@ class OpenPosCardProvider(OpenPosPaymentProvider):
                 _("Only the whole payment can be refunded to the card from here. Refund "
                   "a part of it from the SumUp app.")
             )
+        with refund_in_hand(terminal) as mine:
+            if not mine:
+                raise PaymentException(
+                    _("This card payment is being refunded through SumUp right now, from a "
+                      "till or by the periodic task. Look at the order again in a minute.")
+                )
+            # Read again now that nobody else is at it.
+            terminal.refresh_from_db()
+            if terminal.refunded is not None:
+                raise PaymentException(
+                    _("This card payment has already been refunded through SumUp.")
+                )
+            self._send_refund(refund, terminal)
+
+    def _send_refund(self, refund, terminal):
+        """:meth:`execute_refund`, for the request holding the reader payment."""
+        from .reconcile import mark_pending
+        from .sumup import ERR_CONFLICT, ERR_RATE_LIMITED, SumUpAccount, SumUpError
+
         try:
             # Without an amount, like the till: SumUp refunds its own
             # transaction in full, which is what the card was charged.
             SumUpAccount(self.event.organizer).refund(terminal.transaction_id)
         except SumUpError as exc:
-            if exc.code == ERR_CONFLICT:
+            if exc.code in (ERR_CONFLICT, ERR_RATE_LIMITED):
                 # "Not refundable in its current state": SumUp's answer to a
                 # refund asked for moments after the payment, which the same
-                # refund made a few minutes later does not get. Left in
+                # refund made a few minutes later does not get — or its 429,
+                # too many requests for the moment. Left in
                 # transit — pretix counts it as on its way, and offers no
                 # second refund of the payment meanwhile — and asked for again
                 # by the periodic task until SumUp takes it.

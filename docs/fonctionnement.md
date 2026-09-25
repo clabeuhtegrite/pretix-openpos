@@ -2110,6 +2110,41 @@ finit le remboursement, ou répond qu'il était déjà fait. Un remboursement ja
 demandé, lui, n'est repris par rien d'autre ; un remboursement que SumUp n'a pas
 encore accepté l'est, par le serveur.
 
+**Deux demandes à la fois** (0.25.0). La caisse renvoie son annulation pendant
+que la première attend encore SumUp : sous la même clé quand sa requête a
+expiré, sous une autre quand l'app a été rechargée entre-temps. Chaque essai
+trouvait la vente pas encore annulée et la carte pas encore remboursée : pretix
+annulait la commande une seconde fois (second avoir, second remboursement,
+seconde ligne au journal), et SumUp était redemandé, dont la réponse — plus rien
+à rembourser — s'écrivait comme un remboursement échoué par-dessus celui qui
+était passé. Désormais :
+
+- l'annulation prend la clé, puis le tiroir, puis la commande, qu'elle relit
+  sous verrou ; une annulation arrivée entre-temps est rendue telle quelle,
+  `replayed` sous la même clé, `already_cancelled` sous une autre ;
+- **un seul appel à la fois** demande à SumUp de rembourser un paiement
+  lecteur, qu'il vienne de la caisse, de la fenêtre de remboursement de pretix
+  ou de la tâche périodique : une marque dans le cache de pretix (Redis en
+  production) le réserve le temps de la réponse, une minute au plus si le
+  processus meurt ;
+- une seconde demande de la caisse attend la première trois secondes au plus
+  (le temps habituel d'une réponse de SumUp : un processus web qui attend ne
+  sert personne d'autre), puis fait ce qu'un nouvel essai ferait : un paiement
+  remboursé entre-temps répond `already`, sans rien redemander à SumUp. Si la
+  première tient encore le paiement, la réponse est un **503**
+  `refund_in_progress` : la caisse garde sa clé, et l'appui suivant donne la
+  réponse. Jamais `none`, qui ferait rendre le montant en espèces pendant que
+  la carte le reçoit ;
+- la fenêtre de remboursement de pretix refuse, avec un message, un
+  remboursement que la caisse ou la tâche est en train de demander ; la tâche
+  laisse un tel remboursement à son passage suivant ;
+- un remboursement marqué effectué pendant que SumUp était interrogé — par la
+  comparaison avec l'historique SumUp — n'est jamais réécrit en échoué, et la
+  caisse répond `already`.
+
+Comme les autres marques du plugin, celle-ci suppose le cache partagé : **sans
+Redis ni memcached**, chaque demande l'obtient, comme avant la 0.25.0.
+
 ### SumUp et pretix mis d'accord
 
 Deux trous, trouvés avec les premiers vrais remboursements, le 24 septembre
@@ -2127,6 +2162,17 @@ et l'heure de la dernière demande ; la page de commande aussi. Au bout de
 **trois jours** de « pas encore », ce n'est plus une question d'attente : le
 remboursement passe *échoué*, dans la liste des refusés, pour qu'une personne
 regarde. Même chose dans la fenêtre de remboursement de pretix et pour son API.
+
+**SumUp demande de ralentir** (0.25.0). Il répond `429` quand un compte
+l'interroge trop souvent : un soir chargé, plusieurs caisses qui attendent chacune
+une carte. Rien n'est fait de la demande, et ce n'est pas un refus : un
+remboursement reste en cours et redemandé, comme pour le 409, à la caisse, dans
+la fenêtre de remboursement et dans la tâche périodique ; une relève d'un
+paiement en cours le laisse en attente avec `"sumup_unreachable": true`, que la
+caisse traite comme un SumUp injoignable. Un paiement que SumUp a refusé de
+lancer n'est pas sur le lecteur : la caisse le dit, et on relance. Jusqu'à la
+0.24.2, un 429 était un refus : un paiement en cours marqué échoué, un
+remboursement abandonné.
 
 **Un paiement rendu depuis SumUp n'arrivait jamais dans pretix.** Remboursé ou
 annulé depuis le tableau de bord ou l'app SumUp, il restait payé dans pretix et

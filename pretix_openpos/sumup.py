@@ -116,6 +116,10 @@ ERR_REFUSED = "refused"
 #: their mind at the counter. Not a refusal to act on: the refund is asked for
 #: again later, by reconcile.py.
 ERR_CONFLICT = "conflict"
+#: SumUp's 429: too many requests from this account for the moment. Nothing was
+#: done, so it is "not now" — never a refusal of the payment or the refund the
+#: request was about.
+ERR_RATE_LIMITED = "rate_limited"
 #: Nothing was sent: the request named something that cannot be a SumUp id.
 ERR_INVALID = "invalid"
 
@@ -347,6 +351,19 @@ class SumUpAccount:
                 _("SumUp is having trouble. Try again in a moment."),
                 code=ERR_UNAVAILABLE,
                 retryable=True,
+                detail=detail,
+                reason=reason,
+            )
+        if response.status_code == 429:
+            # Not retryable in this module's sense either: SumUp did nothing
+            # with the request, so a payment it was asked to start is not on
+            # the reader. Its own code, for the callers to whom "not now"
+            # matters — a question about a payment that went unanswered is not
+            # news that the payment failed, and a refund put off is not one
+            # refused.
+            return SumUpError(
+                _("SumUp is receiving too many requests. Try again in a moment."),
+                code=ERR_RATE_LIMITED,
                 detail=detail,
                 reason=reason,
             )

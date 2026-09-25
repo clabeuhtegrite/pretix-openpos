@@ -12,8 +12,8 @@ import pytest
 import requests
 
 from pretix_openpos.sumup import (
-    ERR_BUSY, ERR_CONFLICT, ERR_NOT_FOUND, ERR_OFFLINE, ERR_REFUSED, ERR_UNAVAILABLE, SumUpAccount, SumUpError,
-    given_back, minor_units, still_running, succeeded,
+    ERR_BUSY, ERR_CONFLICT, ERR_NOT_FOUND, ERR_OFFLINE, ERR_RATE_LIMITED, ERR_REFUSED, ERR_UNAVAILABLE, SumUpAccount,
+    SumUpError, given_back, minor_units, still_running, succeeded,
 )
 
 from .sumup_stub import NOT_REFUNDABLE, FakeResponse, reader_busy, reader_offline
@@ -379,6 +379,10 @@ def test_not_yet_is_recognised_by_code_and_never_by_wording(account, sumup, monk
         # same answer — but a caller refunding waits and asks again later.
         (409, ERR_CONFLICT, False),
         (422, ERR_REFUSED, False),
+        # Too many requests: SumUp did nothing with this one. Not retryable
+        # either — a payment it was asked to start is not on the reader — but
+        # never a refusal of the payment or refund it was about.
+        (429, ERR_RATE_LIMITED, False),
         (503, ERR_UNAVAILABLE, True),
     ],
 )

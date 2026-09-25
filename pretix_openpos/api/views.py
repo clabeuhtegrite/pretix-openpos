@@ -38,8 +38,10 @@ from ..models import (
     reversed_positions,
 )
 from ..payment import CARD, CASH
-from ..reconcile import mark_pending
-from ..sumup import CHECKOUT_CLOSED, ERR_CONFLICT, POLL_TIMEOUT, SumUpAccount, SumUpError, still_running, succeeded
+from ..reconcile import mark_pending, refund_in_hand, wait_for_refund
+from ..sumup import (
+    CHECKOUT_CLOSED, ERR_CONFLICT, ERR_RATE_LIMITED, POLL_TIMEOUT, SumUpAccount, SumUpError, still_running, succeeded,
+)
 from ..webhook import webhook_url
 from .throttling import DeviceThrottleMixin
 
@@ -696,10 +698,13 @@ def settle_terminal_payment(payment, account):
     try:
         transaction_data = account.transaction(payment.client_transaction_id)
     except SumUpError as exc:
-        if exc.retryable:
+        if exc.retryable or exc.code == ERR_RATE_LIMITED:
             # Nothing is written. "We could not ask" is not "it failed", and
             # writing the latter would lose a payment that went through while
             # a cable was out — money taken, no sale, and nothing to point at.
+            # SumUp asking for a moment's peace (its 429) is the same news:
+            # the question went unanswered, and a busy evening with several
+            # tills waiting on cards is exactly when it says so.
             payment.sumup_unreachable = True
             return payment
         payment.status = PosTerminalPayment.STATUS_FAILED
@@ -1062,6 +1067,32 @@ class SaleInProgress(APIException):
         # as "not now" rather than "no": it retries a 5xx under the same key,
         # and lists a 4xx among the refusals.
         self.wait = 2
+
+
+class RefundInProgress(APIException):
+    """Another request is asking SumUp to refund this very card payment."""
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+
+    def __init__(self):
+        super().__init__(
+            {
+                "detail": _("The card refund of this sale is still being asked of SumUp. "
+                            "Try again in a moment."),
+                "code": "refund_in_progress",
+            }
+        )
+        # A 5xx, like SaleInProgress: the till keeps the cancellation's key and
+        # the next press finds out how the refund went.
+        self.wait = 5
+
+
+class _CancelledMeanwhile(Exception):
+    """This sale's cancellation committed while another attempt was on its way to it."""
+
+    def __init__(self, standing):
+        super().__init__(standing.seq)
+        self.standing = standing
 
 
 def recorded_sale(event, idempotency_key):
@@ -2598,26 +2629,44 @@ class OpenPosViewSet(DeviceThrottleMixin, viewsets.ViewSet):
 
         # A retry of a cancellation we already committed hands back the same
         # answer rather than trying to cancel an order that is already gone.
-        replay = PosSale.objects.filter(
-            event=event, idempotency_key=data["idempotency_key"]
-        ).first()
+        replay = recorded_sale(event, data["idempotency_key"])
         if replay:
-            if device is None or replay.device_id != device.pk or replay.kind != PosSale.KIND_CANCELLATION:
-                # A key names one request, and this one names somebody else's
-                # entry: a sale, another till's cancellation, or one the back
-                # office wrote — whose keys are spelt out in backoffice.py, so
-                # anybody can type one. Answering it as a replay would hand
-                # this till that entry, and ask SumUp to finish a refund the
-                # back office may have chosen not to make.
-                raise ValidationError(
-                    {"idempotency_key": [_("This key already names another entry of the journal.")]}
-                )
-            original = PosSale.objects.filter(event=event, seq=replay.cancels_seq).first()
-            return Response(
-                self._found_cancellation(request, replay, original, already_cancelled=False),
-                status=status.HTTP_200_OK,
-            )
+            return self._replayed_cancellation(request, device, replay)
 
+        try:
+            return self._cancel(request, device, data)
+        except PosSale.AlreadyRecorded:
+            # Another attempt at this very cancellation committed while this
+            # one was on its way — a till retrying while its first attempt was
+            # still being written — and everything this one wrote went with
+            # the exception: pretix' own cancellation and the refund included.
+            # What is left is the answer a retry a second later would get.
+            replay = recorded_sale(event, data["idempotency_key"])
+            if replay is None:
+                raise
+            return self._replayed_cancellation(request, device, replay)
+
+    def _replayed_cancellation(self, request, device, replay):
+        """The answer to a cancellation key already in the journal."""
+        if device is None or replay.device_id != device.pk or replay.kind != PosSale.KIND_CANCELLATION:
+            # A key names one request, and this one names somebody else's
+            # entry: a sale, another till's cancellation, or one the back
+            # office wrote — whose keys are spelt out in backoffice.py, so
+            # anybody can type one. Answering it as a replay would hand
+            # this till that entry, and ask SumUp to finish a refund the
+            # back office may have chosen not to make.
+            raise ValidationError(
+                {"idempotency_key": [_("This key already names another entry of the journal.")]}
+            )
+        original = PosSale.objects.filter(event=request.event, seq=replay.cancels_seq).first()
+        return Response(
+            self._found_cancellation(request, replay, original, already_cancelled=False),
+            status=status.HTTP_200_OK,
+        )
+
+    def _cancel(self, request, device, data):
+        """:meth:`cancel`, for a key nobody has recorded yet."""
+        event = request.event
         sale = PosSale.objects.filter(event=event, seq=data["seq"]).select_related("order").first()
         if sale is None:
             raise ValidationError({"seq": [_("No such entry in this event's journal.")]})
@@ -2661,93 +2710,19 @@ class OpenPosViewSet(DeviceThrottleMixin, viewsets.ViewSet):
             event, PosDevice.for_device(device).drawer, sale.payment_type
         )
 
-        with transaction.atomic():
-            drawer_session = hold_drawer_session(drawer_session, sale.payment_type)
-            try:
-                # pretix' own cancellation, so the credit note, the invalidated
-                # ticket secrets and the log entry are the ones the back office
-                # would have produced. send_mail is off: at a till the customer
-                # is standing right there, and the address is usually the
-                # organiser's own placeholder for an on-site sale.
-                #
-                # Said to be the till's own doing, because pretix tells the
-                # plugin about every cancellation and one made anywhere else
-                # is written to the journal from there. This one is written
-                # below, with the till and the cashier it belongs to.
-                with till_cancelling():
-                    cancel_order(
-                        order,
-                        device=device,
-                        send_mail=False,
-                        cancel_invoice=True,
-                        email_comment=data["reason"] or None,
-                    )
-            except OrderError as e:
-                raise ValidationError({"seq": [str(e)]})
-
-            order.refresh_from_db()
-            refund = self._record_refund(
-                request, order, sale, data["reason"],
-                # A reader is about to be asked, after this transaction, and it
-                # can refuse. Nothing may claim the money is back until it has
-                # answered.
-                settle_now=PosTerminalPayment.settling(sale) is None,
-            )
-
-            cancellation = PosSale.record(
-                event=event,
-                order=order,
-                device=device,
-                cashier=data["cashier"],
-                payment_type=sale.payment_type,
-                # Negative, so the takings stay the plain sum of the column and
-                # the drawer reconciles against the journal without arithmetic.
-                total=-sale.total,
-                positions=reversed_positions(sale.positions),
-                idempotency_key=data["idempotency_key"],
-                testmode=sale.testmode,
-                kind=PosSale.KIND_CANCELLATION,
-                cancels_seq=sale.seq,
-                reason=data["reason"],
-                drawer_session=drawer_session,
-            )
-
-            # The deposit handed back with this sale is a journal row of its
-            # own, and reversing only the sale leaves the takings short by its
-            # amount for the rest of the evening. The customer put the *net* on
-            # the counter — the cups came off the bill — so the net is what
-            # goes back, and both halves have to be reversed for the column to
-            # return to where it started. Found by the key the sale's own key
-            # derives, which is how the two were written together in the first
-            # place.
-            deposit_refund = PosSale.objects.filter(
-                event=event,
-                idempotency_key=refund_key(sale.idempotency_key),
-                kind=PosSale.KIND_DEPOSIT_REFUND,
-            ).first()
-            if deposit_refund is not None and not PosSale.cancelled_seqs(
-                event, [deposit_refund.seq]
-            ):
-                PosSale.record(
-                    event=event,
-                    order=None,
-                    device=device,
-                    cashier=data["cashier"],
-                    payment_type=deposit_refund.payment_type,
-                    # Its total is negative — money that left the drawer — so
-                    # negating it puts the same amount back.
-                    total=-deposit_refund.total,
-                    positions=reversed_positions(deposit_refund.positions),
-                    # Derived from the cancellation's key exactly as the payout
-                    # row derived from the sale's, so a retried cancellation
-                    # recognises this half too instead of writing it twice.
-                    idempotency_key=refund_key(data["idempotency_key"]),
-                    testmode=deposit_refund.testmode,
-                    kind=PosSale.KIND_CANCELLATION,
-                    cancels_seq=deposit_refund.seq,
-                    reason=data["reason"],
-                    drawer_session=drawer_session,
+        try:
+            with transaction.atomic():
+                drawer_session, order = self._hold_for_cancel(
+                    event, data["idempotency_key"], sale, drawer_session
                 )
+                cancellation, refund = self._write_cancellation(
+                    request, device, data, sale, order, drawer_session
+                )
+        except _CancelledMeanwhile as meanwhile:
+            return Response(
+                self._found_cancellation(request, meanwhile.standing, sale, already_cancelled=True),
+                status=status.HTTP_200_OK,
+            )
 
         body = self._cancellation_payload(cancellation, sale, replayed=False)
         body["credit_note"] = self._credit_note_number(order)
@@ -2758,22 +2733,148 @@ class OpenPosViewSet(DeviceThrottleMixin, viewsets.ViewSet):
         # and rolling the cancellation back afterwards could not un-send it.
         # So the cancellation stands first, and the card is a separate step
         # whose outcome is reported rather than assumed.
-        body["card_refund"], refusal = self._refund_card(event, sale)
-        self._settle_refund(request, refund, body["card_refund"], refusal)
+        body["card_refund"] = self._give_card_back(request, sale, refund)
         return Response(body, status=status.HTTP_201_CREATED)
 
-    def _refund_card(self, event, sale):
+    def _hold_for_cancel(self, event, idempotency_key, sale, drawer_session):
         """
-        Give a card sale's money back through SumUp, when there is a card to
-        give it back to.
+        Everything a cancellation must hold before it writes, in that order.
+
+        The key first: another attempt at this very cancellation — the till
+        retrying while the first one is still being written — is queued behind
+        and then found, as :func:`hold_idempotency_key` does for a sale. Then
+        the drawer the cash comes out of. Then the order, locked and read
+        again: pretix' ``cancel_order`` trusts the object it is handed rather
+        than reading it afresh, so a cancellation of this sale that committed
+        meanwhile under another key — the app reloaded, the history asked a
+        second time — would otherwise be made a second time, credit note,
+        refund and card and all. That one is answered instead, as it stands.
+
+        Returns the drawer session and the order, both held.
+        """
+        earlier = hold_idempotency_key(event, idempotency_key)
+        if earlier is not None:
+            raise PosSale.AlreadyRecorded(earlier)
+        drawer_session = hold_drawer_session(drawer_session, sale.payment_type)
+        order = Order.objects.select_for_update(of=OF_SELF).get(pk=sale.order_id)
+        standing = self._standing_cancellation(event, sale)
+        if standing is not None:
+            raise _CancelledMeanwhile(standing)
+        if not order.cancel_allowed():
+            raise ValidationError(
+                {"seq": [_("pretix will not let this order be cancelled: {status}.").format(
+                    status=order.get_status_display()
+                )]}
+            )
+        return drawer_session, order
+
+    def _write_cancellation(self, request, device, data, sale, order, drawer_session):
+        """The cancellation's writes, inside the transaction that holds what they need."""
+        event = request.event
+        try:
+            # pretix' own cancellation, so the credit note, the invalidated
+            # ticket secrets and the log entry are the ones the back office
+            # would have produced. send_mail is off: at a till the customer
+            # is standing right there, and the address is usually the
+            # organiser's own placeholder for an on-site sale.
+            #
+            # Said to be the till's own doing, because pretix tells the
+            # plugin about every cancellation and one made anywhere else
+            # is written to the journal from there. This one is written
+            # below, with the till and the cashier it belongs to.
+            with till_cancelling():
+                cancel_order(
+                    order,
+                    device=device,
+                    send_mail=False,
+                    cancel_invoice=True,
+                    email_comment=data["reason"] or None,
+                )
+        except OrderError as e:
+            raise ValidationError({"seq": [str(e)]})
+
+        order.refresh_from_db()
+        refund = self._record_refund(
+            request, order, sale, data["reason"],
+            # A reader is about to be asked, after this transaction, and it
+            # can refuse. Nothing may claim the money is back until it has
+            # answered.
+            settle_now=PosTerminalPayment.settling(sale) is None,
+        )
+
+        cancellation = PosSale.record(
+            event=event,
+            order=order,
+            device=device,
+            cashier=data["cashier"],
+            payment_type=sale.payment_type,
+            # Negative, so the takings stay the plain sum of the column and
+            # the drawer reconciles against the journal without arithmetic.
+            total=-sale.total,
+            positions=reversed_positions(sale.positions),
+            idempotency_key=data["idempotency_key"],
+            testmode=sale.testmode,
+            kind=PosSale.KIND_CANCELLATION,
+            cancels_seq=sale.seq,
+            reason=data["reason"],
+            drawer_session=drawer_session,
+            # Another attempt's row under this key is not this one's to hand
+            # back: it means that attempt committed first, and everything
+            # written here has to go — see cancel().
+            existing_ok=False,
+        )
+
+        # The deposit handed back with this sale is a journal row of its
+        # own, and reversing only the sale leaves the takings short by its
+        # amount for the rest of the evening. The customer put the *net* on
+        # the counter — the cups came off the bill — so the net is what
+        # goes back, and both halves have to be reversed for the column to
+        # return to where it started. Found by the key the sale's own key
+        # derives, which is how the two were written together in the first
+        # place.
+        deposit_refund = PosSale.objects.filter(
+            event=event,
+            idempotency_key=refund_key(sale.idempotency_key),
+            kind=PosSale.KIND_DEPOSIT_REFUND,
+        ).first()
+        if deposit_refund is not None and not PosSale.cancelled_seqs(
+            event, [deposit_refund.seq]
+        ):
+            PosSale.record(
+                event=event,
+                order=None,
+                device=device,
+                cashier=data["cashier"],
+                payment_type=deposit_refund.payment_type,
+                # Its total is negative — money that left the drawer — so
+                # negating it puts the same amount back.
+                total=-deposit_refund.total,
+                positions=reversed_positions(deposit_refund.positions),
+                # Derived from the cancellation's key exactly as the payout
+                # row derived from the sale's, so a retried cancellation
+                # recognises this half too instead of writing it twice.
+                idempotency_key=refund_key(data["idempotency_key"]),
+                testmode=deposit_refund.testmode,
+                kind=PosSale.KIND_CANCELLATION,
+                cancels_seq=deposit_refund.seq,
+                reason=data["reason"],
+                drawer_session=drawer_session,
+                existing_ok=False,
+            )
+        return cancellation, refund
+
+    def _refund_card(self, event, sale, payment):
+        """
+        Give a card sale's money back through SumUp: ``payment``, the reader
+        payment that took it.
 
         Returns what the till should tell the operator, and, when SumUp said
-        no, what it said — for the order page, never for the till's screen:
+        no, what it said — for the order page, never for the till's screen.
+        ``none`` is the word for a sale no reader took, which never gets here:
+        a cash sale, or a card taken on somebody's phone rather than on a reader
+        this server drove. The operator refunds those the way they took them.
+        The others:
 
-        ``none``
-            Nothing to do here — a cash sale, or a card taken on somebody's
-            phone rather than on a reader this server drove. The operator
-            refunds those the way they took them.
         ``done``
             SumUp accepted the refund.
         ``already``
@@ -2788,9 +2889,9 @@ class OpenPosViewSet(DeviceThrottleMixin, viewsets.ViewSet):
             refund it from the SumUp app, and has to be told so plainly rather
             than shown a cancellation that looks complete.
         """
-        payment = PosTerminalPayment.settling(sale)
-        if payment is None:
-            return "none", ""
+        # Read again: whoever held the payment before this request may have
+        # been given the money back meanwhile.
+        payment.refresh_from_db()
         if payment.refunded:
             return "already", ""
 
@@ -2802,7 +2903,9 @@ class OpenPosViewSet(DeviceThrottleMixin, viewsets.ViewSet):
             # right one and the only one that cannot be got wrong here.
             SumUpAccount(event.organizer).refund(payment.transaction_id)
         except SumUpError as exc:
-            if exc.code == ERR_CONFLICT:
+            # A 409 is SumUp's "not yet"; a 429, "not now". Neither refused the
+            # refund, which the server asks for again on its own.
+            if exc.code in (ERR_CONFLICT, ERR_RATE_LIMITED):
                 logger.info(
                     "POS card refund for journal #%s left waiting for SumUp: %s",
                     sale.seq, exc.detail,
@@ -3310,17 +3413,62 @@ class OpenPosViewSet(DeviceThrottleMixin, viewsets.ViewSet):
         if cancellation.from_back_office:
             body["card_refund"] = self._card_refund_state(sale)
             return body
-        body["card_refund"], refusal = self._refund_card(request.event, sale)
         # And the books are brought in line with what just happened. A
         # cancellation whose card refund was refused the first time leaves a
         # failed refund on the order; succeeding on the retry has to clear it,
         # or the order page keeps saying the customer was never paid back long
         # after they were.
-        if order is not None:
-            self._settle_refund(
-                request, order.refunds.order_by("-local_id").first(), body["card_refund"], refusal
-            )
+        body["card_refund"] = self._give_card_back(
+            request, sale,
+            lambda: order.refunds.order_by("-local_id").first() if order is not None else None,
+        )
         return body
+
+    def _give_card_back(self, request, sale, refund):
+        """
+        Refund a card sale through SumUp and write down what SumUp did, as the
+        one request doing so for its reader payment (see ``refund_in_hand``).
+
+        ``refund`` is the ``OrderRefund`` the answer goes on, or a callable that
+        finds it once this request holds the payment. Another request already
+        holding it — the first attempt at this very cancellation, still waiting
+        on SumUp while its till asked again — is waited for, briefly, and then
+        this one does what a retry a second later would: a card given back
+        meanwhile is "already", and SumUp is not asked a second time. Asked at
+        the same moment, it could only refuse — and that refusal was written
+        down over the refund that went through.
+
+        Returns the word for the till, as :meth:`_refund_card` does.
+        """
+        payment = PosTerminalPayment.settling(sale)
+        if payment is None:
+            return "none"
+        for attempt in range(2):
+            with refund_in_hand(payment) as mine:
+                if mine:
+                    return self._refund_and_settle(request, sale, payment, refund)
+            if attempt == 0 and not wait_for_refund(payment):
+                break
+        # Still in hand after the few seconds SumUp usually takes, or taken
+        # again the moment it was let go. Never "none", which has the till
+        # count the amount out of the drawer while the card may be getting it
+        # back: not known yet, so asked again — under the same key, which the
+        # till keeps on a 5xx.
+        raise RefundInProgress()
+
+    def _refund_and_settle(self, request, sale, payment, refund):
+        """:meth:`_give_card_back`, for the request holding the reader payment."""
+        outcome, refusal = self._refund_card(request.event, sale, payment)
+        found = self._settle_refund(
+            request, refund() if callable(refund) else refund, outcome, refusal
+        )
+        if found == OrderRefund.REFUND_STATE_DONE and outcome in ("pending", "failed"):
+            # Done while SumUp was being asked — by the periodic comparison,
+            # which reads SumUp's own history — so what SumUp told this
+            # request was about a refund already made. The till hands nothing
+            # back, and says the card has it.
+            return "already"
+        return outcome
 
     @staticmethod
     def _card_refund_state(sale):
@@ -3415,8 +3563,24 @@ class OpenPosViewSet(DeviceThrottleMixin, viewsets.ViewSet):
         say the money was *not* returned. Without this the operator is the only
         record that it was not, and they are at a bar. SumUp's "not yet" leaves
         it in transit, and the server asks again until SumUp takes it.
+
+        Returns the state the refund stood in when read again here, before
+        anything was written; ``None`` when there is no refund.
         """
-        if refund is None or refund.state == OrderRefund.REFUND_STATE_DONE:
+        if refund is None:
+            return None
+        with transaction.atomic():
+            # Read again, and held: the refund in hand was read before SumUp was
+            # asked, and the periodic task or another request may have written
+            # it since. "Done" is never written back over.
+            refund = OrderRefund.objects.select_for_update(of=OF_SELF).get(pk=refund.pk)
+            found = refund.state
+            self._settle_refund_held(request, refund, outcome, refusal)
+        return found
+
+    def _settle_refund_held(self, request, refund, outcome, refusal):
+        """:meth:`_settle_refund`, on the refund as it stands now, held."""
+        if refund.state == OrderRefund.REFUND_STATE_DONE:
             return
         if outcome == "pending":
             mark_pending(

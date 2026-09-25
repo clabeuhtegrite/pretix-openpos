@@ -37,9 +37,12 @@ second time.
 """
 import json
 import logging
+import time
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from decimal import Decimal
 
+from django.core.cache import cache
 from django.db import transaction
 from django.utils.timezone import now
 from django.utils.translation import gettext_lazy as _
@@ -50,7 +53,7 @@ from pretix.base.models.orders import OrderPayment, OrderRefund
 
 from .models import PosSale, PosTerminalPayment
 from .payment import CARD
-from .sumup import ERR_CONFLICT, SumUpAccount, SumUpError, given_back
+from .sumup import ERR_CONFLICT, ERR_RATE_LIMITED, SumUpAccount, SumUpError, given_back
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +108,64 @@ def log_failure(step, detail, *, exc_info=False):
 def describe(exc):
     """An exception on one line, for :func:`log_failure`."""
     return f"{type(exc).__name__}: {exc}"
+
+
+#: How long a request refunding a reader payment keeps it from the others, at
+#: most: longer than the two questions the periodic task asks SumUp while it
+#: holds one may take to be answered (``sumup.TIMEOUT`` each), so that only a
+#: worker that died holding it ever reaches the end of it.
+REFUND_HELD_FOR = 60
+
+#: How long a till's request that found the payment being refunded waits for
+#: the answer before saying "not yet": long enough for SumUp's usual second or
+#: two, and no longer — a web worker waiting here serves nobody else, and the
+#: server has two of them.
+REFUND_WAIT = 3
+
+#: Cache key marking a reader payment whose refund SumUp is being asked for.
+REFUNDING_KEY = "pretix_openpos:refunding:{}"
+
+
+@contextmanager
+def refund_in_hand(terminal):
+    """
+    Whether this is the one request asking SumUp to refund ``terminal`` now.
+
+    SumUp refunds a transaction each time it is asked, up to its amount, and
+    four things here ask: a till's cancellation; that same cancellation retried
+    by a till whose first answer was lost while SumUp was still being asked;
+    pretix' refund dialog; and the periodic task, for a refund SumUp put off.
+    Two of them at once both found the payment not refunded yet, both asked,
+    and the answer SumUp gave the second — no, it is refunded already — was
+    written down as a failed refund over the one that went through.
+
+    So one at a time for each reader payment: a mark in the shared cache, taken
+    with ``cache.add`` and let go once SumUp's answer is written down. Yields
+    whether it was taken; a request that did not get it leaves SumUp alone. Like
+    the other marks of its kind here, it needs the cache the workers share —
+    pretix' Redis; on a cache that keeps nothing, every request gets it.
+    """
+    key = REFUNDING_KEY.format(terminal.pk)
+    mine = cache.add(key, True, timeout=REFUND_HELD_FOR)
+    try:
+        yield mine
+    finally:
+        if mine:
+            cache.delete(key)
+
+
+def wait_for_refund(terminal):
+    """
+    Until whoever is refunding ``terminal`` has let go of it, for ``REFUND_WAIT``
+    seconds at most. Whether they did.
+    """
+    key = REFUNDING_KEY.format(terminal.pk)
+    deadline = time.monotonic() + REFUND_WAIT
+    while cache.get(key):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.25)
+    return True
 
 
 def mark_pending(refund, answer, *, transaction_id="", user=None, auth=None):
@@ -550,6 +611,19 @@ def _ask_again(refund, account, done):
         # Nothing to name to SumUp. It cannot happen to a refund this module
         # left waiting, which named a transaction to be left waiting at all.
         return
+    with refund_in_hand(terminal) as mine:
+        if not mine:
+            # A till or pretix' refund dialog is asking SumUp for this very
+            # refund right now. The next pass finds out how that went.
+            return
+        # Read again now that nobody else is at it: whoever just was may have
+        # been given the money back.
+        terminal.refresh_from_db()
+        _ask_again_holding(refund, terminal, account, done)
+
+
+def _ask_again_holding(refund, terminal, account, done):
+    """:func:`_ask_again`, for the request holding the payment."""
     if terminal.refunded is not None:
         # Given back already, and written on the reader payment by whatever
         # sent it: this refund is only what pretix is still waiting on.
@@ -580,7 +654,7 @@ def _ask_again(refund, account, done):
         account.refund(terminal.transaction_id)
     except SumUpError as exc:
         answer = exc.reason or str(exc.message)
-        if exc.code == ERR_CONFLICT or exc.retryable:
+        if exc.code in (ERR_CONFLICT, ERR_RATE_LIMITED) or exc.retryable:
             _still_waiting(refund, answer, done)
         else:
             _give_up(refund, answer, done)
