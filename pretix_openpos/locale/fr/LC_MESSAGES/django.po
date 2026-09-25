@@ -18,7 +18,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: pretix-openpos\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-09-25 13:33+0000\n"
+"POT-Creation-Date: 2026-09-25 13:45+0000\n"
 "PO-Revision-Date: 2026-09-22 09:51+0000\n"
 "Last-Translator: clabeuhtegrite\n"
 "Language-Team: French\n"
@@ -1349,11 +1349,11 @@ msgstr ""
 msgid "Point of sale for pretix"
 msgstr "Caisse pour pretix"
 
-#: reconcile.py:586
+#: reconcile.py:588
 msgid "The card payment was cancelled in SumUp."
 msgstr "Le paiement carte a été annulé dans SumUp."
 
-#: reconcile.py:588
+#: reconcile.py:590
 msgid "The card payment was refunded in SumUp."
 msgstr "Le paiement carte a été remboursé dans SumUp."
 

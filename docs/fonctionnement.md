@@ -1,6 +1,6 @@
 # Fonctionnement de pretix-openpos
 
-Documentation de fonctionnement du plugin, version 0.24.2. Elle couvre trois
+Documentation de fonctionnement du plugin, version 0.25.0. Elle couvre trois
 choses, dans cet ordre : ce que le plugin ajoute à pretix, comment le mettre en
 service, et ce qui se passe exactement quand un bénévole encaisse.
 
@@ -473,7 +473,7 @@ En Docker/Kubernetes, [`deploy/Dockerfile`](../deploy/Dockerfile) intègre le pl
 à l'image officielle :
 
 ```bash
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.24.2 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.25.0 .
 ```
 
 Le bundle PWA est généré, pas versionné : l'image le construit elle-même depuis
@@ -3524,7 +3524,7 @@ d'attente appartient à la tablette, pas à une soirée.
   "pending_sales": 3,
   "oldest_pending_at": "2026-08-16T19:14:05.000Z",
   "last_sync_at": "2026-08-16T19:02:40.000Z",
-  "version": "0.24.2"
+  "version": "0.25.0"
 }
 ```
 
