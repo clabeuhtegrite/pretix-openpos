@@ -183,3 +183,77 @@ def test_a_ticket_on_another_list_is_not_in_this_one(till, event, ticket, beer, 
 
     assert till.get("offline", list=other.pk).json()["tickets"] == []
     assert len(till.get("offline", list=checkin_list.pk).json()["tickets"]) == 1
+
+
+# -- only for a device that keeps a door --------------------------------------
+
+
+def make(device, role):
+    from pretix_openpos.models import PosDevice
+
+    PosDevice.objects.update_or_create(device=device, defaults={"role": role})
+
+
+@pytest.mark.django_db
+def test_the_bar_till_is_not_given_the_guest_list(till, device, event, ticket, checkin_list):
+    """
+    Every ticket's secret is in the snapshot, and a secret is a ticket. The bar
+    till has no door to keep, so it has no business carrying them — and a copy
+    it downloaded stays in the browser after the tablet is unpaired.
+    """
+    from pretix_openpos.models import PosDevice
+
+    admit(event, ticket, ["Alice Martin"])
+    make(device, PosDevice.ROLE_TILL)
+
+    response = till.get("offline", list=checkin_list.pk)
+
+    assert response.status_code == 403
+    body = response.json()
+    # The code is the contract: on exactly this one, the app throws away the
+    # copy it already holds.
+    assert body["code"] == "door_role_required"
+    assert body["detail"]
+    assert "tickets" not in body
+    assert "Alice" not in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_the_refusal_is_worded_in_the_till_s_language(till, device, checkin_list):
+    from pretix_openpos.models import PosDevice
+
+    make(device, PosDevice.ROLE_TILL)
+
+    response = till.client.get(
+        till.url("offline", list=checkin_list.pk),
+        HTTP_AUTHORIZATION=f"Device {device.api_token}",
+        HTTP_ACCEPT_LANGUAGE="fr",
+    )
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "door_role_required"
+    assert "liste des billets" in response.json()["detail"]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("role", ["door", ""])
+def test_a_door_keeps_its_guest_list(till, device, event, ticket, checkin_list, role):
+    """The door, and a device nobody assigned, which does both jobs as before."""
+    admit(event, ticket, ["Alice Martin"])
+    make(device, role)
+
+    response = till.get("offline", list=checkin_list.pk)
+
+    assert response.status_code == 200
+    assert [t["name"] for t in response.json()["tickets"]] == ["Alice Martin"]
+
+
+@pytest.mark.django_db
+def test_a_device_nobody_assigned_keeps_its_guest_list_too(till, event, ticket, checkin_list):
+    """Not even a row: every device paired before roles existed."""
+    from pretix_openpos.models import PosDevice
+
+    admit(event, ticket, ["Alice Martin"])
+    PosDevice.objects.all().delete()
+
+    assert till.get("offline", list=checkin_list.pk).status_code == 200

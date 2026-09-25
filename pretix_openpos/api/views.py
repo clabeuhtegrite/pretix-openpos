@@ -1932,7 +1932,28 @@ class OpenPosViewSet(viewsets.ViewSet):
         order code, no price. A device token already reaches the same data one
         scan at a time through pretix' own search endpoint; this only makes it
         usable when there is nothing to ask.
+
+        Only for a device that works at the door. Every ticket's secret is in
+        it, and a secret is a ticket: whoever holds the list can print their
+        way in. The bar till has no door to keep and scans nothing, yet it
+        used to fetch the whole list every five minutes and keep it in the
+        browser, where it stays after the tablet is unpaired. Refused with a
+        code rather than an empty list, so the app knows to throw away the
+        copy it already has — which an empty answer, or a plain 403 it would
+        read as a network problem, would not tell it.
         """
+        device = request.auth if isinstance(request.auth, Device) else None
+        if not PosDevice.for_device(device).serves_door:
+            return Response(
+                {
+                    "code": "door_role_required",
+                    "detail": str(_(
+                        "This device is set up as a till, not for the door: it is not given "
+                        "the guest list."
+                    )),
+                },
+                status=status.HTTP_403_FORBIDDEN,
+            )
         clist = self._requested_checkin_list(request)
         if clist is None:
             raise ValidationError({"list": [_("Unknown check-in list.")]})

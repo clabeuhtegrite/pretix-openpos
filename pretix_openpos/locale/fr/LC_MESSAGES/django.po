@@ -191,6 +191,14 @@ msgstr "Aucun paiement par carte n’a été lancé pour ce panier."
 msgid "Unknown check-in list."
 msgstr "Liste de contrôle inconnue."
 
+#: api/views.py:1951
+msgid ""
+"This device is set up as a till, not for the door: it is not given the guest "
+"list."
+msgstr ""
+"Cet appareil est réglé en caisse, pas pour la porte : la liste des billets ne "
+"lui est pas donnée."
+
 #: api/views.py:1965
 msgid "No such entry in this event's journal."
 msgstr "Cette écriture n’existe pas dans le journal de cet événement."

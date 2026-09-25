@@ -604,6 +604,16 @@ class PosDevice(models.Model):
         return bool(self.sumup_reader_id)
 
     @property
+    def serves_door(self) -> bool:
+        """
+        Whether this device works at the door, alone or with the till.
+
+        An unassigned device does both, as it always has; only a device the
+        organizer made the bar till has no door.
+        """
+        return self.role != self.ROLE_TILL
+
+    @property
     def holds_sales(self) -> bool:
         """Whether the app last said it had sales it had not sent yet."""
         return self.status_reported_at is not None and self.pending_sales > 0
