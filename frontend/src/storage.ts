@@ -116,6 +116,45 @@ export function saveDoorScans(event: string, scans: DoorScans): void {
   }
 }
 
+const DOOR_LIST_PREFIX = "openpos.doorList.v1.";
+
+/**
+ * The check-in list last chosen at this event's door.
+ *
+ * It used to live in memory only, so every relaunch — iOS reclaiming the app
+ * in the background, a reload for an update — put a door switched to the
+ * guest list back on the event's default one, and nobody notices that until
+ * somebody is turned away. Per event, because a list is one event's.
+ * Whether the list still exists is for the caller to check: it may have been
+ * deleted in pretix since.
+ */
+export function loadDoorList(event: string): number | null {
+  const saved = readJson<unknown>(`${DOOR_LIST_PREFIX}${event}`, null);
+  return typeof saved === "number" && Number.isInteger(saved) ? saved : null;
+}
+
+export function saveDoorList(event: string, list: number): void {
+  try {
+    localStorage.setItem(`${DOOR_LIST_PREFIX}${event}`, JSON.stringify(list));
+  } catch {
+    // The choice holds until the next relaunch, as it always used to.
+  }
+}
+
+/** Every event's choice: the device is being handed back. */
+export function clearDoorLists(): void {
+  try {
+    const keys: string[] = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (key?.startsWith(DOOR_LIST_PREFIX)) keys.push(key);
+    }
+    keys.forEach((key) => localStorage.removeItem(key));
+  } catch {
+    // Nothing more to do about a storage that refuses to be read.
+  }
+}
+
 const ADMISSIONS_PREFIX = "openpos.admitted.v1.";
 
 /** List id → ticket secret → when: `Admissions` in offline.ts, which says why. */
@@ -311,7 +350,12 @@ export function saveCashier(name: string): void {
  * asking to be pressed again. Remembering the attempt turns it into one offer.
  */
 export function loadUpdateAttempt(): string | null {
-  return localStorage.getItem(UPDATE_KEY);
+  try {
+    return localStorage.getItem(UPDATE_KEY);
+  } catch {
+    // Read at startup: a storage that refuses must not stop the till opening.
+    return null;
+  }
 }
 
 export function saveUpdateAttempt(version: string): void {
@@ -319,6 +363,52 @@ export function saveUpdateAttempt(version: string): void {
     localStorage.setItem(UPDATE_KEY, version);
   } catch {
     // Worst case the prompt is offered again after the reload. Harmless.
+  }
+}
+
+const DOOR_RESUME_KEY = "openpos.resumeDoor.v1";
+
+/**
+ * How long "reopen the door" stays good for after an update reload.
+ *
+ * The reload itself takes seconds. Past a few minutes the app was not
+ * started by that reload but by somebody, later, who may want the grid.
+ */
+export const DOOR_RESUME_KEEPS_FOR_MS = 5 * 60_000;
+
+/**
+ * The door screen was on when the app reloaded itself for an update.
+ *
+ * A door device opens on the scanner by itself, but a device that does both
+ * jobs opens on the grid — and an update that lands while it is scanning
+ * would otherwise leave the queue at the door facing a till. Written just
+ * before the reload, read when the new build starts, and cleared once acted
+ * upon.
+ */
+export function saveDoorResume(): void {
+  try {
+    localStorage.setItem(DOOR_RESUME_KEY, String(Date.now()));
+  } catch {
+    // The new build opens on the grid, one tap from the door.
+  }
+}
+
+export function loadDoorResume(now = Date.now()): boolean {
+  try {
+    const at = Number(localStorage.getItem(DOOR_RESUME_KEY) ?? NaN);
+    // Either way round: a clock put back by the reload's few seconds is no
+    // reason to ignore it, and one far off either way is not this reload's.
+    return Number.isFinite(at) && Math.abs(now - at) <= DOOR_RESUME_KEEPS_FOR_MS;
+  } catch {
+    return false;
+  }
+}
+
+export function clearDoorResume(): void {
+  try {
+    localStorage.removeItem(DOOR_RESUME_KEY);
+  } catch {
+    // Expires by itself; see DOOR_RESUME_KEEPS_FOR_MS.
   }
 }
 

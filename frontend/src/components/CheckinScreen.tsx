@@ -205,6 +205,19 @@ export default function CheckinScreen({
   const [listId, setListId] = useState<number | null>(
     defaultListId ?? (lists.length ? lists[0].id : null),
   );
+  // The lists arrive with the config, which is now read again while this
+  // screen is up. One deleted in pretix meanwhile must not stay selected:
+  // every scan would go to a list that no longer exists. Back to the one the
+  // app would open on now, which it has already checked is still there.
+  const listGone = listId !== null && !lists.some((list) => list.id === listId);
+  useEffect(() => {
+    if (!listGone) return;
+    setListId(
+      defaultListId !== null && lists.some((list) => list.id === defaultListId)
+        ? defaultListId
+        : lists[0]?.id ?? null,
+    );
+  }, [listGone, defaultListId, lists]);
   const [verdict, setVerdict] = useState<RedeemResult | null>(null);
   /** The verdict on screen was given from the device's own guest list. */
   const [verdictOffline, setVerdictOffline] = useState(false);

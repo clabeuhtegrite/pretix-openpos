@@ -1437,6 +1437,36 @@ describe("leaving", () => {
 
     expect(onListChange).toHaveBeenCalledWith(8);
   });
+
+  it("moves off a list deleted in pretix while the door had it on screen", async () => {
+    // The lists now arrive again with every config the app reads while the
+    // door is up. Staying on a list that is gone would send every scan to it.
+    const vip = { id: 9, name: "Invités", all_products: true, include_pending: false };
+    const { user, update } = show({ lists: [...lists, vip] });
+    await user.selectOptions(screen.getByLabelText(t("checkin.list")), "9");
+
+    update({ lists });
+
+    expect((screen.getByLabelText(t("checkin.list")) as HTMLSelectElement).value).toBe("7");
+  });
+
+  it("falls back on the first list when the app's own is gone too", async () => {
+    const { user, update } = show();
+    await user.selectOptions(screen.getByLabelText(t("checkin.list")), "8");
+
+    const other = { id: 11, name: "Balcon", all_products: true, include_pending: false };
+    update({ lists: [other, lists[0]], defaultListId: 99 });
+
+    expect((screen.getByLabelText(t("checkin.list")) as HTMLSelectElement).value).toBe("11");
+  });
+
+  it("says so when the event has no list left at all", async () => {
+    const { update } = show();
+
+    update({ lists: [], defaultListId: null });
+
+    expect(screen.getByText(t("checkin.noList"))).toBeDefined();
+  });
 });
 
 describe("selling a ticket at the door", () => {

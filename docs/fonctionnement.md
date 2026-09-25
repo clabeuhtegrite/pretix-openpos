@@ -268,6 +268,38 @@ depuis `/static/` :
   garde le fichier en cache de bordure : après un déploiement qui touche `sw.js`,
   purger ce chemin.
 
+**Une nouvelle version.** Chaque appareil compare la version du serveur à celle
+de son propre JavaScript à chaque relecture de la configuration — toutes les
+60 s au repos, et au retour au premier plan. Quand elles diffèrent, la barre
+« Nouvelle version — recharger » s'affiche entre deux clients ; à la porte, sur
+le scanner lui-même. Une porte ne lisait auparavant la version qu'à
+l'ouverture, et le scanner couvrait la barre : chaque téléphone de porte devait
+être fermé et rouvert à la main après une mise en production.
+
+Sans personne pour appuyer, l'appareil **se met à jour seul quand on le laisse
+tranquille** : à la porte, **20 s** sans billet présenté, sans verdict à
+l'écran ni panneau ouvert ; à la caisse, **une minute** panier vide, sans
+avoir, paiement, lecteur, panneau ouvert, envoi ou chargement en cours. Chaque
+toucher relance l'attente, et jamais sans réseau. Un appui sur la barre à la
+porte pendant qu'un billet est chez pretix attend son verdict : recharger sous
+ce billet ferait répondre « déjà utilisé » à l'essai suivant de l'invité.
+
+La mise à jour ne jette plus rien. Le service worker télécharge la nouvelle
+coquille et tous les fichiers qu'elle nomme, ne remplace l'ancienne qu'une fois
+tout en place, et la page ne se recharge qu'ensuite. Si le téléchargement
+échoue, rien ne change : la barre dit « La nouvelle version n'a pas pu être
+téléchargée — toucher pour réessayer », et l'appareil réessaie seul cinq
+minutes plus tard. La barre vidait auparavant tous les caches avant de
+recharger ; un wifi qui lâchait à ce moment laissait une caisse incapable de
+s'ouvrir, faute d'une copie de l'app.
+
+Le rechargement ne perd rien de ce qui compte : la file, le panier et son avoir,
+l'appairage, le rôle (relu, ou repris de la configuration gardée), la liste
+choisie à la porte (§5) et l'écran — un appareil qui fait les deux revient sur
+le scanner s'il y était. Une version pour laquelle l'appareil s'est déjà
+rechargé sans l'obtenir (un serveur qui annonce une version que le bundle servi
+ne porte pas) n'est plus proposée.
+
 ### 2.7 Un rôle par appareil
 
 La même app tourne au bar et à la porte, mais ce ne sont pas le même poste. Un
@@ -688,6 +720,13 @@ indulgent sur SQLite et impitoyable sur PostgreSQL — d'où
 Bouton *Contrôle* de la barre supérieure, visible dès que l'événement a au moins
 une liste. C'est [CheckinScreen.tsx](../frontend/src/components/CheckinScreen.tsx).
 
+- **La liste scannée** : un événement qui en a plusieurs montre un sélecteur,
+  et la liste choisie est **gardée sur l'appareil, par événement**. Elle
+  survit donc à une relance — iOS qui recharge l'app en arrière-plan, une mise
+  à jour — là où la porte revenait avant sur la liste par défaut sans que
+  personne ne s'en aperçoive. Supprimée entre-temps dans pretix, la porte
+  reprend la liste de l'événement, scanner ouvert compris : la configuration y
+  est relue chaque minute.
 - **Scan continu** par la caméra arrière, décodage **jsQR** en JavaScript à
   ~8 images/s sur une image réduite à 640 px de côté. Pas de `BarcodeDetector` :
   sur iOS, l'API Shape Detection est derrière un drapeau dans les Réglages sur
@@ -2082,9 +2121,11 @@ le panneau de paiement reste ouvert avec le nouveau montant.
 
 Le catalogue se rafraîchit d'ailleurs tout seul **toutes les 60 s et au retour au
 premier plan** — mais uniquement quand la caisse est au repos (panier vide, pas de
-paiement en cours, pas d'écran de fin ni de scan). Recharger les prix sous un
+paiement en cours, pas d'écran de fin). Recharger les prix sous un
 panier qu'on est en train de lire à un client, c'est exactement comme ça qu'on
-annonce un montant et qu'on en encaisse un autre.
+annonce un montant et qu'on en encaisse un autre. Scanner ouvert, seule la
+configuration est relue — la version du serveur et les listes de la porte (§2.6,
+*Une nouvelle version*) — et la grille, invisible dessous, l'est en y revenant.
 
 ### 6.2bis Les séries : la caisse vend la date du soir
 
@@ -2912,7 +2953,7 @@ l'installation — donc `npm i --no-save playwright` avant de s'en servir.
 | La caisse refuse les espèces : « La caisse … n'est pas ouverte » | Ouvrir la caisse espèces (bouton billet de la barre du haut) sur un fond compté. Le client peut attendre : rien n'a été enregistré |
 | « Ouverte … et jamais fermée » | La caisse espèces n'a pas été fermée une soirée précédente. *Fermer sans compter* sur la caisse, ou fermer depuis son rapport avec le montant si quelqu'un l'a compté, puis ouvrir celle du soir |
 | « La caisse a bougé depuis le comptage » à la fermeture | Une vente ou un mouvement est passé depuis, souvent sur l'autre tablette du même tiroir : recompter, puis fermer |
-| L'app reste sur un vieux build | Une caisse ouverte compare sa version à celle du serveur au rafraîchissement du catalogue et affiche « Nouvelle version — recharger » entre deux clients ; sinon, fermer et rouvrir l'app force la reprise |
+| L'app reste sur un vieux build | Caisse ou porte, l'app compare sa version à celle du serveur chaque minute au repos, affiche « Nouvelle version — recharger » entre deux clients (à la porte, sur le scanner) et se met à jour seule après 20 s (porte) ou une minute (caisse) sans activité, jamais sans réseau (§2.6). « La nouvelle version n'a pas pu être téléchargée » : le serveur ou le wifi n'a pas livré la coquille ou ses fichiers, l'app reste sur la version qu'elle a et réessaie. Sinon, fermer et rouvrir l'app force la reprise |
 | La liste des appareils affiche une ancienne version | Le device n'a pas été rouvert avec du réseau depuis la mise à jour : il déclare sa version à la première ouverture connectée. C'est aussi le moyen de voir, après un déploiement, quels appareils ont repris le nouveau JavaScript |
 
 ---
