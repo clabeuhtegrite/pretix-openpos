@@ -5,9 +5,10 @@
  * Query params: ?role=pos|door  ?card=terminal  ?theme=light|dark
  *               ?offline=1  ?queue=3  ?scans=3  ?testmode=1  ?update=1  ?photos=1
  *               ?terminal=waiting|paid|failed|stalled|reprice  ?checkout=fail
- *               ?events=one|blocked|mixed  ?load=refused|series  ?redeem=fail
+ *               ?events=one|blocked|mixed  ?load=refused|series|cdn  ?redeem=fail
  *               ?takings=empty|nights|series  ?drawer=closed|open|stale|counted|moved
- *               ?slow=1
+ *               ?slow=1  ?cancel=already|backoffice|lost  ?camera=busy
+ *               ?cached=1  ?snapshot=HH:MM|yesterday  ?update=fail
  */
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
@@ -86,6 +87,76 @@ const conf = fx.config({
   // Unambiguously newer than any build, so ?update=1 keeps working.
   ...(q.get("update") ? { version: "99.0.0" } : {}),
 });
+
+// ?snapshot=HH:MM : la liste embarquée a été tirée aujourd'hui à cette heure ;
+// « yesterday » : hier à 21:14. Ce que la porte dit de son âge hors ligne.
+const pulledAt = (() => {
+  const asked = q.get("snapshot");
+  if (!asked) return fx.offlineSnapshot.generated;
+  const at = new Date();
+  if (asked === "yesterday") {
+    at.setDate(at.getDate() - 1);
+    at.setHours(21, 14, 0, 0);
+  } else {
+    const [h, m] = asked.split(":").map(Number);
+    at.setHours(h, m, 0, 0);
+  }
+  return at.toISOString();
+})();
+const guestList = { ...fx.offlineSnapshot, generated: pulledAt };
+
+// ?cached=1 : l'appareil a déjà été ouvert en ligne — configuration,
+// catalogue et liste embarquée sont sur le disque. Avec ?offline=1, c'est une
+// caisse rouverte pendant une coupure, plutôt qu'un premier lancement sans
+// réseau.
+if (q.get("cached")) {
+  localStorage.setItem(`openpos.config.v1.${fx.pairing.event}`, JSON.stringify(conf));
+  localStorage.setItem(`openpos.catalog.v1.${fx.pairing.event}`, JSON.stringify(fx.catalog));
+  localStorage.setItem("openpos.snapshot.v1", JSON.stringify(guestList));
+}
+
+// ?camera=busy : une autre app tient la caméra à l'ouverture du scanner ; elle
+// est libre au premier « Réessayer la caméra ». Libérée par l'appui, pas par
+// le premier refus : en développement, StrictMode monte le scanner deux fois,
+// et le premier montage, jeté aussitôt, consommerait ce refus à lui seul.
+if (q.get("camera") === "busy" && navigator.mediaDevices?.getUserMedia) {
+  const open = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+  let busy = true;
+  document.addEventListener(
+    "click",
+    (event) => {
+      if ((event.target as Element | null)?.closest?.(".scanner-retry")) busy = false;
+    },
+    true,
+  );
+  navigator.mediaDevices.getUserMedia = async (constraints) => {
+    if (busy) throw new DOMException("Could not start video source", "NotReadableError");
+    return open(constraints);
+  };
+}
+
+// ?update=fail : un service worker répond à la demande de mise à jour qu'il
+// n'a pas pu télécharger la nouvelle version (update.ts).
+if (q.get("update") === "fail") {
+  Object.defineProperty(navigator, "serviceWorker", {
+    configurable: true,
+    value: {
+      controller: {
+        postMessage: (_message: unknown, [port]: MessagePort[]) => {
+          port.postMessage({ state: "preparing" });
+          setTimeout(() => port.postMessage({ state: "failed" }), 1500);
+        },
+      },
+    },
+  });
+}
+
+// ?cancel= : ce que le serveur répond à une annulation. « already » : la
+// vente l'était déjà, sous une autre clé ; « backoffice » : depuis le
+// back-office de pretix ; « lost » : la première réponse se perd en route
+// (la vente est annulée côté serveur), la suivante revient.
+const cancelMode = q.get("cancel");
+const cancelledSeqs = new Set<number>();
 
 // ?drawer= : la caisse espèces de cet appareil, et ce qu'elle a vécu ce soir.
 // « closed » fermée (la dernière soirée s'est finie sur un écart d'un euro) ;
@@ -184,16 +255,25 @@ const eventList = {
 }[q.get("events") ?? ""] ?? { results: [autumn, winter], unavailable: [] };
 
 // ?load= : l'événement de l'appareil ne s'ouvre pas, les autres oui.
-// « refused » : Open POS désactivé dessus ; « series » : rien ce soir.
-const stuck = (url: string) =>
-  url.includes(`/events/${fx.pairing.event}/`) && q.get("load")
-    ? q.get("load") === "series"
-      ? json({
-          detail: ["Rien n’est programmé ce soir. Cet événement est une série, et la caisse vend la date qui a lieu — ajoutez-en une pour ce soir, ou vérifiez qu’elle est activée."],
-          code: "series_closed",
-        }, 400)
-      : json({ detail: `Open POS n’est pas activé sur l’événement ${fx.pairing.event}.` }, 403)
-    : null;
+// « refused » : Open POS désactivé dessus ; « series » : rien ce soir ;
+// « cdn » : un pare-feu devant pretix répond par sa propre page 403.
+const stuck = (url: string) => {
+  const mode = q.get("load");
+  if (!mode || !url.includes(`/events/${fx.pairing.event}/`)) return null;
+  if (mode === "series") {
+    return json({
+      detail: ["Rien n’est programmé ce soir. Cet événement est une série, et la caisse vend la date qui a lieu — ajoutez-en une pour ce soir, ou vérifiez qu’elle est activée."],
+      code: "series_closed",
+    }, 400);
+  }
+  if (mode === "cdn") {
+    return new Response("<!DOCTYPE html><html><title>Attention Required!</title></html>", {
+      status: 403,
+      headers: { "Content-Type": "text/html" },
+    });
+  }
+  return json({ detail: `Open POS n’est pas activé sur l’événement ${fx.pairing.event}.` }, 403);
+};
 
 const real = window.fetch.bind(window);
 window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -261,9 +341,16 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   // ?takings= : empty (rien de vendu), nights (deux soirées), series (une date).
   if (url.includes("/openpos/summary/"))
     return json(fx.summary(q.get("takings"), !!q.get("testmode")));
-  if (url.includes("/openpos/history/")) return json({ device: fx.pairing.serial, ...fx.history });
+  if (url.includes("/openpos/history/"))
+    return json({
+      device: fx.pairing.serial,
+      ...fx.history,
+      results: fx.history.results.map((line) =>
+        cancelledSeqs.has(line.seq) ? { ...line, cancelled: true, can_cancel: false } : line,
+      ),
+    });
   if (url.includes("/openpos/attendance/")) return json(fx.attendance);
-  if (url.includes("/openpos/offline/")) return json(fx.offlineSnapshot);
+  if (url.includes("/openpos/offline/")) return json(guestList);
   // ?terminal= pilote le lecteur : waiting (défaut), paid, failed, stalled,
   // reprice (le serveur tarife autrement que la caisse).
   const reader = q.get("terminal") ?? "waiting";
@@ -321,13 +408,21 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       net_total: "12.50",
     });
   }
-  if (url.includes("/openpos/cancel/"))
+  if (url.includes("/openpos/cancel/")) {
+    const seq = bodyOf(init).seq as number;
+    const before = cancelledSeqs.has(seq);
+    cancelledSeqs.add(seq);
+    if (cancelMode === "lost" && !before) throw new TypeError("harness: the answer got lost");
     return json({
       cancellation: { seq: 43, total: "-8.50", payment_type: "cash" },
       credit_note: "POS4K-C1",
       card_refund: null,
       sale: { order: "POS4K", positions: fx.history.results[0].positions },
+      replayed: before || cancelMode === "already" || cancelMode === "backoffice",
+      ...(cancelMode === "already" || cancelMode === "backoffice" ? { already_cancelled: true } : {}),
+      ...(cancelMode === "backoffice" ? { by_back_office: true } : {}),
     });
+  }
   if (/\/organizers\/[^/]+\/openpos\/(\?|$)/.test(url)) return json(eventList);
   if (url.includes("/checkinrpc/search/"))
     return json({
