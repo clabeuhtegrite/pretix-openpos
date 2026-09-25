@@ -10,10 +10,15 @@ const AUTO_DISMISS_MS = 6000;
 interface Props {
   sale: SaleResult;
   currency: string;
+  /**
+   * Something to say about how the sale got here, when it did not get here
+   * the ordinary way: a payment picked up after the till restarted under it.
+   */
+  note?: string | null;
   onDismiss: () => void;
 }
 
-export default function DoneScreen({ sale, currency, onDismiss }: Props) {
+export default function DoneScreen({ sale, currency, note = null, onDismiss }: Props) {
   const changeCents = sale.cash_change === null ? 0 : toCents(sale.cash_change);
   const admitted = (sale.checked_in ?? 0) > 0;
   const checkinFailed = sale.checkin_errors.length > 0;
@@ -28,7 +33,7 @@ export default function DoneScreen({ sale, currency, onDismiss }: Props) {
   // back change or a deposit, or dealing with a check-in that did not go
   // through. Otherwise get out of the way so the queue keeps moving.
   const needsAttention =
-    changeCents > 0 || giveBackCents > 0 || checkinFailed || Boolean(sale.offline);
+    changeCents > 0 || giveBackCents > 0 || checkinFailed || Boolean(sale.offline) || note !== null;
 
   useEffect(() => {
     if (needsAttention) return;
@@ -47,6 +52,10 @@ export default function DoneScreen({ sale, currency, onDismiss }: Props) {
 
   return (
     <div className={`done${tone}`} onClick={needsAttention ? undefined : onDismiss}>
+      {/* Above the headline: the operator did not tap anything to get here,
+          and the first thing to read is why the screen changed by itself. */}
+      {note && <div className="meta done-note">{note}</div>}
+
       <div className="headline">
         {checkinFailed
           ? t("done.checkinFailed")

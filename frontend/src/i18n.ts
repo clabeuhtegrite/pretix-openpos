@@ -72,6 +72,19 @@ export const MESSAGES = {
     "payment.readerTimeout": "The reader waited too long for the card.",
     "payment.readerTaken":
       "The reader is taking a payment on the other till. Wait for it to finish, or take this sale in cash.",
+    "payment.readerHeldHere":
+      "The reader is still holding the payment left aside at {time} ({amount}). Cancel it on the reader, or try again in a moment.",
+    "payment.readerChecking": "Asking the server where the card payment in progress has got to…",
+    "payment.readerUnanswered":
+      "No answer from the server. Look at the reader’s screen: if it is still asking for the card, wait or cancel on the reader; if it shows the payment accepted, keep this basket and try again; otherwise, take the payment in cash.",
+    "payment.readerOffline":
+      "No network: the card reader cannot be used. Take the payment in cash, or wait for the network to come back.",
+    "payment.readerBack": "The network is back: the card reader can be used again.",
+    "payment.resumed":
+      "The till restarted during this payment: it picks up where it was, with no risk of it being counted twice.",
+    "payment.latePaid":
+      "A card payment of {amount}, started at {time}, went through on the reader with no sale recorded on this till: it was left aside when the server stopped answering. If the customer then paid another way, they paid twice — the back office lists it under “Card payments with no sale”, for a refund.",
+    "payment.latePaidOk": "Understood",
     "payment.readerRetry": "Try again",
     "payment.readerStop": "Cancel the payment",
     "payment.readerStopping": "Taking the payment off the reader…",
@@ -89,6 +102,7 @@ export const MESSAGES = {
     "done.order": "Order",
     "done.next": "Next customer",
     "done.checkinFailed": "Check-in failed — let the customer in manually.",
+    "done.resumed": "The till restarted while recording: the sale was kept, once.",
     "summary.title": "Takings for the event",
     "summary.thisTill": "This device",
     "summary.allTills": "All devices",
@@ -120,9 +134,17 @@ export const MESSAGES = {
       "A short click on each product, and two low notes when a ticket is refused at the door. iPhones cannot vibrate in a browser, so sound is the only way to hear a refusal without looking up. It plays even with the ringer switch off.",
     "update.reload": "New version — reload",
     "update.reloading": "Loading the new version…",
+    "clock.ahead":
+      "This device’s clock is {drift} ahead of the server: sales made offline would be dated wrongly. In Settings › General › Date & Time, turn on “Set Automatically”.",
+    "clock.behind":
+      "This device’s clock is {drift} behind the server: sales made offline would be dated wrongly. In Settings › General › Date & Time, turn on “Set Automatically”.",
     "error.offline": "No connection to the server.",
     "error.refused":
       "The server refused this till: {detail} Try again; if the till has been revoked, unpair it and pair it again with a new code.",
+    "error.keptForRepair.one":
+      "{n} sale is waiting on this device. It stays here: pair the device again on this event and it will be sent, with no duplicate.",
+    "error.keptForRepair.other":
+      "{n} sales are waiting on this device. They stay here: pair the device again on this event and they will be sent, with no duplicates.",
     "error.retry": "Retry",
     "error.retrying": "Trying again…",
     "error.title": "Something went wrong",
@@ -479,6 +501,19 @@ export const MESSAGES = {
     "payment.readerTimeout": "Le lecteur a attendu la carte trop longtemps.",
     "payment.readerTaken":
       "Le lecteur encaisse sur l’autre caisse. Attendez la fin, ou prenez cette vente en espèces.",
+    "payment.readerHeldHere":
+      "Le lecteur tient encore le paiement laissé de côté à {time} ({amount}). Annulez-le sur le lecteur, ou réessayez dans un instant.",
+    "payment.readerChecking": "La caisse demande au serveur où en est le paiement carte en cours…",
+    "payment.readerUnanswered":
+      "Pas de réponse du serveur. Regardez l’écran du lecteur\u00a0: s’il demande encore la carte, attendez ou annulez sur le lecteur\u00a0; s’il affiche le paiement accepté, gardez ce panier et réessayez\u00a0; sinon, encaissez en espèces.",
+    "payment.readerOffline":
+      "Pas de réseau\u00a0: le lecteur de carte ne peut pas servir. Encaissez en espèces, ou attendez le retour du réseau.",
+    "payment.readerBack": "Le réseau est revenu\u00a0: le lecteur de carte peut de nouveau servir.",
+    "payment.resumed":
+      "La caisse a redémarré pendant ce paiement\u00a0: il reprend là où il en était, sans risque d’être compté deux fois.",
+    "payment.latePaid":
+      "Un paiement carte de {amount}, lancé à {time}, est passé sur le lecteur sans qu’aucune vente ne soit enregistrée sur cette caisse\u00a0: il avait été laissé de côté faute de réponse du serveur. Si le client a payé autrement ensuite, il a payé deux fois — le back-office le liste dans «\u00a0Paiements carte sans vente\u00a0», pour le rembourser.",
+    "payment.latePaidOk": "Compris",
     "payment.readerRetry": "Réessayer",
     "payment.readerStop": "Annuler le paiement",
     "payment.readerStopping": "Annulation du paiement sur le lecteur…",
@@ -496,6 +531,7 @@ export const MESSAGES = {
     "done.order": "Commande",
     "done.next": "Client suivant",
     "done.checkinFailed": "Check-in échoué — faites entrer le client manuellement.",
+    "done.resumed": "La caisse a redémarré pendant l’enregistrement\u00a0: la vente a été gardée, une seule fois.",
     "summary.title": "Recette de l’événement",
     "summary.thisTill": "Cet appareil",
     "summary.allTills": "Tous les appareils",
@@ -528,9 +564,17 @@ export const MESSAGES = {
       "Un clic court à chaque produit, et deux notes graves quand un billet est refusé à la porte. Les iPhone ne peuvent pas vibrer dans un navigateur : le son est le seul moyen d’entendre un refus sans lever les yeux. Il sonne même si le téléphone est en silencieux.",
     "update.reload": "Nouvelle version — recharger",
     "update.reloading": "Chargement de la nouvelle version…",
+    "clock.ahead":
+      "L’horloge de cet appareil a {drift} d’avance sur le serveur\u00a0: les ventes faites hors ligne seraient mal datées. Dans Réglages › Général › Date et heure, activez «\u00a0Réglage automatique\u00a0».",
+    "clock.behind":
+      "L’horloge de cet appareil a {drift} de retard sur le serveur\u00a0: les ventes faites hors ligne seraient mal datées. Dans Réglages › Général › Date et heure, activez «\u00a0Réglage automatique\u00a0».",
     "error.offline": "Pas de connexion au serveur.",
     "error.refused":
       "Le serveur a refusé cette caisse : {detail} Réessayez ; si la caisse a été révoquée, dépairez-la et appairez-la avec un nouveau code.",
+    "error.keptForRepair.one":
+      "{n} vente attend sur cet appareil. Elle y reste\u00a0: appairez-le de nouveau sur cet événement et elle partira, sans doublon.",
+    "error.keptForRepair.other":
+      "{n} ventes attendent sur cet appareil. Elles y restent\u00a0: appairez-le de nouveau sur cet événement et elles partiront, sans doublon.",
     "error.retry": "Réessayer",
     "error.retrying": "Nouvel essai…",
     "error.title": "Une erreur est survenue",
