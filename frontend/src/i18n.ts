@@ -83,7 +83,7 @@ export const MESSAGES = {
     "payment.resumed":
       "The till restarted during this payment: it picks up where it was, with no risk of it being counted twice.",
     "payment.latePaid":
-      "A card payment of {amount}, started at {time}, went through on the reader with no sale recorded on this till: it was left aside when the server stopped answering. If the customer then paid another way, they paid twice — the back office lists it under “Card payments with no sale”, for a refund.",
+      "Card payment of {amount} ({time}) went through on the reader after it was left aside: no sale on this till matches it. If the customer paid another way, they paid twice — refund it from the back office, under “Card payments with no sale”.",
     "payment.latePaidOk": "Understood",
     "payment.readerRetry": "Try again",
     "payment.readerStop": "Cancel the payment",
@@ -135,9 +135,9 @@ export const MESSAGES = {
     "update.reload": "New version — reload",
     "update.reloading": "Loading the new version…",
     "clock.ahead":
-      "This device’s clock is {drift} ahead of the server: sales made offline would be dated wrongly. In Settings › General › Date & Time, turn on “Set Automatically”.",
+      "This device’s clock is {drift} ahead: offline sales would be misdated. Settings › General › Date & Time › Set Automatically.",
     "clock.behind":
-      "This device’s clock is {drift} behind the server: sales made offline would be dated wrongly. In Settings › General › Date & Time, turn on “Set Automatically”.",
+      "This device’s clock is {drift} behind: offline sales would be misdated. Settings › General › Date & Time › Set Automatically.",
     "error.offline": "No connection to the server.",
     "error.refused":
       "The server refused this till: {detail} Try again; if the till has been revoked, unpair it and pair it again with a new code.",
@@ -522,7 +522,7 @@ export const MESSAGES = {
     "payment.resumed":
       "La caisse a redémarré pendant ce paiement\u00a0: il reprend là où il en était, sans risque d’être compté deux fois.",
     "payment.latePaid":
-      "Un paiement carte de {amount}, lancé à {time}, est passé sur le lecteur sans qu’aucune vente ne soit enregistrée sur cette caisse\u00a0: il avait été laissé de côté faute de réponse du serveur. Si le client a payé autrement ensuite, il a payé deux fois — le back-office le liste dans «\u00a0Paiements carte sans vente\u00a0», pour le rembourser.",
+      "Paiement carte de {amount} ({time}) passé sur le lecteur après avoir été laissé de côté\u00a0: aucune vente de cette caisse ne lui correspond. Si le client a payé autrement, il a payé deux fois — à rembourser depuis le back-office, dans «\u00a0Paiements carte sans vente\u00a0».",
     "payment.latePaidOk": "Compris",
     "payment.readerRetry": "Réessayer",
     "payment.readerStop": "Annuler le paiement",
@@ -575,9 +575,9 @@ export const MESSAGES = {
     "update.reload": "Nouvelle version — recharger",
     "update.reloading": "Chargement de la nouvelle version…",
     "clock.ahead":
-      "L’horloge de cet appareil a {drift} d’avance sur le serveur\u00a0: les ventes faites hors ligne seraient mal datées. Dans Réglages › Général › Date et heure, activez «\u00a0Réglage automatique\u00a0».",
+      "L’horloge de cet appareil a {drift} d’avance\u00a0: les ventes hors ligne seraient mal datées. Réglages › Général › Date et heure › Réglage automatique.",
     "clock.behind":
-      "L’horloge de cet appareil a {drift} de retard sur le serveur\u00a0: les ventes faites hors ligne seraient mal datées. Dans Réglages › Général › Date et heure, activez «\u00a0Réglage automatique\u00a0».",
+      "L’horloge de cet appareil a {drift} de retard\u00a0: les ventes hors ligne seraient mal datées. Réglages › Général › Date et heure › Réglage automatique.",
     "error.offline": "Pas de connexion au serveur.",
     "error.refused":
       "Le serveur a refusé cette caisse : {detail} Réessayez ; si la caisse a été révoquée, dépairez-la et appairez-la avec un nouveau code.",

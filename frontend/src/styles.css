@@ -2262,9 +2262,19 @@ table.takings thead th {
   border-bottom-color: var(--danger-text);
 }
 
+/* The clock's, which stays until somebody fixes it: said, not shouted, and
+   in as little of a phone's height as it takes. */
+.notice-bar:not(.is-alarm) {
+  font-weight: 400;
+}
+
 /* On a phone the button goes under the sentence rather than squeezing it
    into a column one word wide. */
 @media (max-width: 520px) {
+  .notice-bar {
+    font-size: 14px;
+  }
+
   .notice-bar.is-alarm {
     flex-direction: column;
     align-items: stretch;
