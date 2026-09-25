@@ -233,15 +233,15 @@ async function send<T>(
 }
 
 /**
- * Whether a failure means "not now" rather than "no".
+ * Whether a failure leaves it unknown what the server did.
  *
  * The distinction is what makes both the offline queue and a retried
  * cancellation safe. A transport failure or any fault from the server means the
  * request was not processed — or that we cannot know, which comes to the same
  * thing because every one of them carries an idempotency key — so it is worth
- * repeating verbatim. Only a 4xx is the server understanding and refusing, and
- * that is the one case where retrying forever would hide a problem instead of
- * solving it.
+ * repeating verbatim. A 4xx is the server answering, which is not the same as
+ * the server refusing: see ``isRefusal`` for the one answer that is "no" for
+ * good, and ``isThrottled`` for "not now".
  *
  * Getting this wrong in the lenient direction costs a duplicate request. Getting
  * it wrong the other way takes a paid sale out of the queue and it never reaches
