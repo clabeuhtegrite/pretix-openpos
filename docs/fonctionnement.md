@@ -268,6 +268,17 @@ depuis `/static/` :
   garde le fichier en cache de bordure : après un déploiement qui touche `sw.js`,
   purger ce chemin.
 
+  Le worker garde la coquille et le bundle, rien d'autre — jamais l'API. La
+  caisse s'ouvre sur cette copie quand le réseau manque, quand le serveur répond
+  par une erreur 5xx (un proxy devant un pretix qui redémarre) et quand il ne
+  répond pas en **4 s** ; sinon, c'est la page du serveur qui s'affiche, et elle
+  est gardée pour la fois suivante. Une coquille n'est gardée qu'une fois tous
+  les fichiers qu'elle nomme en cache — script et feuille de style
+  obligatoirement, les icônes si possible —, et une page qui ne charge aucun
+  bundle (page de maintenance, portail d'authentification) n'est jamais gardée.
+  Les fichiers du bundle qu'elle ne nomme plus, ceux des versions précédentes,
+  sont effacés.
+
 **Une nouvelle version.** Chaque appareil compare la version du serveur à celle
 de son propre JavaScript à chaque relecture de la configuration — toutes les
 60 s au repos, et au retour au premier plan. Quand elles diffèrent, la barre
@@ -1141,7 +1152,7 @@ aller vérifier.
 | Vendre | Oui, au tarif embarqué ; la vente part en file d'attente |
 | Rendre la monnaie | Oui, calculé localement |
 | Scanner un billet | Oui, contre la **liste embarquée** (`openpos/offline/`), chargée dès l'appairage pour la liste de la porte — pas seulement à l'ouverture du scan — et rafraîchie toutes les 5 min tant qu'il y a du réseau. **Seulement sur un appareil qui a la porte** (rôle porte, ou sans rôle) : une caisse de bar ne la charge jamais, et efface celle qu'elle avait |
-| Redémarrer la caisse | Oui : catalogue et configuration du dernier chargement sont conservés par événement |
+| Redémarrer la caisse | Oui : catalogue et configuration du dernier chargement sont conservés par événement, et l'app elle-même vient de la copie gardée par le service worker — sans réseau, mais aussi quand le serveur répond par une erreur 5xx ou pas du tout en 4 s (§2.6). Une caisse rouverte pendant une panne du serveur affichait auparavant la page d'erreur du proxy, et ne pouvait plus vendre |
 | Historique, annulation, effectif | Non — ils demandent le serveur, et l'écran le dit |
 
 Un scan tenté en ligne qui n'aboutit pas — réseau coupé pendant le scan, pretix
