@@ -16,10 +16,12 @@ two connections, is at the bottom, for PostgreSQL.
 """
 import threading
 import time
+from contextlib import contextmanager
 from decimal import Decimal
+from types import SimpleNamespace
 
 import pytest
-from django.db import connection, connections
+from django.db import OperationalError, connection, connections
 from django.utils.timezone import now
 from pretix.base.models import Checkin, Order
 
@@ -369,6 +371,80 @@ def test_an_invoice_failing_in_the_database_still_leaves_the_check_in(
     assert order.all_logentries().filter(
         action_type="pretix.event.order.invoice.failed"
     ).exists()
+
+
+# -- the lock itself, on any database ---------------------------------------------
+#
+# The lock is PostgreSQL's, and the tests that watch it hold two attempts apart
+# only run there (below). What it is asked to lock, and what the till is told
+# when the wait runs out, can be checked anywhere: the connection is stood in
+# for, at the one place the lock is taken.
+
+
+class _PostgresStandIn:
+    """What the lock would have sent PostgreSQL, and PostgreSQL giving up on it."""
+
+    vendor = "postgresql"
+
+    def __init__(self, gives_up=False):
+        self.gives_up = gives_up
+        self.statements = []
+
+    @contextmanager
+    def cursor(self):
+        yield self
+
+    def execute(self, sql, params=None):
+        self.statements.append((sql, params))
+        if self.gives_up and "pg_advisory_xact_lock" in sql:
+            raise OperationalError("canceling statement due to lock timeout")
+
+    def lock_taken(self):
+        return next(params for sql, params in self.statements if "pg_advisory_xact_lock" in sql)
+
+
+@pytest.mark.django_db
+def test_every_worker_takes_the_same_lock_for_the_same_sale(monkeypatch, event):
+    stand_in = _PostgresStandIn()
+    monkeypatch.setattr(views, "connection", stand_in)
+
+    def lock_for(on_event, key):
+        stand_in.statements.clear()
+        views._lock_idempotency_key(on_event, key)
+        return stand_in.lock_taken()
+
+    # A number no worker could arrive at differently: fixed by the event and
+    # the key alone, not by anything a process picks for itself at start-up
+    # the way Python's own hash() does.
+    assert lock_for(SimpleNamespace(pk=1), "stable-key-01") == [views.KEY_LOCK_CLASS, -1913388828]
+    assert lock_for(event, "same-key-01") == lock_for(event, "same-key-01")
+    assert lock_for(event, "same-key-01") != lock_for(event, "other-key-01")
+    assert lock_for(event, "same-key-01") != lock_for(SimpleNamespace(pk=event.pk + 1), "same-key-01")
+    # Waited on for a bounded time, which then stops applying to the rest of
+    # the transaction: pretix' own locks further on keep their own patience.
+    assert [sql for sql, _params in stand_in.statements] == [
+        f"SET LOCAL lock_timeout = '{views.KEY_WAIT_SECONDS}s'",
+        "SELECT pg_advisory_xact_lock(%s, %s)",
+        "SET LOCAL lock_timeout TO DEFAULT",
+    ]
+
+
+@pytest.mark.django_db
+def test_a_sale_whose_key_stays_held_is_answered_not_now(monkeypatch, till, event, ticket):
+    monkeypatch.setattr(views, "connection", _PostgresStandIn(gives_up=True))
+
+    response = sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="held-key-01")
+
+    # A 5xx, which the app sends again under the same key, rather than a 4xx,
+    # which it would list as a refused sale.
+    assert response.status_code == 503
+    assert response["Retry-After"] == "2"
+    assert response.json() == {
+        "detail": "This sale is still being recorded. Try again in a moment.",
+        "code": "sale_in_progress",
+    }
+    assert not PosSale.objects.exists()
+    assert not Order.objects.filter(event=event).exists()
 
 
 # -- two real connections, for PostgreSQL ---------------------------------------
