@@ -1,8 +1,9 @@
+import { noteServerTime } from "./clock";
 import { markReachable, markUnreachable } from "./connectivity";
 import type {
-  Attendance, AttendeeMatch, CancelResult, Catalog, DeviceDescription, DrawerAnswer,
-  DrawerState, History, InitializeResponse, OfflineSnapshot, Pairing, PosConfig, PosEventList,
-  RedeemResult, SaleResult, SummaryResponse, TerminalPayment,
+  Attendance, AttendeeMatch, CancelResult, Catalog, DeviceDescription, DeviceStatus,
+  DrawerAnswer, DrawerState, History, InitializeResponse, OfflineSnapshot, Pairing, PosConfig,
+  PosEventList, RedeemResult, SaleResult, SummaryResponse, TerminalPayment,
 } from "./types";
 
 const BASE = "/api/v1";
@@ -10,12 +11,18 @@ const BASE = "/api/v1";
 export class ApiError extends Error {
   readonly status: number;
   readonly body: unknown;
+  /**
+   * How long the server asked to be left alone, when it said: a 429's
+   * ``Retry-After``, in milliseconds. Null when it did not say.
+   */
+  readonly retryAfterMs: number | null;
 
-  constructor(status: number, message: string, body?: unknown) {
+  constructor(status: number, message: string, body?: unknown, retryAfterMs: number | null = null) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.body = body;
+    this.retryAfterMs = retryAfterMs;
   }
 
   /** True when the request never reached the server. */
@@ -65,6 +72,23 @@ function describe(body: unknown, fallback: string): string {
     if (parts.length) return parts.join(" ");
   }
   return fallback;
+}
+
+/**
+ * ``Retry-After``, read as the milliseconds to wait from now.
+ *
+ * The header comes in two spellings — a number of seconds, or a date — and
+ * both are read, because what sits in front of pretix is not always pretix: a
+ * proxy or a CDN rate-limiting the venue's one public address is as likely to
+ * send it as the server itself. Anything else is no answer rather than a
+ * guess.
+ */
+export function parseRetryAfter(value: string | null, now = Date.now()): number | null {
+  if (!value) return null;
+  const text = value.trim();
+  if (/^\d+$/.test(text)) return Number(text) * 1000;
+  const at = Date.parse(text);
+  return Number.isFinite(at) ? Math.max(at - now, 0) : null;
 }
 
 /**
@@ -119,16 +143,23 @@ async function request<T>(
     token?: string;
     signal?: AbortSignal;
     timeoutMs?: number;
+    /**
+     * A request nobody is waiting on, whose failure says nothing the till
+     * should act on: the status report. It still brings the till back online
+     * when it is answered, but a failure of its own does not take it offline —
+     * see ``api.deviceStatus``.
+     */
+    background?: boolean;
   } = {},
 ): Promise<T> {
-  const { method = "GET", body, token, signal } = options;
+  const { method = "GET", body, token, signal, background = false } = options;
   const timeout = withTimeout(
     signal,
     options.timeoutMs ?? (method === "GET" ? READ_TIMEOUT_MS : WRITE_TIMEOUT_MS),
   );
 
   try {
-    return await send<T>(path, { method, body, token, signal, inner: timeout.signal });
+    return await send<T>(path, { method, body, token, signal, inner: timeout.signal, background });
   } finally {
     timeout.done();
   }
@@ -143,9 +174,10 @@ async function send<T>(
     /** The caller's own signal, for telling their abort from our timeout. */
     signal?: AbortSignal;
     inner: AbortSignal;
+    background: boolean;
   },
 ): Promise<T> {
-  const { method, body, token, signal, inner } = options;
+  const { method, body, token, signal, inner, background } = options;
 
   let response: Response;
   try {
@@ -166,11 +198,13 @@ async function send<T>(
     // own timeout lands here too, deliberately — a request that hung for
     // fifteen seconds and one that was refused by the interface are the same
     // thing from behind the counter.
-    markUnreachable();
+    if (!background) markUnreachable();
     throw new ApiError(0, "network", e);
   }
-  // An answer of any kind — even a refusal — means the server is there.
-  markReachable();
+  // An answer of any kind — even a refusal — means the server is there. Not a
+  // background request's fault, though: it would put the till online on the
+  // strength of a 502, which says the opposite.
+  if (!(background && response.status >= 500)) markReachable();
 
   const text = await response.text();
   let parsed: unknown = null;
@@ -187,22 +221,27 @@ async function send<T>(
     // there: proxies answer 502/503/504 for a backend that is down, and a 500
     // means it cannot take this sale either. The probe corrects the label within
     // seconds if it turns out only one endpoint was unwell.
-    if (response.status >= 500) markUnreachable();
-    throw new ApiError(response.status, describe(parsed, `HTTP ${response.status}`), parsed);
+    if (response.status >= 500 && !background) markUnreachable();
+    throw new ApiError(
+      response.status,
+      describe(parsed, `HTTP ${response.status}`),
+      parsed,
+      parseRetryAfter(response.headers.get("Retry-After")),
+    );
   }
   return parsed as T;
 }
 
 /**
- * Whether a failure means "not now" rather than "no".
+ * Whether a failure leaves it unknown what the server did.
  *
  * The distinction is what makes both the offline queue and a retried
  * cancellation safe. A transport failure or any fault from the server means the
  * request was not processed — or that we cannot know, which comes to the same
  * thing because every one of them carries an idempotency key — so it is worth
- * repeating verbatim. Only a 4xx is the server understanding and refusing, and
- * that is the one case where retrying forever would hide a problem instead of
- * solving it.
+ * repeating verbatim. A 4xx is the server answering, which is not the same as
+ * the server refusing: see ``isRefusal`` for the one answer that is "no" for
+ * good, and ``isThrottled`` for "not now".
  *
  * Getting this wrong in the lenient direction costs a duplicate request. Getting
  * it wrong the other way takes a paid sale out of the queue and it never reaches
@@ -210,6 +249,44 @@ async function send<T>(
  */
 export function isRetryable(error: unknown): boolean {
   return error instanceof ApiError && (error.isNetwork || error.status >= 500);
+}
+
+/**
+ * Whether a failure is the server refusing *this* request, for good.
+ *
+ * Narrower than "not retryable", and the difference is the whole of the rule
+ * the offline queue lives by. A 400 carrying the server's reasons — the shape
+ * every Open POS refusal takes — is about the request in hand: this sale, this
+ * payment, this count, and sending it again will be refused again. Every other
+ * status says something about the till or the moment instead. A 401 or a 403
+ * is the device being turned away, and would turn away every sale in the
+ * queue the same way; a 404 is an address that is not there; a 429 or a 408
+ * is "not now". None of them is a reason to give up on a sale somebody has
+ * already paid for, and treating them as one is how a revoked tablet emptied
+ * its whole queue into the refusals list, with nothing left to send once it
+ * was paired again.
+ *
+ * A 400 with no body to speak of — a page from a proxy — is not the server
+ * speaking either, and is left out for the same reason.
+ */
+export function isRefusal(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    error.status === 400 &&
+    typeof error.body === "object" &&
+    error.body !== null
+  );
+}
+
+/**
+ * The server, or something in front of it, asking for a moment's peace.
+ *
+ * A 429 is the rate limit; a 408 is a proxy that gave up waiting for the
+ * request itself. Either way nothing was done, so the same request, under
+ * the same key, is the right thing to send again — only not straight away.
+ */
+export function isThrottled(error: unknown): boolean {
+  return error instanceof ApiError && (error.status === 429 || error.status === 408);
 }
 
 /**
@@ -310,10 +387,22 @@ export const api = {
     return request("/device/revoke", { method: "POST", token });
   },
 
-  config(p: Pairing): Promise<PosConfig> {
-    return request(`/organizers/${p.organizer}/events/${p.event}/openpos/config/`, {
-      token: p.token,
-    });
+  /**
+   * What this till sells and how, for its event.
+   *
+   * The answer carries the server's clock, and the moment of asking is
+   * noted on the way through — see clock.ts — so a tablet whose clock has
+   * drifted finds out at the first launch of the evening, not from a refused
+   * replay at the end of it.
+   */
+  async config(p: Pairing): Promise<PosConfig> {
+    const sentAt = Date.now();
+    const config = await request<PosConfig>(
+      `/organizers/${p.organizer}/events/${p.event}/openpos/config/`,
+      { token: p.token },
+    );
+    noteServerTime(config?.server_time, sentAt, Date.now());
+    return config;
   },
 
   catalog(p: Pairing, signal?: AbortSignal): Promise<Catalog> {
@@ -332,8 +421,12 @@ export const api = {
       cash_given?: string | null;
       cashier?: string;
       expected_total?: string;
-      /** Set only when replaying a sale rung up with no network. */
-      offline?: { recorded_at: string; charged_total: string };
+      /**
+       * Set only when replaying a sale rung up with no network. ``sent_at`` is
+       * this device's clock at the moment of sending, which is what lets the
+       * server correct ``recorded_at`` for a tablet whose clock is wrong.
+       */
+      offline?: { recorded_at: string; charged_total: string; sent_at?: string };
     },
   ): Promise<SaleResult> {
     return request(`/organizers/${p.organizer}/events/${p.event}/openpos/checkout/`, {
@@ -484,6 +577,27 @@ export const api = {
     },
   ): Promise<DrawerAnswer> {
     return drawerPost(p, "close", payload);
+  },
+
+  /**
+   * Tell the back office what this device is holding.
+   *
+   * Sales rung up with no network are money pretix has not heard of yet, and
+   * without this the only place anybody could see them was this screen. The
+   * answer is the server's clock, which feeds the same check as the config.
+   *
+   * A background request: `useDeviceStatus` sends it on its own schedule and
+   * nobody waits on it, so a failure is silent — and does not take the till
+   * offline either, which would stop sales over a report nobody asked for.
+   */
+  async deviceStatus(p: Pairing, status: DeviceStatus): Promise<{ server_time?: string } | null> {
+    const sentAt = Date.now();
+    const answer = await request<{ server_time?: string } | null>(
+      `/organizers/${p.organizer}/openpos/status/`,
+      { method: "POST", body: status, token: p.token, background: true },
+    );
+    noteServerTime(answer?.server_time, sentAt, Date.now());
+    return answer;
   },
 
   summary(p: Pairing): Promise<SummaryResponse> {

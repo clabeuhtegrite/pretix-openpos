@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
-import { api, ApiError, errorCode, type PositionPayload } from "./api";
+import { api, ApiError, errorCode, isRetryable, isThrottled } from "./api";
 import { basketFromJournal, customKey, refundKey, repriceCart } from "./basket";
+import { formatDrift, useClockSkew } from "./clock";
 import CheckinScreen from "./components/CheckinScreen";
 import CustomSalePanel from "./components/CustomSalePanel";
 import DoneScreen from "./components/DoneScreen";
@@ -14,28 +15,34 @@ import PaymentPanel from "./components/PaymentPanel";
 import SaleScreen, { type Sellable } from "./components/SaleScreen";
 import SettingsPanel from "./components/SettingsPanel";
 import SyncPanel from "./components/SyncPanel";
-import { briefOf, cashBlockedBy, drawerIcon } from "./drawer";
+import { briefOf, cashBlockedBy, drawerIcon, moment } from "./drawer";
 import { describeError } from "./errors";
-import { t } from "./i18n";
-import { fromCents, toCents } from "./money";
+import { t, tn } from "./i18n";
+import { formatMoney, fromCents, toCents } from "./money";
 import { newNonce } from "./nonce";
+import {
+  admitsAnyone, basketTotals, positionsOf, queuedResultOf, queuedSaleOf,
+} from "./payment";
 import { play, setSoundEnabled, soundEnabled, unlock } from "./sound";
 import {
-  clearBasket, clearPairing, enqueue, loadBasket, loadCached, loadCashier, loadFailures,
-  loadPairing, loadQueue, loadUpdateAttempt, queueRevocation, requestPersistence, saveBasket,
-  saveCached, saveCashier, savePairing, saveUpdateAttempt,
+  addOrphan, clearBasket, clearPairing, clearPendingPayment, enqueue, isResumable, loadBasket,
+  loadCached, loadCashier, loadFailures, loadPairing, loadPendingPayment, loadQueue,
+  loadUpdateAttempt, queueRevocation, requestPersistence, saveBasket, saveCached, saveCashier,
+  savePairing, savePendingPayment, saveUpdateAttempt,
 } from "./storage";
 import { useConnectivity } from "./connectivity";
 import { drainQueue } from "./sync";
 import { applyTheme, loadTheme, saveTheme, watchDeviceTheme, type Theme } from "./theme";
 import type {
-  Catalog, CartLine, Credit, DeviceRole, DrawerState, Pairing, PaymentType, PosConfig,
-  QueuedSale, SaleResult, SyncReport,
+  Catalog, CartLine, Credit, DeviceRole, DrawerState, Pairing, PaymentType, PendingPayment,
+  PosConfig, SaleResult, SyncReport,
 } from "./types";
 import { useBackClose } from "./useBackClose";
+import { useDeviceStatus } from "./useDeviceStatus";
 import { markDeviceReported, useDeviceReport } from "./useDeviceReport";
 import { useDeviceRevoke } from "./useDeviceRevoke";
 import { useOfflineSnapshot } from "./useOfflineSnapshot";
+import { useOrphanPayments } from "./useOrphanPayments";
 import { useTerminal } from "./useTerminal";
 import { useWakeLock } from "./useWakeLock";
 
@@ -55,6 +62,21 @@ const CATALOG_REFRESH_MS = 60_000;
  * writes, and nothing at all once the queue is empty.
  */
 const DRAIN_RETRY_MS = 15_000;
+
+/**
+ * One way of settling the basket, as the sale will be recorded.
+ *
+ * `key` is the sale's idempotency key: minted when the payment panel opened,
+ * for cash and a card taken outside the till; the reader payment's own, for a
+ * card the reader took — the server finds that payment by it.
+ */
+interface Attempt {
+  key: string;
+  paymentType: PaymentType;
+  cashGiven: string | null;
+  /** What the card reader took, when one did. */
+  charged: string | null;
+}
 
 /**
  * The check-in list this device scans on.
@@ -137,14 +159,33 @@ export default function App() {
   const [loadError, setLoadError] = useState<{ text: string; refused: boolean } | null>(null);
 
   /**
+   * A payment this till was in the middle of when it last stopped, if it is
+   * still the one in front of somebody — see storage's PendingPayment. It is
+   * picked up where it was once the till is open again: see the effect that
+   * resumes it.
+   */
+  const resumable = useState(() => {
+    const payment = pairing ? loadPendingPayment() : null;
+    return payment && pairing && isResumable(payment, pairing.event) ? payment : null;
+  })[0];
+
+  /**
    * The basket, restored if this till was interrupted mid-sale.
    *
    * Read once, from the same storage the effect below writes to, and only for
    * the event this till is paired to. What comes back is priced as it was
    * left; the catalogue may have moved since, which is what the reprice below
-   * settles before the operator reads a figure out to anybody.
+   * settles before the operator reads a figure out to anybody. A payment that
+   * was on its way brings the basket it was made of instead: that is what the
+   * customer paid for, at the prices they were told.
    */
-  const restored = useState(() => (pairing ? loadBasket(pairing.event) : null))[0];
+  const restored = useState(() =>
+    resumable
+      ? { cart: resumable.cart, credit: resumable.credit }
+      : pairing
+        ? loadBasket(pairing.event)
+        : null,
+  )[0];
   const [cart, setCart] = useState<CartLine[]>(() => restored?.cart ?? []);
   const [cashier, setCashier] = useState<string>(loadCashier);
   const [theme, setTheme] = useState<Theme>(loadTheme);
@@ -152,21 +193,41 @@ export default function App() {
   /** Read once at startup: the server version a previous reload already tried. */
   const [updateTried] = useState<string | null>(loadUpdateAttempt);
 
-  // Non-null while the payment panel is open. The key is minted once per
-  // attempt and reused across retries, so a timeout that actually committed
-  // cannot turn into a second sale.
-  const [paying, setPaying] = useState<{ key: string } | null>(null);
-  const terminal = useTerminal(pairing, (payment) => {
+  /**
+   * Non-null while the payment panel is open.
+   *
+   * The key is the sale's, for cash and for a card taken outside the till:
+   * minted once when the panel opens and reused across retries, so a timeout
+   * that actually committed cannot turn into a second sale. A card reader
+   * payment carries a key of its own, one per attempt — see startTerminal —
+   * so cash taken after a card attempt never travels under the reader's key.
+   * `method` and `resumed` are only set for a payment picked up after a reload.
+   */
+  const [paying, setPaying] = useState<{
+    key: string;
+    method?: PaymentType;
+    resumed?: boolean;
+  } | null>(null);
+  const terminal = useTerminal(pairing, (payment, key) => {
     // The reader has the money. What follows is the same call as any other
     // card sale — the server looks the payment up against this device before
     // it writes anything down, which is the whole point of doing it this way.
-    void confirmPayment("card", null, payment.amount);
+    void record({ key, paymentType: "card", cashGiven: null, charged: payment.amount });
   });
   const resetTerminal = terminal.reset;
   const [busy, setBusy] = useState(false);
-  const [payError, setPayError] = useState<string | null>(null);
+  /**
+   * Why the last attempt to record the sale did not, and whether that is
+   * final: `refused` is the server saying no to this sale for good, as
+   * opposed to "not now".
+   */
+  const [payError, setPayError] = useState<{ text: string; refused: boolean } | null>(null);
+  /** The key a checkout is on its way for: one request per sale at a time. */
+  const recordingRef = useRef<string | null>(null);
 
   const [sale, setSale] = useState<SaleResult | null>(null);
+  /** Said on the done screen about how the sale got there: a payment picked up after a reload. */
+  const [saleNote, setSaleNote] = useState<string | null>(null);
   const [customOpen, setCustomOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [checkinOpen, setCheckinOpen] = useState(false);
@@ -207,6 +268,17 @@ export default function App() {
   useDeviceReport(pairing, online);
   // So that a till unpaired here reads revoked there, not active.
   useDeviceRevoke(pairing, online);
+  // So that the back office sees the sales this device holds, and since when.
+  useDeviceStatus(pairing, online, pending);
+  /** Minutes this device's clock is off the server's, when it is off enough to say. */
+  const drift = useClockSkew();
+  // Reader payments left aside unanswered, followed up once the server is back.
+  const readerOnScreen =
+    terminal.state !== null &&
+    (terminal.state.phase === "starting" ||
+      terminal.state.phase === "checking" ||
+      terminal.state.phase === "waiting");
+  const orphans = useOrphanPayments(pairing, online, readerOnScreen);
 
   // main.tsx has already painted this once before the first render; running it
   // again here is what makes a change in the settings panel take effect, and
@@ -263,7 +335,7 @@ export default function App() {
    * figure the operator reads out to a customer has to be right the first
    * time. Once only: after this the ordinary refresh owns the prices.
    */
-  const repriced = useRef(restored === null);
+  const repriced = useRef(restored === null || resumable !== null);
   useEffect(() => {
     if (!catalog || repriced.current) return;
     repriced.current = true;
@@ -295,16 +367,28 @@ export default function App() {
   // server would survive it — every entry is idempotent — but the report would
   // count each sale twice.
   const syncingRef = useRef(false);
+  /**
+   * Before this, an automatic run does not try: the server asked for a moment
+   * (a 429 and its Retry-After). "Send now" is the cashier asking, and goes
+   * regardless.
+   */
+  const notBeforeRef = useRef(0);
 
-  const sync = useCallback(async () => {
+  const sync = useCallback(async (asked = false) => {
     if (!pairing || syncingRef.current) return;
+    if (!asked && Date.now() < notBeforeRef.current) return;
     syncingRef.current = true;
     setSyncing(true);
     try {
       const report = await drainQueue(pairing);
-      // Only worth showing when it did something: draining an empty queue on
-      // every reconnection would be a dialog nobody asked for.
-      if (report.sales || report.checkins || report.failed) setLastSync(report);
+      notBeforeRef.current = report.halted?.retryAt ?? 0;
+      // Only worth showing when it did something, or has something to say
+      // about why it stopped: draining an empty queue on every reconnection
+      // would be a dialog nobody asked for.
+      if (report.sales || report.checkins || report.failed || report.halted) setLastSync(report);
+    } catch {
+      // drainQueue keeps its own failures to itself; nothing to add here but
+      // not letting one escape as an unhandled rejection.
     } finally {
       syncingRef.current = false;
       setPending(loadQueue().length);
@@ -685,6 +769,40 @@ export default function App() {
   }
 
   /**
+   * The payment about to leave, as it is written down before it does.
+   *
+   * Built from the basket on screen — which, for a payment picked up after a
+   * reload, is the basket that payment was made of.
+   */
+  function pendingOf(stage: PendingPayment["stage"], attempt: Attempt, at: string): PendingPayment {
+    return {
+      event: pairing!.event,
+      key: attempt.key,
+      stage,
+      paymentType: attempt.paymentType,
+      cashGiven: attempt.cashGiven,
+      charged: attempt.charged,
+      cart,
+      credit,
+      cashier,
+      admits: admitsAnyone(cart, config?.admission_items ?? []),
+      currency: config?.event.currency ?? "",
+      at,
+    };
+  }
+
+  /** The sale is recorded, or queued: the panel closes on the done screen. */
+  function finish(result: SaleResult, note: string | null) {
+    setSale(result);
+    setSaleNote(note);
+    setPaying(null);
+    setPayError(null);
+    setCart([]);
+    // Spent: the corrected order has been settled against it.
+    setCredit(null);
+  }
+
+  /**
    * Record a sale the server cannot be told about yet.
    *
    * Written to storage before anything is shown, and only then confirmed: if
@@ -692,174 +810,97 @@ export default function App() {
    * customer is still standing there — rather than being shown a receipt for
    * something that will never exist.
    */
-  function sellOffline(
-    paymentType: PaymentType,
-    cashGiven: string | null,
-    charged?: string,
-  ): SaleResult {
-    const admissionItems = new Set(config?.admission_items ?? []);
-    const entry: QueuedSale = {
-      kind: "sale",
-      id: paying!.key,
-      at: new Date().toISOString(),
-      event: pairing!.event,
-      positions: cart.map((line) => ({
-        item: line.itemId,
-        variation: line.variationId,
-        count: line.count,
-        // What the customer was charged, from the tariff this till had cached.
-        // The server compares it with its own on replay and reports any gap.
-        // Negative on a deposit handed back, which is the same statement of
-        // fact pointing the other way.
-        price: fromCents(line.unitPrice),
-        ...(line.description ? { description: line.description } : {}),
-        ...(line.refund ? { refund: true } : {}),
-      })),
-      // What the reader took, when one did: the server priced this basket
-      // when it put it on the reader, and that is the figure the customer
-      // agreed to. Without it the receipt and the sync panel read out this
-      // app's own total, which is not what the card paid.
-      chargedTotal: charged ?? fromCents(total),
-      paymentType,
-      cashGiven,
-      cashChange:
-        cashGiven === null ? null : fromCents(Math.max(toCents(cashGiven) - total, 0)),
-      cashier,
-      // A returned cup lets nobody in, whatever product it is booked against.
-      admits: cart.some((line) => !line.refund && admissionItems.has(line.itemId)),
-      label: cart.map((line) => `${line.count}× ${line.label}`).join(", "),
-    };
-    enqueue(entry);
-    setPending(loadQueue().length);
-
-    // Shaped like a server answer so every screen downstream stays unchanged;
-    // what it does not have is an order code, because no order exists yet.
-    return {
-      order: { code: "", total: fromCents(Math.max(soldCents, 0)), url: null },
-      journal_seq: 0,
-      payment_type: paymentType,
-      cash_given: cashGiven,
-      cash_change: entry.cashChange,
-      datetime: entry.at,
-      replayed: false,
-      // Nobody has been checked in server-side; the replay will do it. The
-      // basket still decides whether a person walks in, which is what the
-      // screen is about to say.
-      checked_in: entry.admits ? 1 : 0,
-      checkin_errors: [],
-      offline: true,
-      deposit_refund: refundedCents > 0 ? fromCents(refundedCents) : null,
-      net_total: entry.chargedTotal,
-    };
-  }
-
-  /**
-   * The basket as the server wants it: products and quantities.
-   *
-   * The same statement whether it is going to the card reader or to the
-   * checkout, which is what makes the card charge and the order agree — the
-   * reader is sent exactly what the order will be built from.
-   */
-  function positionsPayload(): PositionPayload[] {
-    return cart.map((line) => ({
-      item: line.itemId,
-      variation: line.variationId,
-      count: line.count,
-      // The two lines the server cannot price on its own: a free amount comes
-      // with its figure and its reason, a returned deposit only says that it
-      // is one.
-      ...(line.description
-        ? { price: fromCents(line.unitPrice), description: line.description }
-        : {}),
-      ...(line.refund ? { refund: true } : {}),
-    }));
-  }
-
-  /**
-   * Put the basket on the card reader, under a key this sale will carry.
-   *
-   * A fresh key on every attempt, including a retry after a refusal: the
-   * server remembers a reader payment by its key, so reusing a spent one would
-   * find the refusal it already recorded instead of asking for a card again.
-   */
-  function startTerminal() {
-    const key = newNonce();
-    setPaying({ key });
-    void terminal.start(key, positionsPayload());
+  function queueSale(payment: PendingPayment, note: string | null) {
+    try {
+      const entry = queuedSaleOf(payment);
+      enqueue(entry);
+      // In the queue now, under the same key: that is where it lives until
+      // it is sent.
+      clearPendingPayment(payment.key);
+      setPending(loadQueue().length);
+      finish(queuedResultOf(entry, payment.cart), note);
+    } catch {
+      setPayError({ text: t("offline.queueFailed"), refused: false });
+    }
   }
 
   /**
    * Record the sale the customer has just paid for.
+   *
+   * Written down before the request leaves — see PendingPayment — so that a
+   * till killed while it waits sends the same sale again, under the same key,
+   * when it comes back, and the server answers with the sale it already made
+   * rather than making a second one. The record goes once the answer is in:
+   * the sale made, queued, or refused for good.
    *
    * `charged` is what a card reader took, when one did: the server priced the
    * basket when it put it on the reader, and that figure — not this app's,
    * whose catalogue can be a refresh behind — is the one the customer agreed
    * to by tapping their card.
    */
-  async function confirmPayment(
-    paymentType: PaymentType,
-    cashGiven: string | null,
-    charged?: string,
-  ) {
-    if (!pairing || !paying) return;
+  async function record(attempt: Attempt, note: string | null = null) {
+    if (!pairing) return;
+    // One request per sale at a time: a second "paid" from the reader, or a
+    // second tap, while the first is on its way would only ask the same thing.
+    if (recordingRef.current === attempt.key) return;
+    // Asked again after an answer that was not final: still the moment the
+    // customer paid, which is the time a queued sale is filed under.
+    const earlier = loadPendingPayment();
+    const at =
+      earlier?.key === attempt.key && earlier.stage === "sale"
+        ? earlier.at
+        : new Date().toISOString();
+    const payment = pendingOf("sale", attempt, at);
+    savePendingPayment(payment);
 
     if (!online) {
       setPayError(null);
-      try {
-        const result = sellOffline(paymentType, cashGiven, charged);
-        setSale(result);
-        setPaying(null);
-        setCart([]);
-        setCredit(null);
-      } catch {
-        setPayError(t("offline.queueFailed"));
-      }
+      queueSale(payment, note);
       return;
     }
 
+    recordingRef.current = attempt.key;
     setBusy(true);
     setPayError(null);
     try {
       const result = await api.checkout(pairing, {
-        idempotency_key: paying.key,
-        positions: positionsPayload(),
-        payment_type: paymentType,
-        cash_given: cashGiven,
-        cashier,
+        idempotency_key: attempt.key,
+        positions: positionsOf(payment.cart),
+        payment_type: attempt.paymentType,
+        cash_given: attempt.cashGiven,
+        cashier: payment.cashier,
         // What the customer was just told. The server refuses rather than
         // charge a different figure — except once a reader has taken the
         // money, where the figure the customer agreed to is the one on the
         // reader, and the basket is the one the server pinned for it.
-        expected_total: charged ?? fromCents(total),
+        expected_total: attempt.charged ?? fromCents(basketTotals(payment.cart).total),
       });
-      setSale(result);
-      setPaying(null);
-      setCart([]);
-      // Spent: the corrected order has been settled against it.
-      setCredit(null);
+      clearPendingPayment(attempt.key);
+      finish(result, note);
     } catch (err) {
-      if (err instanceof ApiError && (err.isNetwork || err.status >= 500)) {
+      if (isRetryable(err)) {
         // The server could not take this sale: the network died, or it answered
         // with a fault of its own. Either way the sale is not lost and the
         // customer is not asked to pay again — it goes to the queue under the
         // SAME idempotency key, so if the request did in fact commit before the
         // answer went missing, the replay recognises it and returns the
         // original order instead of selling a second time.
-        //
-        // A 4xx is the opposite case and deliberately not caught here: the
-        // server understood and refused, and queueing a refusal would only mean
-        // being refused again later, out of sight of the person who could fix it.
-        try {
-          const queued = sellOffline(paymentType, cashGiven, charged);
-          setSale(queued);
-          setPaying(null);
-          setCart([]);
-          setCredit(null);
-        } catch {
-          setPayError(t("offline.queueFailed"));
-        }
+        queueSale(payment, note);
         return;
       }
+      if (isThrottled(err)) {
+        // "Not now", and nothing was done: the panel stays as it is, the
+        // record with it, and "Confirm" sends the same sale again in a moment.
+        setPayError({ text: describeError(err), refused: false });
+        return;
+      }
+      // Refused: the server understood and said no. Queueing a refusal would
+      // only mean being refused again later, out of sight of the person who
+      // could fix it. Nothing was recorded, so the record goes — except when
+      // a reader has taken the money: that sale is still owed to pretix, and
+      // it is kept until the cashier lets it go with "Back".
+      const readerPaid = attempt.charged !== null;
+      if (!readerPaid) clearPendingPayment(attempt.key);
       const code = errorCode(err);
       if (code === "drawer_closed" || code === "drawer_stale") {
         // The drawer was closed under this till — on the other tablet, or from
@@ -881,11 +922,66 @@ export default function App() {
           })
           .catch(() => {});
       }
-      setPayError(describeError(err));
+      setPayError({ text: describeError(err), refused: readerPaid });
     } finally {
+      if (recordingRef.current === attempt.key) recordingRef.current = null;
       setBusy(false);
     }
   }
+
+  /** What the panel's "Confirm" sends: the sale's key, or the reader payment's. */
+  function confirmPayment(paymentType: PaymentType, cashGiven: string | null, charged?: string) {
+    if (!paying) return;
+    const key = charged !== undefined && terminal.state ? terminal.state.key : paying.key;
+    void record({ key, paymentType, cashGiven, charged: charged ?? null });
+  }
+
+  /**
+   * Put the basket on the card reader, under a key of its own.
+   *
+   * A fresh key on every attempt, including a retry after a refusal: the
+   * server remembers a reader payment by its key, so reusing a spent one would
+   * find the refusal it already recorded instead of asking for a card again.
+   * And never the sale's key, which is what cash taken instead would travel
+   * under: that one must stay free of anything the reader did.
+   */
+  function startTerminal() {
+    if (!pairing || !config) return;
+    const key = newNonce();
+    const attempt: Attempt = { key, paymentType: "card", cashGiven: null, charged: null };
+    // Written before the basket leaves for the reader: a till killed while
+    // the customer holds their card comes back asking how it ended.
+    savePendingPayment(pendingOf("reader", attempt, new Date().toISOString()));
+    void terminal.start(key, positionsOf(cart), {
+      amount: fromCents(basketTotals(cart).total),
+      currency: config.event.currency,
+    });
+  }
+
+  /**
+   * The way out of a reader wait the server stopped answering: the payment
+   * is left aside — useTerminal keeps it to ask about once it can — and the
+   * sale is about to be taken in cash, under the sale's own key.
+   */
+  function abandonReader() {
+    const key = terminal.state?.key;
+    terminal.abandon();
+    if (key) clearPendingPayment(key);
+  }
+
+  /** "Back": whatever was on its way for this basket is not any more. */
+  function leavePayment() {
+    clearPendingPayment();
+    setPayError(null);
+    setPaying(null);
+  }
+
+  // A reader payment that ended — declined, cancelled, refused before it
+  // started — has nothing left to pick up after a reload.
+  const readerFailedKey = terminal.state?.phase === "failed" ? terminal.state.key : null;
+  useEffect(() => {
+    if (readerFailedKey) clearPendingPayment(readerFailedKey);
+  }, [readerFailedKey]);
 
   // The panel has closed — the sale went through, or the basket came back.
   // Either way nothing is on the reader any more as far as this till goes.
@@ -893,9 +989,97 @@ export default function App() {
     if (paying === null) resetTerminal();
   }, [paying, resetTerminal]);
 
+  /**
+   * A payment on its way when the till last stopped, from another evening or
+   * another event: nothing to put back on screen, and nothing to lose either.
+   * A sale that was sent is money that changed hands, and goes to the queue
+   * under its key — sent again, the server answers with what it already
+   * made, or files it. A reader payment is left aside and asked about.
+   */
+  useEffect(() => {
+    if (!pairing) return;
+    const payment = loadPendingPayment();
+    if (!payment || isResumable(payment, pairing.event)) return;
+    if (payment.stage === "sale") {
+      try {
+        enqueue(queuedSaleOf(payment));
+        setPending(loadQueue().length);
+      } catch {
+        // Kept where it is, and tried again at the next launch.
+        return;
+      }
+    } else {
+      addOrphan({
+        event: payment.event,
+        key: payment.key,
+        at: payment.at,
+        amount: fromCents(basketTotals(payment.cart).total),
+        currency: payment.currency,
+      });
+    }
+    clearPendingPayment(payment.key);
+  }, [pairing]);
+
+  /**
+   * Pick up the payment the till was in the middle of, once it is open again.
+   *
+   * A sale that was sent is sent again under the same key and ends on the
+   * done screen, saying why; with no network it is queued, under that key
+   * too. A reader payment is asked about before anything else is said: the
+   * customer may have paid while the till was away. Once, whichever it was.
+   */
+  const toResume = useRef(resumable);
+  useEffect(() => {
+    const payment = toResume.current;
+    if (!payment || !config || !pairing) return;
+    toResume.current = null;
+    // The till was switched to another event before this one ever opened:
+    // the effect above has queued or set aside what was on its way.
+    if (payment.event !== pairing.event) return;
+    const fallback = {
+      amount: fromCents(basketTotals(payment.cart).total),
+      currency: payment.currency || config.event.currency,
+    };
+    const attempt: Attempt = {
+      key: payment.key,
+      paymentType: payment.paymentType,
+      cashGiven: payment.cashGiven,
+      charged: payment.charged,
+    };
+    const onReader = payment.stage === "reader" || payment.charged !== null;
+    // Cash taken instead must not travel under the reader's key.
+    setPaying({
+      key: onReader ? newNonce() : payment.key,
+      method: payment.paymentType,
+      resumed: true,
+    });
+    if (payment.stage === "reader") {
+      void terminal.resume(payment.key, positionsOf(payment.cart), fallback, payment.at);
+      return;
+    }
+    if (payment.charged !== null) {
+      // The reader had taken the money: only the sale is left to record, and
+      // the panel is to stay locked on it meanwhile.
+      void terminal.resume(payment.key, positionsOf(payment.cart), fallback, payment.at, {
+        status: "successful",
+        amount: payment.charged,
+        currency: fallback.currency,
+        failure: "",
+      });
+    }
+    void record(attempt, t("done.resumed"));
+    // Keyed on the config alone: it is what says the till is open.
+  }, [config]);
+
   if (gated) return <InstallGate />;
 
   if (!pairing) return <PairingScreen onPaired={onPaired} />;
+
+  // Sales only: scans have their own story at the door, and what the error
+  // page has to say is about money.
+  const queuedSales = loadError?.refused
+    ? loadQueue().filter((entry) => entry.kind === "sale").length
+    : 0;
 
   if (loadError) {
     return (
@@ -903,6 +1087,13 @@ export default function App() {
         <div className="panel">
           <h2>{t("error.title")}</h2>
           <div className="error-banner">{loadError.text}</div>
+          {/* Turned away with sales still on board: they are not lost, and
+              the one thing that sends them is pairing this device again on
+              the same event — which is also what the button below leads to,
+              so it has to be said before anybody presses it. */}
+          {loadError.refused && queuedSales > 0 && (
+            <p className="error-note">{tn("error.keptForRepair", queuedSales)}</p>
+          )}
           <button
             className="btn primary"
             onClick={() => void load(pairing)}
@@ -943,15 +1134,8 @@ export default function App() {
     );
   }
 
-  // Three figures, and they are only the same one when no deposit comes back.
-  // `total` is what changes hands; `soldCents` is what the order is worth, and
-  // is what pretix is told about; `refundedCents` is what leaves the drawer.
-  const total = cart.reduce((sum, line) => sum + line.unitPrice * line.count, 0);
-  const soldCents = cart.reduce(
-    (sum, line) => sum + (line.refund ? 0 : line.unitPrice * line.count),
-    0,
-  );
-  const refundedCents = soldCents - total;
+  // What changes hands: see basketTotals for the other two figures.
+  const { total } = basketTotals(cart);
 
   // The server has been upgraded under this till. Only ever offered between
   // customers — reloading is safe (the queue and pairing survive it), but the
@@ -1040,6 +1224,31 @@ export default function App() {
         </button>
       )}
 
+      {/* A card payment left aside unanswered went through after all. Said
+          until somebody has read it, over whatever is on screen: a customer
+          may have paid twice, and the refund is somebody's job tonight. */}
+      {orphans.latePaid.map((orphan) => (
+        <div className="notice-bar is-alarm" role="alert" key={orphan.key}>
+          <span>
+            {t("payment.latePaid", {
+              amount: formatMoney(toCents(orphan.amount), orphan.currency),
+              time: moment(orphan.at),
+            })}
+          </span>
+          <button className="btn" onClick={() => orphans.acknowledge(orphan.key)}>
+            {t("payment.latePaidOk")}
+          </button>
+        </div>
+      ))}
+
+      {/* Not a blocker, and not dismissible either: it is true until the
+          clock is set, and it costs a line. */}
+      {drift !== null && (
+        <div className="notice-bar" role="status">
+          {t(drift > 0 ? "clock.ahead" : "clock.behind", { drift: formatDrift(drift) })}
+        </div>
+      )}
+
       {updateAvailable && !servingCustomer && (
         <button
           className="update-bar"
@@ -1101,13 +1310,19 @@ export default function App() {
           terminal={terminal.state}
           onTerminalStart={startTerminal}
           onTerminalStop={() => void terminal.cancel()}
+          onTerminalRetry={terminal.retry}
+          onTerminalAbandon={abandonReader}
+          online={online}
           busy={busy}
-          error={payError}
+          error={payError?.text ?? null}
+          refused={payError?.refused ?? false}
+          initialMethod={paying.method ?? null}
+          resumed={paying.resumed ?? false}
           credit={credit}
           drawer={drawerBlocked}
           onOpenDrawer={() => setDrawerOpen(true)}
           onConfirm={confirmPayment}
-          onCancel={() => setPaying(null)}
+          onCancel={leavePayment}
         />
       )}
 
@@ -1115,8 +1330,10 @@ export default function App() {
         <DoneScreen
           sale={sale}
           currency={config.event.currency}
+          note={saleNote}
           onDismiss={() => {
             setSale(null);
+            setSaleNote(null);
             // At the door the grid is a detour, not a destination: the ticket
             // has been sold and the next person in the queue is holding a QR
             // code. A till stays where it is.
@@ -1151,7 +1368,7 @@ export default function App() {
           syncing={syncing}
           report={lastSync}
           event={pairing.event}
-          onSync={() => void sync()}
+          onSync={() => void sync(true)}
           // Refusals are cleared from inside the panel, so the count that
           // keeps the badge alive is re-read on the way out.
           onClose={() => {

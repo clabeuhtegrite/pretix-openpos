@@ -7,7 +7,8 @@
  *               ?terminal=waiting|paid|failed|stalled|reprice  ?checkout=fail
  *               ?events=one|blocked|mixed  ?load=refused|series  ?redeem=fail
  *               ?takings=empty|nights|series  ?drawer=closed|open|stale|counted|moved
- *               ?slow=1
+ *               ?slow=1  ?net=drop|blink  ?skew=7  ?resume=cash|card|paid
+ *               ?orphan=paid|held  ?terminal=busy  ?sync=refused|wait  ?move=pending
  */
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
@@ -66,6 +67,66 @@ if (q.get("scans")) {
         ...(i === n - 1 ? { refused: "invalid" } : { admits: true }),
       })),
     ]),
+  );
+}
+
+// ?resume= : la caisse s'est arrêtée au milieu d'un paiement, et le reprend.
+// « cash » : une vente en espèces était partie ; « card » : le panier était
+// sur le lecteur ; « paid » : le lecteur avait pris l'argent et la vente
+// partait. Le panier est celui du paiement : deux pressions et un café.
+const resume = q.get("resume");
+if (resume) {
+  const cart = [
+    { key: "10:", itemId: 10, variationId: null, label: "Bière pression 25cl", unitPrice: 300, count: 2, available: null },
+    { key: "16:", itemId: 16, variationId: null, label: "Café", unitPrice: 150, count: 1, available: null },
+  ];
+  localStorage.setItem(
+    "openpos.payment.v1",
+    JSON.stringify({
+      event: fx.pairing.event,
+      key: `harness-resume-${resume}`,
+      stage: resume === "card" ? "reader" : "sale",
+      paymentType: resume === "cash" ? "cash" : "card",
+      cashGiven: resume === "cash" ? "10.00" : null,
+      charged: resume === "paid" ? "7.50" : null,
+      cart,
+      credit: null,
+      cashier: "Alex",
+      admits: false,
+      currency: "EUR",
+      at: new Date(Date.now() - 40_000).toISOString(),
+    }),
+  );
+}
+
+// ?orphan= : un paiement carte laissé de côté quand le serveur ne répondait
+// plus. « paid » : il est passé malgré tout, il y a dix minutes ; « held » :
+// laissé il y a une minute, le lecteur le tient encore (avec ?terminal=busy,
+// c'est ce que dit la caisse qui veut encaisser par carte).
+const orphan = q.get("orphan");
+if (orphan) {
+  localStorage.setItem(
+    "openpos.orphans.v1",
+    JSON.stringify([{
+      event: fx.pairing.event,
+      key: `harness-orphan-${orphan}`,
+      at: new Date(Date.now() - (orphan === "paid" ? 10 : 1) * 60_000).toISOString(),
+      amount: "12.50",
+      currency: "EUR",
+      ...(orphan === "held" ? { cancelAsked: true } : {}),
+    }]),
+  );
+}
+
+// ?move=pending : une sortie d'argent envoyée sans réponse du serveur ; le
+// panneau de la caisse espèces (avec ?drawer=open) s'ouvre dessus.
+if (q.get("move") === "pending") {
+  localStorage.setItem(
+    "openpos.drawerMove.v1",
+    JSON.stringify({
+      serial: fx.pairing.serial, event: fx.pairing.event, kind: "out", amount: "20.00",
+      reason: "Glaçons", key: "harness-move", at: new Date(Date.now() - 60_000).toISOString(),
+    }),
   );
 }
 
@@ -170,6 +231,31 @@ const json = (body: unknown, status = 200) =>
 let terminalPolls = 0;
 let terminalStopped = false;
 
+// ?skew=N : l'horloge de l'appareil a N minutes d'avance sur le serveur (en
+// retard si N est négatif). Le serveur donne son heure dans config et dans
+// la réponse au rapport d'état.
+const serverTime = () => new Date(Date.now() - Number(q.get("skew") ?? 0) * 60_000).toISOString();
+
+// ?net=drop : le réseau tombe une seconde et demie après l'ouverture de la
+// caisse ; ?net=blink : il revient huit secondes plus tard. L'événement
+// « offline » du navigateur fait vérifier la caisse tout de suite, comme en vrai.
+const net = q.get("net");
+let dropped = false;
+let dropScheduled = false;
+const scheduleDrop = () => {
+  if (!net || dropScheduled) return;
+  dropScheduled = true;
+  setTimeout(() => {
+    dropped = true;
+    window.dispatchEvent(new Event("offline"));
+    if (net === "blink")
+      setTimeout(() => {
+        dropped = false;
+        window.dispatchEvent(new Event("online"));
+      }, 8000);
+  }, 1500);
+};
+
 // ?events= : ce que l'appareil peut atteindre. Par défaut deux événements
 // ouverts ; « one » le seul où il est ; « blocked » un second sans Open POS ;
 // « mixed » les deux ouverts plus un sans Open POS.
@@ -198,6 +284,8 @@ const stuck = (url: string) =>
 const real = window.fetch.bind(window);
 window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+  if (dropped && (url.includes("/api/v1") || url.includes("probe=")))
+    throw new TypeError("harness: the network dropped");
   if (!url.includes("/api/v1")) return real(input as RequestInfo, init);
 
   if (q.get("offline") === "1") throw new TypeError("offline harness");
@@ -209,7 +297,10 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   // Ce que l'appareil dit de lui à pretix quand sa version a changé. pretix
   // répond par la fiche de l'appareil, que la caisse ne lit pas.
   if (url.includes("/device/update")) return json({ unique_serial: fx.pairing.serial });
-  if (url.includes("/openpos/config/")) return stuck(url) ?? json({ ...conf, drawer: drawerBrief() });
+  if (url.includes("/openpos/config/"))
+    return stuck(url) ?? json({ ...conf, drawer: drawerBrief(), server_time: serverTime() });
+  // Le rapport d'état de l'appareil : ce qu'il garde, pour le back-office.
+  if (url.includes("/openpos/status/")) return json({ server_time: serverTime() });
   if (url.includes("/openpos/drawer/") && drawer) {
     const body = bodyOf(init);
     if (url.includes("/drawer/open/")) {
@@ -256,8 +347,10 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     return json(drawerState());
   }
   // ?photos=1 met des photos sur un produit sur deux.
-  if (url.includes("/openpos/catalog/"))
+  if (url.includes("/openpos/catalog/")) {
+    scheduleDrop();
     return stuck(url) ?? json(q.get("photos") ? fx.withPhotos(fx.catalog) : fx.catalog);
+  }
   // ?takings= : empty (rien de vendu), nights (deux soirées), series (une date).
   if (url.includes("/openpos/summary/"))
     return json(fx.summary(q.get("takings"), !!q.get("testmode")));
@@ -271,11 +364,23 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   if (url.includes("/openpos/terminal/start/")) {
     terminalPolls = 0;
     terminalStopped = false;
+    // ?terminal=busy : le lecteur tient un autre paiement.
+    if (reader === "busy")
+      return json({
+        detail: ["Le lecteur est occupé par un autre paiement."],
+        code: "terminal_busy",
+      }, 400);
     if (reader === "failed")
       return json({ status: "failed", amount: "0.00", currency: "EUR", failure: "card_declined" });
     return json({ status: "pending", amount: readerAmount, currency: "EUR", failure: "" });
   }
   if (url.includes("/openpos/terminal/status/")) {
+    // Les paiements laissés de côté (?orphan=) : l'un est passé, l'autre est
+    // encore sur le lecteur.
+    if (url.includes("harness-orphan-paid"))
+      return json({ status: "successful", amount: "12.50", currency: "EUR", failure: "" });
+    if (url.includes("harness-orphan-held"))
+      return json({ status: "pending", amount: "12.50", currency: "EUR", failure: "" });
     terminalPolls += 1;
     // « stalled » est l'écran d'une caisse qui a perdu le serveur pendant que
     // le lecteur tient encore la carte : on ne répond donc plus du tout.
@@ -299,6 +404,16 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   }
   if (url.includes("/openpos/checkout/")) {
     const sale = bodyOf(init);
+    // ?sync= : ce que le serveur répond aux ventes rejouées depuis la file.
+    // « refused » : il refuse l'appareil (révoqué) ; « wait » : il demande
+    // d'attendre une minute.
+    if (sale.offline && q.get("sync") === "refused")
+      return json({ detail: "Appareil inconnu ou révoqué." }, 403);
+    if (sale.offline && q.get("sync") === "wait")
+      return new Response(JSON.stringify({ detail: "Trop de requêtes.", code: "rate_limited" }), {
+        status: 429,
+        headers: { "Content-Type": "application/json", "Retry-After": "60" },
+      });
     if (sale.payment_type === "cash" && drawer && (!drawer.session || drawer.session.stale))
       return json({
         drawer: ["La caisse espèces de cet appareil n’est pas ouverte. Ouvrez-la sur un fond compté avant d’encaisser ou de rendre des espèces."],
@@ -309,11 +424,11 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     if (q.get("checkout") === "fail")
       return json({ detail: "harness : le serveur refuse d’enregistrer cette vente." }, 400);
     return json({
-      order: { code: "POS4L", total: "12.50", url: null },
+      order: { code: "POS4L", total: "12.50" },
       journal_seq: 42,
-      payment_type: "cash",
-      cash_given: "20.00",
-      cash_change: "7.50",
+      payment_type: sale.payment_type ?? "cash",
+      cash_given: sale.payment_type === "card" ? null : "20.00",
+      cash_change: sale.payment_type === "card" ? null : "7.50",
       datetime: new Date().toISOString(),
       replayed: false,
       checked_in: 0,

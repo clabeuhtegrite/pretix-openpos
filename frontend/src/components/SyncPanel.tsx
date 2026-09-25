@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { locale, t } from "../i18n";
 import { loadFailures, loadQueue, saveFailures } from "../storage";
 import { sendable } from "../sync";
-import type { QueueEntry, SyncReport } from "../types";
+import type { QueueEntry, SyncHalt, SyncReport } from "../types";
 
 /**
  * What the till is still holding, and what happened when it last let go.
@@ -27,6 +27,36 @@ interface Props {
 
 function time(iso: string): string {
   return new Date(iso).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
+}
+
+/**
+ * Why the last run stopped short, when that is something to read.
+ *
+ * Every one of these left the whole queue where it was, and each says so:
+ * what used to happen instead was the queue emptying itself into the refused
+ * list one sale at a time. A run that stopped for want of a network says
+ * nothing more here — the line at the top already does.
+ */
+function Halt({ halt }: { halt: SyncHalt }) {
+  if (halt.kind === "unreachable") return null;
+  if (halt.kind === "device") {
+    // The one that needs somebody: a revoked till sends nothing until it is
+    // paired again, and pairing it again is what sends everything.
+    return <div className="error-banner">{t("offline.haltedDevice", { detail: halt.message })}</div>;
+  }
+  if (halt.kind === "wait" && halt.retryAt !== null) {
+    return (
+      <div className="attendance-note">
+        {t("offline.haltedWait", {
+          // To the second: the server asks for seconds, not minutes.
+          time: new Date(halt.retryAt).toLocaleTimeString(locale, {
+            hour: "2-digit", minute: "2-digit", second: "2-digit",
+          }),
+        })}
+      </div>
+    );
+  }
+  return <div className="history-warn">{t("offline.haltedOther", { detail: halt.message })}</div>;
 }
 
 function kind(entry: QueueEntry): string {
@@ -120,6 +150,7 @@ export default function SyncPanel({ online, syncing, report, event, onSync, onCl
               // Where to look for them afterwards, and how to tell them apart.
               <div className="attendance-note">{t("offline.marked")}</div>
             )}
+            {report.halted && <Halt halt={report.halted} />}
             {report.offTariff.map((line, i) => (
               // A price moved while this till could not be told: the customer
               // paid one figure, the tariff says another. Nobody can put that

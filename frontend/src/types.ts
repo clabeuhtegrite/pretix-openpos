@@ -47,6 +47,12 @@ export interface CheckinListInfo {
 export interface PosConfig {
   /** Plugin version the server runs; absent on servers older than the field. */
   version?: string;
+  /**
+   * The server's clock when it answered, in ISO 8601 UTC. Read by clock.ts to
+   * tell a volunteer whose tablet is set to the wrong time; absent on a server
+   * older than the field.
+   */
+  server_time?: string;
   event: {
     slug: string;
     organizer: string;
@@ -338,7 +344,7 @@ export interface TerminalPayment {
 }
 
 export interface SaleResult {
-  order: { code: string; total: string; url: string | null };
+  order: { code: string; total: string };
   journal_seq: number;
   payment_type: PaymentType;
   cash_given: string | null;
@@ -542,6 +548,17 @@ export interface QueuedSale {
     refund?: boolean;
   }[];
   chargedTotal: string;
+  /**
+   * What the lines add up to, when that is not what was charged.
+   *
+   * Set on a card sale the reader took, and only there. The server priced
+   * that basket when it put it on the reader, and records the order from what
+   * it pinned then; the lines here carry this till's own prices, which can be
+   * a catalogue refresh behind. The replay's checksum is the sum of the lines
+   * it sends, so it is sent this figure — while the screens go on showing
+   * ``chargedTotal``, which is what the card actually paid.
+   */
+  linesTotal?: string;
   paymentType: PaymentType;
   cashGiven: string | null;
   cashChange: string | null;
@@ -587,6 +604,26 @@ export interface SyncFailure {
   message: string;
 }
 
+/**
+ * Why a sync run stopped with entries still to send.
+ *
+ * Only a refusal of one entry moves it out of the queue; anything else stops
+ * the run and keeps everything where it was, and this says which of those it
+ * was so the operator is told something they can act on.
+ */
+export interface SyncHalt {
+  /**
+   * `unreachable`: no network, or the server faulting. `device`: the server
+   * turned this device away (401, 403) — revoked, or its event closed to it.
+   * `wait`: rate-limited (429, 408). `other`: an answer that is neither.
+   */
+  kind: "unreachable" | "device" | "wait" | "other";
+  /** The server's words, through describeError. */
+  message: string;
+  /** Epoch milliseconds before which an automatic run should not try again. */
+  retryAt: number | null;
+}
+
 /** What a sync run did, for the operator to read afterwards. */
 export interface SyncReport {
   sales: number;
@@ -606,6 +643,89 @@ export interface SyncReport {
   offTariff: { order: string; item_name: string; charged: string; tariff: string }[];
   /** Tickets refused on replay — admitted at the door, contested afterwards. */
   contested: { name: string; secret: string; reason: string }[];
+  /** Set when the run stopped short; absent when it sent all it could. */
+  halted?: SyncHalt | null;
+}
+
+/**
+ * A payment on its way, written down before the request that makes it leaves.
+ *
+ * The till can be killed at any moment — iOS reclaims a PWA in the
+ * background, a battery dies, somebody pulls down to refresh — and the one
+ * moment that must survive it is the one between "the request went out" and
+ * "the answer came back". The key is the part that matters: sent again under
+ * it, the server finds what it already did instead of doing it twice.
+ */
+export interface PendingPayment {
+  /** The event the sale belongs to. */
+  event: string;
+  /** The idempotency key the request travels under — for a reader payment, the reader's. */
+  key: string;
+  /**
+   * `reader`: the basket is on the card reader, or on its way there, and
+   * nothing is recorded yet. `sale`: the sale itself has been sent.
+   */
+  stage: "reader" | "sale";
+  paymentType: PaymentType;
+  cashGiven: string | null;
+  /** What the card reader took, once it has. */
+  charged: string | null;
+  cart: CartLine[];
+  credit: Credit | null;
+  cashier: string;
+  /** Whether the basket lets anybody in, decided from the catalogue of the moment. */
+  admits: boolean;
+  /** The event's currency, for saying the amount of a payment picked up later. */
+  currency: string;
+  /** When the customer paid — or, for a reader payment, when it was started. */
+  at: string;
+}
+
+/**
+ * A reader payment this till walked away from without knowing how it ended.
+ *
+ * The only way it happens is the way out of a wait the server stopped
+ * answering: the cashier took the sale in cash while the reader might still
+ * have been asking for the card. Kept so the till can ask again once it can —
+ * take it off the reader if it is still there, and say so loudly if the card
+ * went through after all, because that customer has then paid twice.
+ */
+export interface OrphanPayment {
+  event: string;
+  key: string;
+  /** When it was put on the reader, by this device's clock. */
+  at: string;
+  /** The reader's figure, when the server said; the basket's otherwise. */
+  amount: string;
+  currency: string;
+  /** Asked to come off the reader already: it is not asked twice. */
+  cancelAsked?: boolean;
+  /** The card went through. Kept until somebody has read that. */
+  paid?: boolean;
+}
+
+/** Money put into the drawer or taken out of it, sent and not yet answered. */
+export interface PendingMovement {
+  /** The device and event it was made on: a drawer answers to both. */
+  serial: string;
+  event: string;
+  kind: "in" | "out";
+  amount: string;
+  reason: string;
+  /** Kept until the server answers for it, whatever is retyped meanwhile. */
+  key: string;
+  at: string;
+}
+
+/** What this device tells the back office it is holding. */
+export interface DeviceStatus {
+  /** Sales rung up here and not yet taken by the server, every event together. */
+  pending_sales: number;
+  /** When the oldest of them was rung up. */
+  oldest_pending_at: string | null;
+  /** The last time a sync run sent everything it could. */
+  last_sync_at: string | null;
+  version: string;
 }
 
 export interface Takings {

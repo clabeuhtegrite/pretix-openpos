@@ -693,7 +693,10 @@ saisi par réflexe n'est pas quelque chose qu'on met à un geste de distance.
    ou *Dépairer*, alors que l'événement du soir était à un geste. Le catalogue en
    cache n'est pas utilisé non plus dans ce cas : un device révoqué qui
    vendrait sur un vieux catalogue serait refusé à la première vente, devant
-   le client.
+   le client. Si des ventes faites hors ligne attendent encore sur l'appareil,
+   l'écran les compte, avant qu'on ne presse *Dépairer* : elles y restent —
+   dépairer n'efface pas la file — et partiront, sans doublon, une fois
+   l'appareil appairé de nouveau sur le même événement.
    Tant que la réponse n'est pas là, l'écran le dit (« Chargement… », avec
    une roue). Sur l'écran d'erreur, *Réessayer* tourne (« Nouvel essai… ») et
    l'erreur reste affichée jusqu'à la réponse suivante, au lieu de céder la
@@ -724,7 +727,32 @@ saisi par réflexe n'est pas quelque chose qu'on met à un geste de distance.
    même quand il n'y a pas de monnaie à rendre. Le rendu de monnaie s'affiche en
    direct.
 5. **Envoi** — `POST checkout/` avec la clé, les lignes, le type de paiement, le
-   montant reçu, le nom du caissier et `expected_total`.
+   montant reçu, le nom du caissier et `expected_total`. Une seule requête par
+   vente à la fois : un second appui sur *Valider*, ou un second « payé » du
+   lecteur, pendant que la première est en route ne repart pas. Un « pas
+   maintenant » du serveur (429, trop de requêtes d'un coup) laisse le panneau
+   tel quel avec son message, et *Valider* renvoie la même vente sous la même
+   clé un instant plus tard ; un refus motivé (épuisé, tarif changé, tiroir
+   fermé) laisse aussi le panneau ouvert, et rien n'a été vendu.
+
+**Le paiement est écrit sur l'appareil avant de partir.** Sous
+`openpos.payment.v1` : la clé, le panier tel qu'il a été annoncé, l'avoir, le
+mode de paiement, le montant reçu ou débité, le caissier et l'heure — effacé
+dès que la réponse est là. Une caisse tuée pendant l'attente (iOS qui reprend
+la mémoire d'une app passée en arrière-plan, une tablette qui redémarre,
+quelqu'un qui tire pour rafraîchir) le retrouve au lancement suivant, rouvre le
+panneau sur ce panier et **renvoie la même vente sous la même clé** : si la
+première requête était arrivée, le serveur répond avec la commande qu'il avait
+faite au lieu d'en faire une seconde. L'écran de fin le dit (« La caisse a
+redémarré pendant l'enregistrement : la vente a été gardée, une seule fois »),
+et ne se referme pas tout seul. Sans réseau à ce moment-là, la vente part dans
+la file hors ligne, sous la même clé et à l'heure où elle avait été payée.
+Passé une demi-heure, ou sur un autre événement, rien n'est remis à l'écran —
+le client est parti — mais rien n'est jeté non plus : la vente va dans la file
+hors ligne, où le serveur la reconnaîtra si elle était déjà arrivée.
+Jusqu'en 0.24, seul le panier revenait : le valider de nouveau frappait une
+clé neuve et faisait une seconde vente si la première était arrivée, et le
+vider en perdait une si elle ne l'était pas.
 
 Sur une caisse à qui un lecteur de carte est attribué, choisir *Carte* insère
 deux étapes avant celle-ci : le panier part sur le lecteur, et la vente n'est
@@ -1194,7 +1222,8 @@ aller vérifier.
 |---|---|
 | Vendre | Oui, au tarif embarqué ; la vente part en file d'attente |
 | Rendre la monnaie | Oui, calculé localement |
-| Scanner un billet | Oui, contre la **liste embarquée** (`openpos/offline/`), chargée dès l'appairage pour la liste de la porte — pas seulement à l'ouverture du scan — et rafraîchie toutes les 5 min tant qu'il y a du réseau. Sur un appareil qui garde la porte seulement : une *Caisse* ne la reçoit pas (§2.7) |
+| Encaisser sur le lecteur de carte | Non : le lecteur est piloté par le serveur (§5quinquies). Choisir *Carte* ne pose rien sur le lecteur, le panneau le dit et *Espèces* reste à un geste ; au retour du réseau, *Réessayer* pose le panier |
+| Scanner un billet | Oui, contre la **liste embarquée** (`openpos/offline/`), chargée dès l'appairage pour la liste de la porte — pas seulement à l'ouverture du scan — et rafraîchie toutes les 5 min tant qu'il y a du réseau. Seul un appareil qui garde la porte la reçoit : une *Caisse* non (§2.7) |
 | Redémarrer la caisse | Oui : catalogue et configuration du dernier chargement sont conservés par événement |
 | Historique, annulation, effectif | Non — ils demandent le serveur, et l'écran le dit |
 
@@ -1223,13 +1252,23 @@ seulement si personne n'est en train d'encaisser. Trois règles gouvernent tout 
    `nonce` pour un scan. Une réponse perdue au retour coûte une requête en trop,
    jamais une vente en double : vérifié, un rejeu d'une vente déjà synchronisée
    ne crée aucune ligne.
-2. **5xx et panne réseau = « pas maintenant ».** L'écriture garde sa place et la
-   reprise s'arrête là. Seul un 4xx est un refus motivé du serveur.
+2. **Tout ce qui n'est pas un refus motivé = « pas maintenant ».** Un refus
+   motivé, c'est un 400 qui porte ses raisons : le serveur a lu *cette*
+   écriture et n'en veut pas. Tout le reste — panne réseau, 5xx, appareil
+   refusé (401, 403), adresse introuvable (404), délai dépassé (408), trop de
+   requêtes (429) — arrête la reprise là, et l'écriture garde sa place avec
+   toutes celles qui la suivent, sous les mêmes clés.
    *Se tromper dans ce sens coûte une requête ; se tromper dans l'autre sort une
    vente encaissée de la file et elle n'arrive jamais — c'est le bug qu'une
    première version de ce code avait, trouvé en coupant vraiment le serveur.*
+   Jusqu'en 0.24, tout 4xx comptait encore pour un refus : une tablette
+   révoquée classait une à une toutes ses ventes en refusées, et n'avait plus
+   rien à envoyer une fois appairée de nouveau.
 3. **Aucun refus n'est avalé.** Une écriture refusée passe dans une liste qui
    survit aux redémarrages et reste affichée jusqu'à ce qu'un humain la traite.
+   Elle y est écrite avant de quitter la file : un appareil dont la mémoire est
+   pleine la garde dans la file, arrête la reprise et le dit (« La mémoire de
+   cet appareil est pleine… »), plutôt que de la perdre entre les deux.
 
 Un scan part comme pretix attend qu'un scan hors ligne parte : **forcé**, avec
 son heure d'origine. pretix l'enregistre quoi qu'il répondrait maintenant — la
@@ -1248,7 +1287,33 @@ tant que quelque chose attend. Une requête qui échoue aussitôt suivie d'une q
 passe ne se voit pas comme un retour du réseau : vérifié contre un vrai pretix,
 des scans restaient ainsi sur le téléphone, réseau revenu, jusqu'à la
 réouverture de l'app. Pour la même raison, la liste embarquée n'est pas
-rechargée plus d'une fois par minute sur un réseau qui va et vient.
+rechargée plus d'une fois par minute sur un réseau qui va et vient. Un 429
+dit combien attendre (`Retry-After`) : les reprises automatiques attendent ce
+temps-là, un quart de minute s'il n'a rien dit ; *Envoyer maintenant* part
+quand même, puisque c'est quelqu'un qui le demande.
+
+Chaque vente rejouée porte, à côté de son heure d'origine (`recorded_at`),
+l'heure de l'appareil au moment où elle part (`sent_at`). Les deux viennent de
+la même horloge : mises en face de celle du serveur, elles lui donnent de quoi
+corriger l'heure d'une tablette mal réglée. Mieux vaut que l'horloge soit
+juste, cela dit, et la caisse le signale : elle compare la sienne à l'heure du
+serveur (`server_time`, dans la réponse de `config/` et du rapport d'état
+ci-dessous), en tenant compte du temps de la requête, et au-delà de deux
+minutes d'écart un bandeau le dit — « L'horloge de cet appareil a 7 min
+d'avance : les ventes hors ligne seraient mal datées. Réglages › Général ›
+Date et heure › Réglage automatique. » Il disparaît de lui-même à la réponse
+suivante du serveur, une fois l'heure remise.
+
+**Le back-office sait ce que chaque appareil garde.** Une vente faite hors
+ligne n'existe que sur une tablette tant qu'elle n'est pas partie, et la
+question, avant de fermer, est de savoir laquelle aller chercher. Chaque
+appareil appairé dit donc au serveur (`POST openpos/status/`, au niveau de
+l'organisateur) combien de ventes il a en attente, l'heure de la plus
+ancienne, l'heure du dernier envoi où tout est parti, et sa version : au
+lancement, au retour du réseau, chaque minute, et trois secondes après que la
+file a cessé de bouger — pas à chaque vente d'une reprise. Rien ne se voit sur
+la caisse : un rapport qui ne passe pas repart à l'occasion suivante, et ne met
+jamais la caisse hors ligne à lui seul.
 
 Une vente qui appartient à **un autre événement** — la caisse a changé
 d'événement avec une file non vide — n'est ni envoyée ici ni bloquante : elle est
@@ -1260,8 +1325,17 @@ derrière elle, avec un badge qui comptait et un bouton « Envoyer maintenant »
 n'envoyait rien sans expliquer pourquoi.
 
 Le panneau de synchronisation (badge de la barre supérieure) montre à tout
-moment ce qui reste à envoyer, ce que le dernier envoi a fait, et deux choses
+moment ce qui reste à envoyer, ce que le dernier envoi a fait, et trois choses
 qu'il faut lire :
+
+- **Pourquoi l'envoi s'est arrêté**, quand il s'est arrêté avant la fin. « Le
+  serveur refuse cette caisse : … Les ventes en attente restent ici. Si elle a
+  été révoquée, appairez-la de nouveau sur cet événement : elles partiront
+  alors, sans doublon. » — « Le serveur demande d'attendre : nouvel essai à
+  22:41:30. Rien n'est perdu. » — ou le motif du serveur, en clair. Sans
+  réseau, ou face à un serveur en panne, le haut du panneau dit déjà « Pas de
+  connexion » et rien n'est ajouté. Jusqu'en 0.24, un envoi arrêté ne disait
+  rien, et le badge continuait de compter.
 
 - **Écarts de tarif** — « BQSTY : Plein tarif encaissé 13,00, le tarif dit
   14,00 ». Un prix a bougé dans le back-office pendant que la caisse ne pouvait
@@ -1489,15 +1563,42 @@ peuvent pas diverger.
    ce qu'il a tarifé** (`PosTerminalPayment.positions`), et met ce total sur le
    lecteur. Il refuse tout de suite un produit épuisé, un produit qui n'est pas
    en vente au guichet, et un panier qui ne doit rien.
-2. La caisse interroge `terminal/status` toutes les deux secondes. Quand SumUp
-   dit que l'argent a bougé, la caisse poste la vente sur `checkout/` avec **la
-   même clé d'idempotence**. Le serveur retrouve le paiement, vérifie qu'il
-   appartient à cet appareil, et construit la commande **depuis le panier
-   épinglé** — pas depuis ce que l'app renvoie.
+2. La caisse interroge `terminal/status` deux secondes après la réponse
+   précédente, et jamais tant qu'une question est en route ; plus aucune ne
+   part une fois le paiement réglé ou le panneau fermé, et celle qui était en
+   route est abandonnée. Quand SumUp dit que l'argent a bougé, la caisse poste
+   la vente sur `checkout/` avec **la même clé d'idempotence**, et **une seule
+   fois** — même quand deux réponses « payé » arrivent coup sur coup, une
+   relève et la réponse à une annulation pressée au moment où la carte
+   passait. Le serveur retrouve le paiement, vérifie qu'il appartient à cet
+   appareil, et construit la commande **depuis le panier épinglé** — pas
+   depuis ce que l'app renvoie.
 
 Une modification de tarif entre les deux temps ne change donc rien : la commande
 vaut ce que la carte a payé. Une app qui enverrait un panier au lecteur et un
 autre au journal fait enregistrer le premier.
+
+Jusqu'en 0.24, les relèves partaient toutes les deux secondes pile, réponse ou
+non : une relève lente — le serveur qui interroge SumUp, SumUp qui traîne — en
+laissait partir d'autres derrière elle, chacune une requête vers SumUp côté
+serveur, et celle qui était en route à la fermeture du panneau allait au bout
+pour personne. Un 429 (trop de requêtes) sur une relève fait maintenant
+attendre le temps demandé, sans rien changer à ce que la caisse sait du
+paiement ; il mettait fin à l'attente comme un refus, et rendait les espèces à
+un caissier dont le client pouvait être en train de payer.
+
+**Un paiement en cours survit à un rechargement.** Il est écrit sur l'appareil
+(`openpos.payment.v1`, §4.1) avant que le panier ne parte sur le lecteur. Une
+caisse tuée pendant que le client tient sa carte rouvre au lancement suivant le
+panneau sur ce panier, dit « La caisse demande au serveur où en est le paiement
+carte en cours… », et **pose la question sous la même clé** au lieu de reposer
+le panier sur le lecteur : une clé neuve serait un second débit. Payé
+entre-temps, la vente est enregistrée ; toujours en attente, l'attente reprend,
+avec *Annuler le paiement* ; échoué ou jamais arrivé au serveur, le panneau le
+dit et les espèces restent possibles. Une caisse tuée entre le « payé » et la
+réponse de `checkout/` renvoie la vente sans rien redemander au lecteur. Passé
+une demi-heure, rien n'est remis à l'écran : le paiement est suivi comme un
+paiement laissé de côté (ci-dessous).
 
 ### Ce qui n'est jamais cru
 
@@ -1544,7 +1645,9 @@ deux côtés :
 - **Côté caisse**, perdre le serveur en pleine attente n'affiche jamais un
   refus. Le lecteur répond à SumUp, pas à la tablette : l'écran dit que le
   paiement suit son cours et qu'il ne faut pas l'encaisser une seconde fois.
-  Seul le serveur met fin à l'attente.
+  Seul le serveur dit comment le paiement a fini — et quand il se tait trop
+  longtemps, la caisse n'invente pas la fin : elle renvoie à l'écran du
+  lecteur (plus bas, *Quand le serveur ne répond plus du tout*).
 
 Quitter un paiement en cours demande deux appuis : un pour retirer le panier du
 lecteur, un pour revenir. Et ce que répond l'annulation, c'est ce qui s'est
@@ -1559,6 +1662,79 @@ paiement sur le lecteur… » dès l'appui, avec un bouton *Annulation…* qu'on
 peut pas presser une seconde fois, jusqu'à ce que le paiement soit clos —
 annulé, ou payé si la carte est passée entre-temps. Si rien n'est venu au bout
 de dix secondes, *Annuler le paiement* revient, pour redemander l'arrêt.
+
+Un appui sur *Annuler le paiement* pendant que le panier part encore vers le
+lecteur n'est pas perdu : l'arrêt part dès que le serveur a répondu au
+lancement, et pas avant. Envoyé plus tôt, il pouvait arriver le premier,
+s'entendre dire qu'il n'y avait rien à arrêter et rendre les espèces au
+caissier — pendant que le lancement, arrivé une seconde après, posait le
+panier sur le lecteur. Un 429 sur l'arrêt ne demande rien au lecteur : la
+caisse le dit, et le bouton revient pour un nouvel appui.
+
+### Quand le serveur ne répond plus du tout
+
+Tenir l'attente jusqu'au retour du serveur a un prix : sur un wifi de salle
+tombé pour de bon, le client reste au comptoir aussi longtemps, devant une
+caisse dont aucun bouton ne fait rien. Après **quinze secondes** sans aucune
+réponse sur ce paiement, le panneau propose donc une sortie, et renvoie vers le
+seul écran qui sait : « Pas de réponse du serveur. Regardez l'écran du lecteur :
+s'il demande encore la carte, attendez ou annulez sur le lecteur ; s'il affiche
+le paiement accepté, gardez ce panier et réessayez ; sinon, encaissez en
+espèces. »
+
+- *Réessayer* repose la question **sous la même clé** : le serveur répond pour
+  un paiement qu'il connaît, et pose le panier sur le lecteur s'il n'avait
+  jamais reçu la demande — sans que la caisse ait à savoir laquelle des deux
+  choses s'est perdue en route.
+- *Espèces* redevient possible ; *Carte* reste verrouillée. Un second paiement
+  carte par-dessus un premier peut-être vivant serait exactement le double
+  débit que ce panneau existe pour empêcher. Les espèces partent sous la clé de
+  la vente, jamais sous celle du paiement carte : c'est par cette clé que
+  *Paiements carte sans vente* rapproche un paiement de sa vente, et une vente
+  en espèces enregistrée dessus y ferait passer pour réglé un débit carte
+  arrivé après coup.
+- La première réponse du serveur referme la sortie : la caisse sait de nouveau
+  où en est le paiement.
+
+Une caisse sans réseau au moment de choisir *Carte* n'attend pas quinze
+secondes : elle ne pose rien sur le lecteur, le dit tout de suite (« Pas de
+réseau : le lecteur de carte ne peut pas servir… »), et *Espèces* reste à un
+geste. Quand le réseau revient, le panneau le dit et *Réessayer* pose le
+panier.
+
+**Encaisser en espèces à ce moment laisse le paiement de côté, sans
+l'oublier.** Il est noté sur l'appareil (`openpos.orphans.v1` : la clé,
+l'événement, l'heure, le montant) et, dès que le serveur répond de nouveau, la
+caisse s'en occupe seule, une question à la fois, puis toutes les vingt
+secondes tant qu'il en reste :
+
+- **encore en attente sur le lecteur**, elle demande à l'en retirer — une
+  seule fois, notée avant d'être demandée pour qu'un rechargement ne la
+  répète pas ; jamais pendant que la caisse a un paiement à elle sur le
+  lecteur ; et seulement dans les quatre premières minutes : ensuite le
+  serveur a cessé de réserver le lecteur à ce paiement (*Deux caisses sur un
+  seul lecteur*), et un arrêt pourrait tomber sur le paiement suivant ;
+- **échoué ou annulé**, il est oublié : personne n'a été débité ;
+- **inconnu du serveur**, au bout d'une minute, il est oublié aussi : la
+  demande n'était jamais arrivée, rien n'a touché le lecteur ;
+- **passé**, le client a présenté sa carte après coup, et il a payé deux fois
+  si les espèces ont été prises. Un bandeau rouge le dit en haut de la caisse
+  — « Paiement carte de 4,50 € (21:42) passé sur le lecteur après avoir été
+  laissé de côté : aucune vente de cette caisse ne lui correspond. Si le client
+  a payé autrement, il a payé deux fois — à rembourser depuis le back-office,
+  dans « Paiements carte sans vente ». » — et reste affiché, d'un lancement à
+  l'autre, jusqu'à ce que quelqu'un presse *Compris*.
+
+Un paiement de côté qui n'a abouti à rien de tout ça cesse d'être suivi au bout
+de vingt-quatre heures ; un paiement passé reste jusqu'au *Compris*, quel que
+soit son âge. Côté serveur, tous figurent de toute façon dans *Paiements carte
+sans vente* tant qu'aucune vente n'est venue en face.
+
+Jusqu'en 0.24, l'attente ne connaissait pas de fin côté caisse : sans réseau,
+*Annuler le paiement* ne pouvait pas joindre le serveur, les espèces restaient
+verrouillées, et la seule sortie était de fermer l'app — le paiement restait
+alors sur le lecteur, et ne réapparaissait que dans *Paiements carte sans
+vente*.
 
 ### Un paiement que personne ne paie
 
@@ -1798,6 +1974,13 @@ son panier intact — rien d'écrit, aucune clé d'idempotence consommée — et
 voit « Le lecteur encaisse sur l'autre caisse. Attendez la fin, ou prenez cette
 vente en espèces. » Presser *Carte* une minute plus tard est un premier essai
 propre, pas une reprise.
+
+Quand le paiement qui tient le lecteur est celui que cette même caisse vient de
+laisser de côté (*Quand le serveur ne répond plus du tout*), il n'y a pas
+d'autre caisse à aller chercher, et l'écran le dit : « Le lecteur tient encore
+le paiement laissé de côté à 21:42 (4,50 €). Annulez-le sur le lecteur, ou
+réessayez dans un instant. » C'est aussi vrai sur un lecteur qui n'est pas
+partagé, où « l'autre caisse » n'existe pas.
 
 SumUp refuse déjà le second encaissement de son côté, mais trop tard : au moment
 de l'appel, le serveur a écrit une ligne de paiement et brûlé la clé de la caisse
@@ -2051,6 +2234,36 @@ et jamais par-dessus un client en cours.
 
 Le résumé de la fermeture reste affiché dans le panneau jusqu'à l'ouverture
 suivante : c'est le reçu de la soirée.
+
+**Les ventes en espèces encore en file se voient.** Ce que le tiroir doit
+contenir est le chiffre du serveur, fait des ventes que le serveur a reçues.
+Une vente en espèces faite hors ligne et pas encore envoyée est de l'argent
+déjà dans le tiroir que ce chiffre ne compte pas : un comptage fait entre-temps
+tombe juste au-dessus d'autant, et un tiroir honnête finit la soirée avec un
+écart que personne ne sait expliquer. Tant qu'il y en a sur l'appareil, le
+panneau le dit sous *Doit contenir* et sur l'écran de comptage, avant qu'on ne
+compte : « 2 ventes en espèces faites sur cet appareil ne sont pas encore
+arrivées au serveur (9,00 €) : le montant attendu ne les compte pas encore. »
+Seules celles de cet appareil et de cet événement sont comptées : celles de
+l'autre tablette du même tiroir sont sur l'autre tablette.
+
+**Une entrée ou une sortie sans réponse repart sous la même clé.** Une
+ouverture, un comptage ou une fermeture envoyés deux fois sont rattrapés par
+l'état du tiroir — déjà ouvert, comptage dépassé —, pas un mouvement d'argent :
+le second serait de l'argent sorti deux fois. Le mouvement est donc écrit sur
+l'appareil avec sa clé avant de partir (`openpos.drawerMove.v1`) et la garde
+jusqu'à ce que le serveur ait répondu pour lui, par l'écriture ou par un refus.
+Sans réponse — réseau coupé, serveur en panne, appareil refusé, « pas
+maintenant » —, le panneau rouvre dessus, même après une fermeture ou un
+rechargement, avec le montant et le motif, et dit : « Ce mouvement a été envoyé
+et le serveur n'a jamais répondu. Renvoyez-le : s'il avait été enregistré, il
+ne le sera pas deux fois. » Retoucher le montant ou le motif ne change pas la
+clé : si le premier envoi était arrivé, c'est lui que le serveur rend, et la
+liste des mouvements le montre tel qu'il a été inscrit. Un mouvement à la
+fois : une sortie envoyée pendant qu'une entrée attend prend sa place ; au-delà
+d'une demi-heure, il n'est plus proposé. Jusqu'en 0.24, la clé ne survivait ni
+à la fermeture du panneau ni à une retouche du motif, et une sortie renvoyée
+après une réponse perdue s'inscrivait deux fois.
 
 Jusqu'en 0.21.0, le comptage était à l'aveugle : l'attendu n'apparaissait
 qu'une fois le compte enregistré. L'organisateur a demandé, en ouvrant sa
@@ -2500,7 +2713,9 @@ arrière-plan, une tablette redémarre, quelqu'un tire pour rafraîchir. Le pani
 est recopié sur le disque au fur et à mesure et restauré au démarrage suivant.
 L'**avoir** compte le plus : tant que la vente corrigée n'est pas enregistrée,
 il n'existe nulle part ailleurs que sur la tablette, et c'est de l'argent dû à
-quelqu'un qui est devant le comptoir.
+quelqu'un qui est devant le comptoir. Un **paiement** en route au moment du
+rechargement survit aussi, avec son panier et sa clé : la caisse le reprend là
+où il en était au lieu de le refaire (§4.1, et §5quinquies pour le lecteur).
 
 C'est aussi pour ça qu'il expire au bout d'une demi-heure. Restaurer un avoir
 périmé déduirait du total du client suivant de l'argent qui appartient à
@@ -3116,6 +3331,12 @@ l'installation — donc `npm i --no-save playwright` avant de s'en servir.
 | La caisse refuse les espèces : « La caisse … n'est pas ouverte » | Ouvrir la caisse espèces (bouton billet de la barre du haut) sur un fond compté. Le client peut attendre : rien n'a été enregistré |
 | « Ouverte … et jamais fermée » | La caisse espèces n'a pas été fermée une soirée précédente. *Fermer sans compter* sur la caisse, ou fermer depuis son rapport avec le montant si quelqu'un l'a compté, puis ouvrir celle du soir |
 | « La caisse a bougé depuis le comptage » à la fermeture | Une vente ou un mouvement est passé depuis, souvent sur l'autre tablette du même tiroir : recompter, puis fermer |
+| Le comptage dépasse l'attendu, et le panneau dit que des ventes en espèces ne sont pas encore arrivées | Des ventes faites hors ligne attendent sur l'appareil : l'attendu du serveur ne les compte pas encore. Les envoyer (badge de la barre du haut, *Envoyer maintenant*), puis recompter |
+| Bandeau « L'horloge de cet appareil a … d'avance » (ou « de retard ») | Heure de la tablette réglée à la main. *Réglages › Général › Date et heure › Réglage automatique* ; le bandeau part de lui-même à la réponse suivante du serveur |
+| Bandeau rouge « Paiement carte de … passé sur le lecteur après avoir été laissé de côté » | Le client a présenté sa carte après que la vente a été prise en espèces par la sortie d'un lecteur sans réponse (§5quinquies). S'il a payé deux fois, rembourser depuis *Ventes → Paiements carte sans vente*, puis presser *Compris* |
+| « Le lecteur tient encore le paiement laissé de côté à … » | Ce paiement est encore sur le lecteur : l'annuler sur le lecteur, ou réessayer une minute plus tard. La caisse demande elle-même à l'en retirer dans les premières minutes, dès que le serveur répond, et le serveur libère le lecteur au bout de cinq |
+| Panneau d'envoi : « Le serveur refuse cette caisse » | Appareil révoqué ou supprimé dans pretix. Les ventes en attente restent sur l'appareil : l'appairer de nouveau sur le même événement, elles partiront sans doublon |
+| « La mémoire de cet appareil est pleine » | Le stockage du navigateur est plein : la tablette ne peut plus garder de ventes hors ligne. Ne plus encaisser hors ligne, libérer de la place, et envoyer ce qui attend dès que le réseau revient |
 | L'app reste sur un vieux build | Une caisse ouverte compare sa version à celle du serveur au rafraîchissement du catalogue et affiche « Nouvelle version — recharger » entre deux clients ; sinon, fermer et rouvrir l'app force la reprise |
 | La liste des appareils affiche une ancienne version | Le device n'a pas été rouvert avec du réseau depuis la mise à jour : il déclare sa version à la première ouverture connectée. C'est aussi le moyen de voir, après un déploiement, quels appareils ont repris le nouveau JavaScript |
 | *Lecteurs de carte* n'apparaît pas dans le menu, ou répond 403 | L'écran demande le droit de modifier les réglages de l'organisateur, pas seulement les appareils (§2.5) |

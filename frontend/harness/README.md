@@ -23,10 +23,16 @@ Paramètres d'URL, cumulables :
 |---|---|
 | `role=pos` / `role=door` | le rôle attribué à l'appareil |
 | `card=terminal` | un lecteur SumUp est attribué à cette caisse |
-| `terminal=paid` / `failed` / `stalled` / `reprice` | ce que fait le lecteur (défaut : il attend la carte) ; *Annuler le paiement* met deux secondes et demie à répondre, comme le vrai serveur qui arrête le lecteur puis relit SumUp |
+| `terminal=paid` / `failed` / `stalled` / `reprice` / `busy` | ce que fait le lecteur (défaut : il attend la carte) ; *Annuler le paiement* met deux secondes et demie à répondre, comme le vrai serveur qui arrête le lecteur puis relit SumUp ; avec `stalled`, le serveur ne répond plus et, quinze secondes plus tard, le panneau propose la sortie (Réessayer ou espèces) ; `busy` : le lecteur tient un autre paiement |
+| `net=drop` / `net=blink` | le réseau tombe une seconde et demie après l’ouverture de la caisse (« Carte » ne démarre alors pas le lecteur) ; avec `blink`, il revient huit secondes plus tard |
+| `resume=cash` / `card` / `paid` | la caisse s’est arrêtée au milieu d’un paiement et le reprend : une vente en espèces partie (renvoyée sous la même clé, l’écran de fin le dit), un panier sur le lecteur (le serveur est interrogé), une vente carte déjà payée qui s’enregistrait |
+| `orphan=paid` / `held` | un paiement carte laissé de côté faute de réponse du serveur : passé malgré tout (bandeau rouge jusqu’à « Compris ») ; encore sur le lecteur (avec `terminal=busy`, ce que dit la caisse qui veut encaisser par carte) |
+| `skew=7` | l’horloge de l’appareil a sept minutes d’avance sur le serveur (négatif : de retard) |
+| `sync=refused` / `wait` | ce que le serveur répond aux ventes rejouées depuis la file : l’appareil refusé (403), ou « attendez une minute » (429) ; la file reste entière, et l’écran hors ligne dit pourquoi ; avec `load=refused`, l’écran d’erreur dit que les ventes restent sur l’appareil |
+| `move=pending` | une sortie d’argent envoyée sans réponse : le panneau de la caisse espèces (avec `drawer=open`) rouvre dessus |
 | `theme=light` / `theme=dark` | force la palette |
 | `offline=1` | le serveur ne répond plus |
-| `queue=3` | trois ventes en attente dans la file |
+| `queue=3` | trois ventes en attente dans la file (envoyées à l’ouverture ; avec `sync=wait` elles y restent, et la caisse espèces les annonce) |
 | `scans=3` | trois scans faits hors ligne en attente, dont un refus |
 | `redeem=fail` | le réseau lâche sous le scan : la porte répond avec sa liste embarquée, et les scans en attente ne partent pas |
 | `photos=1` | une photo sur un produit sur deux |

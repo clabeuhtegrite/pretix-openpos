@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-import { t } from "../i18n";
+import { locale, t } from "../i18n";
 import { loadFailures, saveFailures, saveQueue } from "../storage";
 import type { QueuedCheckin, QueuedSale, SyncReport } from "../types";
 import SyncPanel from "./SyncPanel";
@@ -247,6 +247,55 @@ describe("what the last run did", () => {
     expect(
       screen.getByText(t("offline.contested", { name: "Alice", reason: "already_redeemed" })),
     ).toBeDefined();
+  });
+});
+
+describe("why the last run stopped short", () => {
+  it("says the till was turned away, and that pairing it again sends what it holds", () => {
+    // A revoked till: nothing will go until it is paired again, and the one
+    // thing the person reading this must not conclude is that the sales are
+    // lost, or that unpairing is safe without pairing it back.
+    saveQueue([sale("a")]);
+    show({
+      report: { ...clean, halted: { kind: "device", message: "Unknown device.", retryAt: null } },
+    });
+
+    expect(
+      screen.getByText(t("offline.haltedDevice", { detail: "Unknown device." })),
+    ).toBeDefined();
+    // Still listed as waiting, not as refused.
+    expect(screen.getByText("1× Bière")).toBeDefined();
+    expect(screen.queryByText(t("offline.refused"))).toBeNull();
+  });
+
+  it("says when the server will be asked again, to the second, after it asked for a moment", () => {
+    const retryAt = new Date(2026, 7, 16, 23, 14, 5).getTime();
+    show({
+      report: { ...clean, halted: { kind: "wait", message: "Too many requests.", retryAt } },
+    });
+
+    const time = new Date(retryAt).toLocaleTimeString(locale, {
+      hour: "2-digit", minute: "2-digit", second: "2-digit",
+    });
+    expect(screen.getByText(t("offline.haltedWait", { time }))).toBeDefined();
+  });
+
+  it("gives the server's words for anything else, and that nothing is lost", () => {
+    show({
+      report: { ...clean, halted: { kind: "other", message: "Not found.", retryAt: null } },
+    });
+
+    expect(screen.getByText(t("offline.haltedOther", { detail: "Not found." }))).toBeDefined();
+  });
+
+  it("adds nothing when the network went, which the top line already says", () => {
+    const { container } = show({
+      online: false,
+      report: { ...clean, halted: { kind: "unreachable", message: "Load failed", retryAt: null } },
+    });
+
+    expect(screen.queryByText(/Load failed/)).toBeNull();
+    expect(container.querySelector(".sync-report .history-warn, .sync-report .error-banner")).toBeNull();
   });
 });
 
