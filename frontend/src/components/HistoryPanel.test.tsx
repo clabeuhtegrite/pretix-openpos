@@ -643,6 +643,31 @@ describe("after a cancellation", () => {
     await waitFor(() => expect(history).toHaveBeenCalled());
   });
 
+  it("shows the sale as cancelled even when the list cannot be read again", async () => {
+    // The reload after a cancellation fails on the very network that made it
+    // slow. The list it left behind used to offer "Cancel this order" on the
+    // sale whose money had just been handed back — and a second press came
+    // back "already cancelled", with the same amount to hand back again.
+    history.mockReset();
+    history
+      .mockResolvedValueOnce({ device: "TILL1", results: [saleLine()], truncated: false })
+      .mockRejectedValue(new ApiError(0, "network"));
+    const { user } = show();
+    await cancel(user);
+    await user.click(
+      screen.getByRole("button", {
+        name: t("history.refundCashAndFinish", { total: formatMoney(1200, "EUR") }),
+      }),
+    );
+    await screen.findByText(t("error.offline"));
+
+    const row = screen.getByRole("button", { name: /POS01/ });
+    expect(row.className).toContain("is-cancelled");
+    await user.click(row);
+    expect(screen.getByText(t("history.alreadyCancelled"))).toBeDefined();
+    expect(screen.queryByRole("button", { name: t("history.cancel") })).toBeNull();
+  });
+
   it("shows the answer again when the panel is reopened before anyone acted on it", async () => {
     // It is the one screen that says how much to hand back. The back gesture,
     // or iOS reloading the app, used to take it away for good.
@@ -737,6 +762,64 @@ describe("after a cancellation", () => {
 
       await user.click(screen.getByRole("button", { name: t("history.correct") }));
       expect(onReuse).toHaveBeenCalledWith(cancelled.sale?.positions, null);
+    });
+  });
+
+  describe("that comes back with part of it missing", () => {
+    // Handed back for a cancellation made before, an answer may not carry
+    // every line: the back office leaves none on any till, and a sale pretix
+    // can no longer read comes back as null. The screen is kept and restored,
+    // so a field it could not do without would break the panel every time it
+    // opened, until the device was unpaired.
+    const total = formatMoney(1200, "EUR");
+
+    it("reads the amount off the sale when there is no reversing line", async () => {
+      cancelSale.mockResolvedValue({
+        ...cancelled, cancellation: null, replayed: true, already_cancelled: true,
+        by_back_office: true,
+      });
+      const first = show();
+      await open(first.user);
+      await first.user.click(screen.getByRole("button", { name: t("history.cancel") }));
+
+      expect(await screen.findByText(t("history.backOfficeTitle"))).toBeDefined();
+      expect(screen.getByText(t("history.cancelledMeta", { order: "POS01", total }))).toBeDefined();
+      expect(screen.getByRole("button", { name: t("history.finish") })).toBeDefined();
+      first.unmount();
+
+      show();
+      expect(screen.getByText(t("history.backOfficeTitle"))).toBeDefined();
+    });
+
+    it("names the order off the reversing line when the sale could not be read", async () => {
+      cancelSale.mockResolvedValue({
+        ...cancelled, sale: null, replayed: true, already_cancelled: true,
+      });
+      const { user } = show();
+      await open(user);
+      await user.click(screen.getByRole("button", { name: t("history.cancel") }));
+
+      expect(await screen.findByText(t("history.alreadyCancelledTitle"))).toBeDefined();
+      expect(screen.getByText(t("history.cancelledMeta", { order: "POS01", total }))).toBeDefined();
+      expect(
+        screen.getByRole("button", { name: t("history.refundCashAndFinish", { total }) }),
+      ).toBeDefined();
+      expect(screen.queryByRole("button", { name: t("history.correct") })).toBeNull();
+    });
+
+    it("invents no amount when it carries neither", async () => {
+      cancelSale.mockResolvedValue({
+        ...cancelled, cancellation: null, sale: null, replayed: true, already_cancelled: true,
+      });
+      const { user } = show();
+      await open(user);
+      await user.click(screen.getByRole("button", { name: t("history.cancel") }));
+
+      expect(await screen.findByText(t("history.alreadyCancelledTitle"))).toBeDefined();
+      expect(screen.getByRole("button", { name: t("history.finish") })).toBeDefined();
+      // No figure anywhere — neither a made-up nothing nor a guess.
+      expect(screen.queryByText(formatMoney(0, "EUR"), { exact: false })).toBeNull();
+      expect(screen.queryByText(total, { exact: false })).toBeNull();
     });
   });
 

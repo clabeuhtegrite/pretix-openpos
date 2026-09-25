@@ -998,7 +998,12 @@ qui existe plutôt que par un refus :
 
 - **« Commande déjà annulée »**, avec le montant à rendre et les deux issues :
   depuis cette caisse, on n'arrive là que par une réponse perdue, donc un
-  client pas encore remboursé ;
+  client pas encore remboursé. Pour que ce soit vrai, la réponse d'une
+  annulation marque aussitôt la vente « annulée » dans la liste, sans attendre
+  sa relecture : relue sur le même réseau qui venait de faire traîner
+  l'annulation, elle échouait, et la liste restée telle quelle proposait
+  encore *Annuler cette commande* sur une vente dont l'argent venait d'être
+  rendu — un second appui revenait « déjà annulée », montant à rendre compris ;
 - **« Annulée depuis le back-office pretix »** quand c'est le back-office qui
   l'a fait : son remboursement se règle dans pretix, et rien n'est sorti ni ne
   sort du tiroir de cette caisse pour elle (*Une vente annulée depuis pretix*,

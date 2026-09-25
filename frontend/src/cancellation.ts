@@ -118,7 +118,11 @@ export function saveCancellationResult(scope: string, result: CancelResult): voi
 
 export function loadCancellationResult(scope: string, now = Date.now()): CancelResult | null {
   const saved = read<{ result?: CancelResult; at?: unknown }>(`${RESULT_PREFIX}${scope}`);
-  if (!saved?.result?.cancellation || typeof saved.at !== "number") return null;
+  // Recognised by a field every cancellation answer carries, from every
+  // server version — not by the reversing line, which an answer handed back
+  // for a cancellation made in the back office may not have (HistoryPanel
+  // reads the sale in its place).
+  if (typeof saved?.result?.replayed !== "boolean" || typeof saved.at !== "number") return null;
   if (now - saved.at > RESULT_KEEPS_FOR_MS) {
     write(`${RESULT_PREFIX}${scope}`, null);
     return null;

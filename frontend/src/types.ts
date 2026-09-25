@@ -478,7 +478,14 @@ export interface History {
 }
 
 export interface CancelResult {
-  cancellation: JournalLine;
+  /**
+   * The reversing line in this till's journal. Always there for a
+   * cancellation made by this request; typed as optional because the app also
+   * shows answers handed back for one made before — perhaps in the back
+   * office, which leaves no line on any till — and it reads the sale in its
+   * place rather than trusting every server to invent one.
+   */
+  cancellation: JournalLine | null;
   /** The sale that was reversed, so its lines can go back in the basket. */
   sale: JournalLine | null;
   replayed: boolean;

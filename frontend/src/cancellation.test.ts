@@ -235,6 +235,15 @@ describe("the cancellation waiting on screen", () => {
     expect(localStorage.getItem(`openpos.cancelResult.v1.${SCOPE}`)).toBeNull();
   });
 
+  it("comes back without a reversing line of its own", () => {
+    // An answer handed back for a cancellation made in the back office may
+    // have none: the panel reads the sale instead, so it is still the answer.
+    const backOffice = { ...result(), cancellation: null, already_cancelled: true, by_back_office: true };
+    saveCancellationResult(SCOPE, backOffice);
+
+    expect(loadCancellationResult(SCOPE)).toEqual(backOffice);
+  });
+
   it("ignores anything that is not a saved answer", () => {
     const key = `openpos.cancelResult.v1.${SCOPE}`;
 

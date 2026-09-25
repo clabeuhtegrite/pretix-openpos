@@ -116,6 +116,17 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
       saveCancellationResult(scope, result);
       setDone(result);
       setReason("");
+      // The answer is the server's word that this sale is cancelled, so the
+      // list says so now rather than when the reload below gets through. On
+      // the network that just made a cancellation slow, that reload is the
+      // next thing to fail — and a list still offering "Cancel this order" on
+      // a sale whose money was just handed back invited a second press, which
+      // comes back "already cancelled" with that same amount to hand back.
+      setLines((current) =>
+        current?.map((entry) =>
+          entry.seq === line.seq ? { ...entry, cancelled: true, can_cancel: false } : entry,
+        ) ?? current,
+      );
       await load();
     } catch (e) {
       // A refusal is final, so the key has been spent; a network failure, a
@@ -155,8 +166,16 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
 
         {done ? (
           (() => {
-            const amount = Math.abs(toCents(done.cancellation.total));
-            const card = done.cancellation.payment_type === "card";
+            // The reversing line says what was credited and how it was paid.
+            // Read with the sale as a fallback all the same: an answer handed
+            // back for a cancellation made elsewhere may have no line of its
+            // own to show — one made in the back office is on no till — and
+            // this screen is kept and restored, so a field it cannot do
+            // without would take the whole panel down every time it opens.
+            const reversed = done.cancellation ?? done.sale;
+            const amount = reversed ? Math.abs(toCents(reversed.total)) : 0;
+            const card = reversed?.payment_type === "card";
+            const order = done.sale?.order ?? done.cancellation?.order ?? "";
             // The reader gave the money back by itself, so the till is holding
             // nothing for this customer: the corrected sale is charged in full
             // and there is nothing to count out of the drawer. The same when
@@ -173,7 +192,9 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
             // time out of a drawer that never took the money back. Nothing in
             // the answer says otherwise, so nothing here claims it.
             const backOffice = done.by_back_office === true;
-            const nothingDue = sentBack || backOffice;
+            // ...and with no figure at all, no figure is invented: "give
+            // 0,00 € back" is not a thing to say to somebody holding a receipt.
+            const nothingDue = sentBack || backOffice || !reversed;
             return (
               <div className="history-done">
                 <div className="history-done-headline">
@@ -183,12 +204,11 @@ export default function HistoryPanel({ pairing, currency, cashier, onReuse, onCl
                       ? t("history.alreadyCancelledTitle")
                       : t("history.cancelled")}
                 </div>
-                <div className="history-done-meta">
-                  {t("history.cancelledMeta", {
-                    order: done.sale?.order ?? "",
-                    total: formatMoney(amount, currency),
-                  })}
-                </div>
+                {reversed && (
+                  <div className="history-done-meta">
+                    {t("history.cancelledMeta", { order, total: formatMoney(amount, currency) })}
+                  </div>
+                )}
                 {done.credit_note && (
                   <div className="history-done-meta">
                     {t("history.creditNote", { number: done.credit_note })}
