@@ -13,7 +13,11 @@ found by opening an order by hand.
 Checks the plugin's own screens too, each with the exact permission it declares:
 an unknown permission string is never in the permission set, so a screen would
 lock out every team that is not all-powerful while still working for an admin.
+The organizer's screens as well: the card readers page holds the SumUp account,
+so it asks for the organizer settings permission, not the devices one.
 """
+import csv
+import io
 import re
 import sys
 import time
@@ -184,6 +188,69 @@ with scopes_disabled():
                   f"{len(lines)} lines vs {expected_rows} entries + header")
             check("the columns a treasurer needs come first",
                   lines[0].startswith("seq;kind;datetime;order"), lines[0][:80])
+            # Text that could start a spreadsheet formula goes out behind an
+            # apostrophe; the amounts must not, negative ones included, or the
+            # column no longer adds up.
+            rows = list(csv.DictReader(io.StringIO(content), delimiter=";"))
+            reversals = [row for row in rows if row["kind"] == "cancellation"]
+            check("a cancellation's amount is still a number",
+                  all(row["total"].startswith("-") for row in reversals),
+                  str([row["total"] for row in reversals][:5]))
+            check("no text cell starts a formula",
+                  not any(row[column][:1] in ("=", "+", "-", "@")
+                          for row in rows for column in ("till", "cashier", "reason", "drawer")),
+                  "a text cell went out unguarded")
+
+    print("\n-- organizer screens, per permission -------------------------")
+    # The till devices screen and the cash drawers are the devices permission;
+    # the card readers page is the organizer's settings, since it holds the
+    # payment account's key. Each checked with exactly its permission and
+    # without it, as the event screens above.
+    if event:
+        organizer = event.organizer
+        org_base = f"/control/organizer/{organizer.slug}/openpos/"
+        for label, path in (("devices", org_base + "devices/"), ("card readers", org_base + "sumup/"),
+                            ("cash drawers", org_base + "drawers/")):
+            check(f"{label} renders for an admin", client.get(path).status_code == 200)
+
+        keeper, _ = User.objects.get_or_create(
+            email="openpos-orgcheck@localhost", defaults={"is_staff": False}
+        )
+        keeper.is_staff = False
+        keeper.save()
+        org_team, _ = Team.objects.get_or_create(
+            organizer=organizer,
+            name="openpos organizer permission check",
+            defaults={"all_events": True, "all_event_permissions": False,
+                      "limit_event_permissions": {}, "all_organizer_permissions": False,
+                      "limit_organizer_permissions": {}},
+        )
+        org_team.members.add(keeper)
+
+        def as_keeper(permissions, path):
+            org_team.limit_organizer_permissions = dict.fromkeys(permissions, True)
+            org_team.save(update_fields=["limit_organizer_permissions"])
+            return client_for(keeper).get(path).status_code
+
+        devices_only = ["organizer.devices:write"]
+        settings_only = ["organizer.settings.general:write"]
+        check("devices needs exactly organizer.devices:write",
+              as_keeper(devices_only, org_base + "devices/") == 200
+              and as_keeper([], org_base + "devices/") != 200)
+        check("card readers need organizer.settings.general:write",
+              as_keeper(settings_only, org_base + "sumup/") == 200)
+        check("and the devices permission alone does not open them",
+              as_keeper(devices_only, org_base + "sumup/") != 200)
+        page = client_for(keeper).get(org_base + "devices/").content.decode(errors="replace")
+        check("nor shows the link to them", org_base + "sumup/" not in page)
+        org_team.limit_organizer_permissions = {}
+        org_team.save(update_fields=["limit_organizer_permissions"])
+
+        # The device the smoke test paired has called the API since.
+        page = client.get(org_base + "devices/").content.decode(errors="replace")
+        check("the devices screen says when a device was last heard from",
+              "Last contact" in page or "Dernier contact" in page,
+              "no last contact on the page: run dev/smoke_test.py first")
 
     print("\n-- the shell and its headers ---------------------------------")
     # Unauthenticated on purpose: the shell is public, the CSP is what keeps a

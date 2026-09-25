@@ -130,8 +130,19 @@ de tous les événements visibles ; celui-ci réduit à :
 - le cycle de vie du device (`initialize` implicite, `info`, `update`, `roll`,
   `revoke`, `eventselection`) ;
 - la lecture des événements (nom, devise) ;
-- les dix-sept endpoints Open POS du §8, caisse espèces comprise ;
-- `checkinrpc.redeem` et `checkinrpc.search` pour le scan à la porte.
+- les dix-huit endpoints Open POS du §8, caisse espèces et état de l'appareil
+  compris ;
+- `checkinrpc.redeem` et `checkinrpc.search` pour le scan à la porte — la
+  recherche seulement avec un terme d'au moins trois caractères (§5).
+
+La recherche a sa règle à elle parce que pretix n'impose son minimum de trois
+caractères qu'à qui ne peut pas lire toutes les commandes des listes demandées,
+et qu'un device le peut toujours sur les événements auxquels il a accès. Sans
+terme, pretix lui répondait donc avec **tous** les billets de ces listes : noms,
+e-mails et secrets — un secret *est* un billet —, pour chaque événement que le
+device voit, les anciens compris. Le profil refuse (403, le refus de pretix
+lui-même) toute recherche dont un terme compte moins de trois caractères hors
+espaces. Le profil pretixSCAN de pretix n'est pas concerné.
 
 ### 2.4 Le journal
 
@@ -187,8 +198,8 @@ laquelle son argent est entré, dans le champ `drawer_session`.
 | `…/openpos/sales/` | Journal des ventes + recette par caisse et par produit | `event.orders:read` |
 | `…/openpos/arrivals/` | Arrivées de la soirée : entrés, pas venus, arrivées par quart d'heure, scans par appareil, refus par motif | `event.orders:read` |
 | `/control/organizer/<org>/openpos/arrivals/` | Arrivées : une ligne par soirée, et l'heure d'arrivée sur toutes les soirées passées | `event.orders:read` sur ≥ 1 événement |
-| `/control/organizer/<org>/openpos/devices/` | Appareils de caisse : rôle, lecteur et caisse espèces de chacun | `organizer.devices:write` |
-| `/control/organizer/<org>/openpos/sumup/` | Lecteurs de carte : le compte SumUp et ses lecteurs | `organizer.devices:write` |
+| `/control/organizer/<org>/openpos/devices/` | Appareils de caisse : rôle, lecteur et caisse espèces de chacun, dernier contact, ventes pas encore envoyées | `organizer.devices:write` |
+| `/control/organizer/<org>/openpos/sumup/` | Lecteurs de carte : le compte SumUp et ses lecteurs | `organizer.settings.general:write` |
 | `/control/organizer/<org>/openpos/drawers/` | Caisses espèces : les tiroirs, l'historique de chacun et le rapport de chaque soirée (§5septies) | `organizer.devices:write` ; en lecture, `event.orders:read` sur **tous** les événements |
 
 La page Ventes porte aussi une action, `…/openpos/sales/catch-up/` (POST,
@@ -199,8 +210,14 @@ Les quatre derniers sont au niveau *organisateur*, et pas par événement : une
 caisse est appairée une fois, un lecteur et un tiroir appartiennent à
 l'association, et « à quelle heure les gens arrivent-ils ? » est une question
 qui porte sur toutes les soirées passées — chacune ayant en plus sa page à elle.
-Les écrans matériels sont gardés par la permission des devices de pretix — qui
-peut appairer une caisse peut dire à quoi elle sert.
+Les appareils et les tiroirs sont gardés par la permission des devices de
+pretix — qui peut appairer une caisse peut dire à quoi elle sert. Les lecteurs
+de carte, eux, demandent le droit de modifier les réglages de l'organisateur,
+celui de sa page de réglages dans pretix : l'écran tient la clé d'API SumUp et
+le code marchand, c'est-à-dire le compte de paiement de l'association, et y
+appairer, libérer ou oublier un lecteur agit sur ce compte. Jusqu'à la 0.24.2,
+il suffisait de pouvoir modifier les appareils. Le lien vers cet écran, depuis
+le menu comme depuis *Appareils de caisse*, n'apparaît qu'à qui peut l'ouvrir.
 
 Sept d'entre eux ont leur entrée dans le menu latéral de pretix : *Qui vend
 quoi*, *Ventes* et *Arrivées* sous **Open POS** dans celui de l'événement, les
@@ -278,7 +295,7 @@ qu'une caisse est appairée une fois et vend pour l'événement du soir.
 | Rôle | Écran d'accueil | Ce qu'il peut faire |
 |---|---|---|
 | *Non attribué* | la grille | les deux, comme avant ce réglage |
-| **Caisse** | la grille | vendre, encaisser ; pas de bouton porte |
+| **Caisse** | la grille | vendre, encaisser ; pas de bouton porte, ni la liste des billets |
 | **Porte** | le scanner | scanner, et *Vendre* pour un billet sur place |
 
 Un appareil sans rôle se comporte exactement comme avant : la grille, avec la
@@ -309,6 +326,23 @@ la carte sur le téléphone de quelqu'un. Deux caisses ne peuvent pas se partage
 un lecteur non plus — les deux règles sont vérifiées à l'enregistrement, pas
 suggérées. La liste déroulante est remplie depuis le compte SumUp de
 l'organisateur ; le §5quinquies décrit ce qui se passe ensuite.
+
+**Une caisse ne reçoit pas la liste des billets.** La liste embarquée de la
+porte (`offline/`, §5ter) porte le secret de chaque billet, et un secret est un
+billet : qui a la liste peut imprimer de quoi entrer. Un appareil dont le rôle
+est *Caisse* se la voit refuser, en 403 avec le code `door_role_required`, pour
+que l'app jette aussi la copie qu'elle a déjà. Jusqu'à la 0.24.2, la caisse du
+bar, qui ne scanne rien, la téléchargeait toutes les cinq minutes et la gardait
+dans son navigateur, où elle restait après le désappairage. Une *Porte*, ou un
+appareil non attribué, la reçoit comme avant.
+
+La même page dit, sous le nom de chaque appareil, **quand il a parlé au
+serveur pour la dernière fois** — « Dernier contact il y a 3 minutes » et
+l'heure —, noté à chaque appel authentifié à un endpoint Open POS, au plus une
+fois par minute. pretix ne garde d'un device que sa création et son appairage :
+une tablette muette depuis 21 h 14 et une autre qui vient de vendre une tournée
+s'y ressemblaient. Et, quand la caisse l'a signalé, les ventes qu'elle garde
+sans avoir pu les envoyer (§5septies).
 
 ### 2.7bis Ce qu'un appareil a le droit de vendre
 
@@ -471,9 +505,19 @@ dans *Open POS → Réglages* et en refaisant *Qui vend quoi*.
 
 Sous *Organisateur → Devices → Créer* :
 
-- donner accès à l'événement (ou à tout l'organisateur) ;
+- lui donner accès aux seuls événements qu'elle sert — pas à tout
+  l'organisateur ;
 - choisir le profil de sécurité **Open POS** ;
 - pretix affiche un QR d'appairage et le code en texte.
+
+Pourquoi pas tout l'organisateur : pour chaque événement auquel il a accès, un
+device atteint la liste embarquée de la porte, avec le secret de chaque billet,
+et la recherche par nom, avec les noms et les e-mails des acheteurs. Son token
+vit dans le navigateur d'une tablette posée sur un comptoir, et il faut partir
+du principe qu'il fuitera (§2.3) : chaque événement de plus est une liste
+d'invités de plus qu'il ouvre, et « tout l'organisateur » y ajoute les soirées
+passées comme celles qui ne sont pas encore créées. L'événement suivant
+s'ajoute le moment venu, sous *Appareils → cet appareil*, sans réappairer.
 
 Un device peut vendre pour plusieurs événements : tout événement auquel il a accès
 et où le plugin est activé se choisit dans *Réglages → Événement* de l'app, que
@@ -729,7 +773,10 @@ une liste. C'est [CheckinScreen.tsx](../frontend/src/components/CheckinScreen.ts
   pretix refuse avec un motif explicite au lieu de renvoyer un « incomplet »
   inexploitable.
 - **Recherche par nom** (`checkinrpc/search`) quand un code ne passe pas : nom
-  partiel, e-mail ou code de commande dans un seul champ.
+  partiel, e-mail ou code de commande dans un seul champ. **Trois caractères au
+  moins**, espaces non comptés : le serveur refuse en 403 une recherche plus
+  courte, qui aurait rendu toute la liste des invités d'un coup (§2.3). La
+  porte n'a jamais eu besoin que de retrouver un porteur.
 - **QR uniquement.** jsQR ne lit ni Code128 ni PDF417 ; un billet imprimé avec un
   code-barres non-QR doit passer par un lecteur douchette en mode clavier.
 
@@ -932,8 +979,12 @@ l'annulation au journal ([backoffice.py](../pretix_openpos/backoffice.py)) :
   pretix garde.
 
 La caisse voit ensuite la vente « annulée » et ne propose plus de l'annuler.
-Quand c'est la caisse qui annule, rien de tout cela ne se déclenche : elle
-écrit sa propre ligne, avec sa clé, une seule fois.
+Une caisse dont l'historique n'était pas encore relu, et qui l'annule quand
+même, reçoit cette annulation-là, avec `by_back_office: true` : rien n'est
+remboursé depuis la caisse, puisque l'argent se règle dans pretix, et la
+réponse le dit à l'app pour qu'elle ne fasse rien rendre. Quand c'est la
+caisse qui annule, rien de tout cela ne se déclenche : elle écrit sa propre
+ligne, avec sa clé, une seule fois.
 
 **L'argent.** pretix enchaîne sur sa fenêtre de remboursement. Espèces : rien ne
 change, on rembourse à la main. Carte encaissée sur un lecteur : la ligne
@@ -1017,10 +1068,27 @@ autre réglage n'ait bougé.
 | Cas | Réponse |
 |---|---|
 | Vente d'une autre caisse | 400, « cette vente a été faite sur une autre caisse » |
-| Vente déjà annulée | 400, et le bouton n'est de toute façon plus proposé |
-| Rejeu de la même requête | 200 avec `replayed: true`, la première annulation est renvoyée |
+| Vente déjà annulée, sous une autre clé | 200 avec l'annulation qui tient, `replayed` et `already_cancelled` à `true` ; le bouton n'est de toute façon plus proposé |
+| Rejeu de la même requête | 200 avec `replayed: true`, la première annulation est renvoyée, avoir compris |
+| Clé qui désigne une autre écriture : une vente, l'annulation d'une autre caisse ou du back-office | 400 sur `idempotency_key` : rien n'est rejoué, rien n'est remboursé |
 | Commande purgée (mode test) | 400 : le journal survit à la commande, pas l'inverse |
 | pretix refuse l'annulation | 400 avec le motif de pretix, tel quel |
+
+Une annulation déjà faite se retrouve plutôt qu'elle ne se refuse. Le premier
+essai peut être passé côté serveur et sa réponse s'être perdue en route ; la
+caisse qui réessaie après avoir refermé l'historique, ou rechargé l'app, ne peut
+plus savoir que c'est le même, et envoie une clé neuve. Jusqu'à la 0.24.2, elle
+recevait un 400 « déjà annulée », et l'opérateur perdait l'avoir, le montant à
+rendre et le panier à corriger d'une annulation bel et bien faite. Elle reçoit
+maintenant cette annulation telle qu'elle a été répondue la première fois, et
+le remboursement carte que le premier essai n'avait pas atteint est terminé au
+passage — sauf pour une annulation faite dans le back-office, dont on lit
+seulement où en est la carte, sans rien demander à SumUp.
+
+Une clé ne rejoue que l'annulation de la caisse qui l'a envoyée. Les clés que
+le back-office donne à ses propres annulations se devinent ; rejouer l'une
+d'elles depuis une caisse aurait demandé à SumUp un remboursement que la
+personne au back-office avait peut-être choisi de ne pas faire.
 
 ---
 
@@ -1047,7 +1115,7 @@ aller vérifier.
 |---|---|
 | Vendre | Oui, au tarif embarqué ; la vente part en file d'attente |
 | Rendre la monnaie | Oui, calculé localement |
-| Scanner un billet | Oui, contre la **liste embarquée** (`openpos/offline/`), chargée dès l'appairage pour la liste de la porte — pas seulement à l'ouverture du scan — et rafraîchie toutes les 5 min tant qu'il y a du réseau |
+| Scanner un billet | Oui, contre la **liste embarquée** (`openpos/offline/`), chargée dès l'appairage pour la liste de la porte — pas seulement à l'ouverture du scan — et rafraîchie toutes les 5 min tant qu'il y a du réseau. Sur un appareil qui garde la porte seulement : une *Caisse* ne la reçoit pas (§2.7) |
 | Redémarrer la caisse | Oui : catalogue et configuration du dernier chargement sont conservés par événement |
 | Historique, annulation, effectif | Non — ils demandent le serveur, et l'écran le dit |
 
@@ -1157,7 +1225,10 @@ Un survendu reste un survendu : c'est un fait à réconcilier après la soirée,
 - **La file vit sur l'appareil.** Tablette perdue ou effacée avant la reprise,
   ventes perdues. `navigator.storage.persist()` est demandé pour réduire le
   risque d'éviction, mais il n'y a pas de miracle : l'appareil *est* le registre
-  tant qu'il n'a pas parlé.
+  tant qu'il n'a pas parlé. Ce qu'il peut faire, c'est le dire : une caisse qui
+  envoie son état (`status/`, §8) dit au serveur combien de ventes elle garde
+  et depuis quand, et le back-office l'affiche là où l'on compte l'argent
+  (§5septies).
 - **Le scan hors ligne ne voit que sa liste embarquée.** Un billet vendu en ligne
   pendant la coupure y est absent : il sera refusé à la porte. Un billet déjà
   scanné à une autre porte pendant la coupure sera accepté ici, et enregistré par
@@ -1314,7 +1385,8 @@ avant la soirée plutôt que pendant.
 
 ### Mise en route
 
-1. *Organisateur → Open POS → Lecteurs de carte* : coller le **code marchand**
+1. *Organisateur → Open POS → Lecteurs de carte* — il faut le droit de
+   modifier les réglages de l'organisateur (§2.5) : coller le **code marchand**
    (visible dans le tableau de bord SumUp, du genre `MH4H92C7`) et une **clé
    d'API** créée sous *Paramètres → Pour les développeurs → Clés d'API*. La clé
    est stockée sur le serveur, n'est jamais renvoyée dans la page, ne part
@@ -1369,6 +1441,17 @@ seconde d'attente.
 L'URL de rappel porte un jeton aléatoire par organisateur. Ce n'est pas la
 frontière de sécurité — le paragraphe ci-dessus l'est — mais ça évite que la
 lecture puisse être déclenchée par quiconque connaît le slug.
+
+**Un identifiant de lecteur non plus.** Il entre dans l'adresse d'un appel que
+le serveur envoie avec la clé d'API, et il arrive entre autres d'un formulaire
+du back-office, que celui qui le poste remplit comme il veut :
+`rdr_A/../../../v1.0/merchants/…/refunds` aurait fait d'un « oublier ce
+lecteur » un remboursement. Un identifiant doit donc avoir la forme de ceux de
+SumUp (`rdr_` suivi de lettres, de chiffres ou de `_`), sinon rien n'est
+demandé à SumUp et l'écran dit « Ce n'est pas un lecteur SumUp. ». Chaque
+partie variable d'une adresse — code marchand, lecteur, paiement, transaction —
+est de plus encodée comme un seul segment, et une adresse qui sortirait de cette
+forme est refusée avant que la clé ne parte avec elle.
 
 ### « On n'a pas pu demander » n'est pas « ça a échoué »
 
@@ -1591,6 +1674,37 @@ demande le droit de modifier ses commandes : c'est pour qui vient de rembourser
 une carte depuis SumUp et veut voir la commande le dire sans attendre. Il
 n'avance pas l'heure de la dernière comparaison automatique, qui reste le
 témoin de la tâche.
+
+**Quand ça échoue.** `runperiodic` de pretix attrape ce qu'une tâche lève,
+l'affiche et sort avec le code 0 : une comparaison qui échoue toutes les cinq
+minutes pendant une semaine ne se voit que dans les journaux du serveur, alors
+que des remboursements dus à des clients l'attendent. Chaque échec de ce
+travail est donc **une ligne ERROR** du logger `pretix_openpos.reconcile`, qui
+commence toujours par les mêmes mots, pour qu'une alerte la trouve :
+
+```
+Open POS periodic task failed: <étape>: <sur quoi>: <pourquoi>
+```
+
+| Étape | Ce qui a échoué |
+|---|---|
+| `reconcile` | La tâche entière (relevée ensuite, pour que pretix la compte aussi comme une erreur) |
+| `compare_organizer` | Un organisateur entier ; les autres continuent |
+| `read_history` | SumUp n'a pas donné son historique : clé révoquée, panne… (sa réponse suit) |
+| `absorb_transaction` | Un paiement rendu dans SumUp n'a pas pu être repris dans pretix |
+| `cancel_order` | Une commande rendue en entier n'a pas pu être annulée : ses billets font encore entrer |
+| `ask_again_refund` | Un remboursement en attente n'a pas pu être redemandé |
+| `refund_given_up` | Trois jours de « pas encore » : un remboursement abandonné, pour une personne |
+| `compare_now` | Le bouton *Comparer maintenant* |
+
+Un plantage est suivi de sa trace ; un refus de SumUp, de sa réponse seule. La
+ligne tient sur une ligne, même quand la réponse de SumUp ou une erreur de base
+de données en font plusieurs, et ne porte jamais la clé d'API. Dans les
+journaux de pretix, elle est précédée du niveau, de l'heure et du nom du
+logger, par exemple
+`ERROR 2026-09-25 21:14:05,120 pretix_openpos.reconcile reconcile Open POS periodic task failed: read_history: …`.
+Ces mots ne se traduisent pas et ne changent pas sans que l'alerte change avec
+eux.
 
 ### Deux caisses sur un seul lecteur
 
@@ -1915,6 +2029,31 @@ reste vient du journal du tiroir. Un total courant stocké serait un troisième
 registre, et le premier à se tromper. Les ventes en mode test en sont exclues
 et comptées à part, comme partout (§6.5).
 
+### Ce qui n'est pas encore arrivé
+
+L'attendu ne connaît que les ventes arrivées au serveur. Une vente en espèces
+encaissée sans réseau est dans le tiroir, mais encore sur la tablette, et celui
+qui compte ce tiroir en attendant trouve plus d'argent que prévu sans aucune
+explication. La caisse le dit donc elle-même : elle envoie son état au serveur
+(`status/`, §8) — combien de ventes elle garde, depuis quand, quand sa file est
+passée pour la dernière fois, et sa version.
+
+- La page *Appareils de caisse* l'affiche sur la ligne de l'appareil, en
+  orange (« 3 ventes en attente depuis 21:14 », avec l'heure du rapport), et
+  le dit en tête de page : avant de compter ce tiroir, remettre l'appareil en
+  réseau et le laisser envoyer.
+- Les pages des tiroirs le disent à côté de l'attendu — la liste, l'historique
+  et le rapport de fermeture : « Pas encore dans ce montant, encore sur une
+  caisse : Bar 1 — … ». Pour l'ouverture en cours, chaque appareil du tiroir
+  qui garde des ventes ; pour une ouverture fermée, seulement celui dont les
+  ventes peuvent y tomber (la plus ancienne encaissée avant la fermeture,
+  signalée après l'ouverture).
+
+Ce sont les mots de la caisse, sur son horloge à elle, et la page les donne
+comme tels : un indice pour le comptage, pas un chiffre du compte. Une
+tablette qui n'a jamais envoyé son état n'affiche rien, ce qui veut dire « on
+ne sait pas », pas « rien n'attend ».
+
 ### Dans le back-office
 
 *Open POS → Caisses espèces* liste les tiroirs, leurs appareils, l'ouverture en
@@ -2150,6 +2289,8 @@ ligne est là parce que son absence coûte cher une fois la porte ouverte.
 5. Faire **une vente en mode test** sur chaque tablette, puis l'annuler. C'est
    le seul moyen de savoir que le token est encore valide, que l'événement est
    joignable et que l'écran répond. Le mode test ne se mélange pas à la recette.
+   *Appareils de caisse* dit ensuite, sous chaque tablette, un **dernier
+   contact** de quelques minutes.
 
 **Le lecteur de carte**
 
@@ -2185,6 +2326,12 @@ ligne est là parce que son absence coûte cher une fois la porte ouverte.
     compter le fond et **ouvrir la caisse**. Une fois par tiroir ; les autres
     appareils du même tiroir le voient ouvert dans la minute, ou dès qu'on
     touche leur bandeau.
+
+Et en fin de soirée, avant de compter un tiroir : aucune caisse de ce tiroir ne
+dit garder de ventes pas encore envoyées (en orange sur *Appareils de caisse*
+et à côté de l'attendu du tiroir, §5septies). S'il y en a, remettre la tablette
+en réseau et la laisser les envoyer : sinon le tiroir compté dépasse l'attendu
+de leur montant, sans que rien ne l'explique.
 
 ### 7.0bis Si SumUp tombe en pleine soirée
 
@@ -2304,6 +2451,15 @@ d'intégrité. Le bouton
 compris — pour la personne qui tient les comptes ; les recettes se recalculent
 depuis ce fichier, c'est le but.
 
+Un nom de caissier, un motif, un nom de caisse ou de tiroir est saisi par
+quelqu'un, et un tableur exécute comme une formule une cellule qui commence par
+`=`, `+`, `-`, `@`, une tabulation ou un retour chariot (`=HYPERLINK(…)`, ou
+pire sur un vieil Excel). Ces cellules-là partent donc précédées d'une
+apostrophe, la marque « texte, pas formule » des tableurs, qui reste visible.
+Les montants et les nombres partent tels quels, négatifs compris : `-10.00`
+reste un nombre qu'une colonne additionne. L'export d'un tiroir suit la même
+règle.
+
 **Une soirée à la fois.** Deux champs de date en haut de la page réduisent le
 journal *et* les recettes à l'intervalle demandé, et le bouton Export CSV
 emporte le même intervalle — un export qui rendrait tout pendant que l'écran
@@ -2348,6 +2504,12 @@ Deux formes du même problème :
   navigateur fermé — longtemps après que quiconque puisse être encore au
   comptoir. Vérifier dans SumUp si la carte est passée avant de faire l'un ou
   l'autre.
+
+Seule une **vente carte** règle un paiement du lecteur. Une caisse qui
+abandonnait le lecteur et prenait des espèces le faisait sous la même clé : la
+vente en espèces passait pour le règlement du paiement carte, et le débit arrivé
+ensuite disparaissait de la seule liste qui pouvait le montrer. Jusqu'à la
+0.24.2, n'importe quelle écriture portant la clé comptait.
 
 Les refus et les paiements déjà remboursés n'y figurent pas : la section est vide
 une soirée ordinaire, et veut donc dire quelque chose quand elle ne l'est pas.
@@ -2423,13 +2585,14 @@ Base : `/api/v1`. Authentification : `Authorization: Device <token>`.
 | `POST` | `/device/initialize` | Appairage (endpoint pretix natif) |
 | `POST` | `/device/update` | Version et système du device, quand ils ont changé depuis le dernier envoi (endpoint pretix natif) |
 | `GET` | `/organizers/<org>/openpos/` | Événements de cette caisse : `results`, ceux où elle peut vendre ; `unavailable`, ceux qu'elle atteint sans pouvoir y vendre, avec `reason` (`plugin_disabled`) |
+| `POST` | `/organizers/<org>/openpos/status/` | Ce que l'app dit d'elle-même : ventes gardées sans avoir pu les envoyer, depuis quand, dernière synchronisation, version ; répond l'heure du serveur |
 | `GET` | `/organizers/<org>/events/<ev>/openpos/config/` | Événement, device, listes de contrôle, produits d'admission, coupures, boutons montant libre et consigne |
 | `GET` | `…/openpos/catalog/` | Catalogue par catégorie, prix, stock restant |
 | `POST` | `…/openpos/checkout/` | Encaissement |
 | `GET` | `…/openpos/summary/` | Recette de l'événement (d'une date, dans une série) : total, par produit, consignes, par appareil, par soirée |
 | `GET` | `…/openpos/attendance/?list=<id>` | Présents sur place, sur une liste de contrôle ; scans de l'événement, par appareil (`scans`) |
 | `GET` | `…/openpos/history/` | Journal de l'événement, **de cette caisse seule** (100 dernières, `truncated` si tronqué) |
-| `GET` | `…/openpos/offline/?list=<id>` | Liste embarquée pour scanner sans réseau |
+| `GET` | `…/openpos/offline/?list=<id>` | Liste embarquée pour scanner sans réseau ; refusée à un appareil *Caisse* (`door_role_required`) |
 | `POST` | `…/openpos/cancel/` | Annule une vente de cette caisse (avoir + remboursement + contrepassation) |
 | `POST` | `…/openpos/terminal/start/` | Met le panier sur le lecteur de cette caisse |
 | `GET` | `…/openpos/terminal/status/?idempotency_key=<clé>` | Où en est ce paiement lecteur |
@@ -2440,12 +2603,17 @@ Base : `/api/v1`. Authentification : `Authorization: Device <token>`.
 | `POST` | `…/openpos/drawer/count/` | Comptage, répondu avec l'attendu et l'écart |
 | `POST` | `…/openpos/drawer/close/` | Ferme sur un comptage encore à jour (`count_seq`), ou sans comptage (`uncounted`) une caisse ouverte un jour précédent |
 | `POST` | `/organizers/<org>/checkinrpc/redeem/` | Pointage (endpoint pretix natif) |
-| `GET` | `/organizers/<org>/checkinrpc/search/` | Recherche de participant (natif) |
+| `GET` | `/organizers/<org>/checkinrpc/search/` | Recherche de participant (natif) ; chaque `search` d'au moins trois caractères hors espaces, sinon 403 |
 | `POST` | `…/checkinlists/<id>/failed_checkins/` | Refus donné hors ligne, envoyé à la reprise (natif) |
 
 Tout appel sur un événement où le plugin n'est pas activé est refusé en 403, quel
 que soit l'accès du device : c'est ce qui empêche une app périmée de vendre sur
 un événement pour lequel l'organisateur n'a jamais ouvert de caisse.
+
+Chaque appel d'un appareil à un endpoint Open POS, celui des événements compris,
+note l'heure du serveur comme son **dernier contact**, au plus une fois par
+minute (§2.7). Un cache ou une base qui refuse l'écriture ne coûte rien à
+l'appel : la vente passe, et les journaux du serveur le disent.
 
 Les trois endpoints `terminal/` n'existent que pour une caisse à qui un lecteur
 est attribué ; les autres reçoivent `no_terminal`. De même, les écritures
@@ -2634,6 +2802,40 @@ les quatre chiffres sont tirés de la même population. `list` est facultatif da
 la requête et retombe alors sur la liste configurée pour la caisse ; une liste
 inconnue est un 400, pas un repli silencieux sur une autre porte.
 
+### Corps et réponse de `status/`
+
+Envoyé par l'app, au niveau de l'organisateur et sans événement : une file
+d'attente appartient à la tablette, pas à une soirée.
+
+```json
+{
+  "pending_sales": 3,
+  "oldest_pending_at": "2026-08-16T19:14:05.000Z",
+  "last_sync_at": "2026-08-16T19:02:40.000Z",
+  "version": "0.24.2"
+}
+```
+
+| Champ | Ce qu'il dit |
+|---|---|
+| `pending_sales` | Obligatoire. Entier de 0 à 2 147 483 647 : les ventes que l'app garde sans avoir pu les envoyer |
+| `oldest_pending_at` | Date ISO 8601, ou `null` ; facultatif. Quand la plus ancienne a été encaissée, à l'horloge de la tablette. Ignoré, et gardé à `null`, quand `pending_sales` vaut 0 |
+| `last_sync_at` | Date ISO 8601, ou `null` ; facultatif. Quand la file est passée en entier pour la dernière fois |
+| `version` | Obligatoire, 64 caractères au plus, vide accepté : le build que l'app fait tourner |
+
+```json
+{ "server_time": "2026-08-16T19:14:06.120Z" }
+```
+
+`200`, et l'heure du serveur en UTC, au format de `toISOString()` en
+JavaScript : l'app peut y lire l'écart de son horloge. Chaque rapport remplace
+le précédent, et prend pour heure la réception, pas l'horloge de la tablette ;
+il ne touche ni au rôle, ni au lecteur, ni au tiroir de l'appareil. Un rapport
+qui ne se lit pas est un `400` par champ, et rien n'en est gardé. Seul un
+appareil appairé sous le profil Open POS peut l'envoyer, et à son organisateur :
+une session du back-office, un jeton d'API d'équipe ou un appareil sous le
+profil pretixSCAN reçoivent `403`.
+
 ### Corps et réponse de `cancel/`
 
 ```json
@@ -2645,12 +2847,29 @@ inconnue est un 400, pas un repli silencieux sur une autre porte.
   "cancellation": { "seq": 43, "kind": "cancellation", "total": "-52.50", "cancels_seq": 42, … },
   "sale":         { "seq": 42, "kind": "sale", "total": "52.50", "cancelled": true, … },
   "replayed": false,
+  "already_cancelled": false,
+  "by_back_office": false,
   "credit_note": "FESTIVAL-00004",
-  "refunded": true
+  "refunded": true,
+  "card_refund": "none"
 }
 ```
 
-`credit_note` vaut `null` quand la commande n'avait pas de facture — voir §5bis.
+Trois booléens disent comment on est arrivé à cette annulation :
+
+| Cas | Statut | `replayed` | `already_cancelled` | `by_back_office` |
+|---|---|---|---|---|
+| Annulation faite par cette requête | `201` | `false` | `false` | `false` |
+| Même requête rejouée (même clé) | `200` | `true` | `false` | `false` |
+| Vente déjà annulée par cette caisse, sous une autre clé | `200` | `true` | `true` | `false` |
+| Vente déjà annulée depuis le back-office de pretix | `200` | `true` | `true` | `true` |
+
+`card_refund` prend les valeurs du §5quinquies (*Annuler une vente carte*).
+Pour une annulation faite dans le back-office, il est lu sans rien demander à
+SumUp : `none` (pas de lecteur, ou personne n'a demandé de remboursement),
+`already`, `pending` ou `failed`. `sale` vaut `null` si la vente annulée ne
+peut plus être lue. `credit_note` vaut `null` quand la commande n'avait pas de
+facture — voir §5bis.
 `sale.positions` sert à remettre les articles au panier ; les prix, eux, sont
 repris du catalogue du jour et non du journal, sinon une correction ressusciterait
 le tarif d'hier.
@@ -2675,6 +2894,9 @@ le tarif d'hier.
 | 400 `count_required` | Fermeture sans comptage d'une caisse ouverte ce soir | Idem |
 | 400 `no_drawer` | Écriture `drawer/` depuis un appareil sans caisse espèces | Relit l'état : le bouton de la caisse disparaît |
 | 400 `reason_required` | Entrée ou sortie d'argent sans motif | Affiche le message |
+| 400 `idempotency_key` | `cancel/` avec une clé qui désigne l'écriture de quelqu'un d'autre : une vente, l'annulation d'une autre caisse ou du back-office | Ne devrait pas arriver : une clé neuve par annulation |
+| 403 `door_role_required` | `offline/` demandé par un appareil dont le rôle est *Caisse* | Jette la liste embarquée qu'elle a gardée, et ne la redemande pas |
+| 403 sur `checkinrpc/search/` | Terme de recherche de moins de trois caractères hors espaces : « Request denied by device security profile. » | Ne devrait pas arriver : la recherche attend le troisième caractère |
 | 401 / 403 | Device révoqué, ou plugin désactivé sur l'événement | Affiche le motif, avec *Réessayer* et *Dépairer* ; l'appairage n'est jamais effacé tout seul |
 
 ---
@@ -2730,21 +2952,23 @@ Ce qu'elle couvre, fichier par fichier :
 |---|---|
 | `test_checkout.py` | Le serveur seul décide du prix, l'idempotence, le total annoncé, le rendu de monnaie, le check-in immédiat limité aux produits d'admission |
 | `test_offline_replay.py` | Ce qu'un rejeu enregistre, et surtout ce qu'il **refuse de refuser** — quota épuisé, produit retiré du canal, déclinaison désactivée |
-| `test_offline_snapshot.py` | Le contenu de la liste embarquée, et que la lire coûte le même nombre de requêtes quelle que soit sa taille |
-| `test_cancel.py` | Avoir, remboursement, contre-passation, et le rejeu d'une annulation qui avait expiré |
+| `test_offline_snapshot.py` | Le contenu de la liste embarquée, que la lire coûte le même nombre de requêtes quelle que soit sa taille, et qu'une *Caisse* ne la reçoit pas |
+| `test_cancel.py` | Avoir, remboursement, contre-passation, le rejeu d'une annulation qui avait expiré, une vente déjà annulée retrouvée plutôt que refusée (depuis la caisse ou le back-office, carte comprise), et une clé qui n'est pas la sienne |
 | `test_journal.py` | La chaîne de hachage : falsification détectée, ligne supprimée détectée, ajout seul, versions de charge, ce que le point de reprise voit et ne voit pas |
 | `test_summary.py` | La recette de tout l'événement (une date dans une série, une annulation retombant sur la date de sa vente), par produit et par catégorie, les consignes à part, par appareil et par soirée, le mode test à part, une annulation qui se nette |
 | `test_catalog.py` | Ce que la caisse a le droit de vendre et ce qu'on lui dit de l'événement |
 | `test_attendance.py` | Le compteur de présents, produits d'admission seulement |
 | `test_door_scans.py` | Le compteur du scanneur : par appareil et pour tout l'événement (une date dans une série), ce qui est un scan et ce qui n'en est pas, la marque hors ligne de pretix, un refus envoyé après coup, une vente en caisse qui n'est plus marquée hors ligne |
 | `test_device_roles.py` | Le rôle d'un appareil, et ce que le serveur refuse à une caisse qui a un lecteur |
+| `test_device_status.py` | Le dernier contact (une écriture par minute, jamais au prix de l'appel), le contrat de `status/`, et ce que les pages des appareils et des tiroirs en disent, en français et en anglais ; une ligne écrite sans les colonnes de la 0012, comme le ferait une 0.24 remise en place |
 | `test_terminal.py` | Le paiement sur le lecteur de bout en bout : panier épinglé, double appui, webhook forgé, remboursement à l'annulation |
-| `test_sumup_client.py` | La forme d'un échec SumUp — « refusé », « pas encore », « on n'a pas pu demander » |
-| `test_sumup_backoffice.py` | Les deux écrans matériels : la clé d'API hors des journaux, un lecteur donné à une seule caisse, SumUp en panne |
+| `test_sumup_client.py` | La forme d'un échec SumUp — « refusé », « pas encore », « on n'a pas pu demander » — et qu'un identifiant qui n'en est pas un n'atteint jamais SumUp |
+| `test_sumup_backoffice.py` | Les deux écrans matériels : la clé d'API hors des journaux, la permission des réglages pour les lecteurs, un lecteur forgé dans un formulaire, un lecteur donné à une seule caisse, SumUp en panne |
 | `test_backoffice.py` | Les écrans, chacun avec sa permission exacte — dont la page de commande de pretix, qu'une vente espèces a déjà mise en 500 |
 | `test_arrivals.py` | La page de l'organisateur : une ligne par soirée (une date de série comprise), l'histogramme et tout ce qu'il ne doit pas compter |
 | `test_event_arrivals.py` | La page d'une soirée : les arrivées font les entrés, les refus par motif font les refusés, un billet ressorti puis rentré n'arrive qu'une fois, minuit, plusieurs nuits, la liste de la caisse, une date de série |
-| `test_security.py` | Ce qu'un token de caisse atteint, et surtout ce qu'il n'atteint pas |
+| `test_security.py` | Ce qu'un token de caisse atteint, et surtout ce qu'il n'atteint pas — dont la liste des invités par une recherche trop courte |
+| `test_sumup_reconcile.py` | SumUp et pretix mis d'accord, et la ligne ERROR que chaque échec laisse pour l'alerte |
 
 **La suite frontend** (`frontend/src/*.test.ts`) couvre la logique qui décide où
 va l'argent : les règles de reprise de la file, les verdicts hors ligne à la
@@ -2763,8 +2987,8 @@ entier.
 
 | Script | Ce qu'il couvre |
 |---|---|
-| [`dev/smoke_test.py`](../dev/smoke_test.py) | Bout en bout de l'API : appairage, catalogue, vente espèces, rejeu à l'identique, recette. Bibliothèque standard uniquement |
-| [`dev/backoffice_test.py`](../dev/backoffice_test.py) | Rend les pages du back-office avec un vrai navigateur de session |
+| [`dev/smoke_test.py`](../dev/smoke_test.py) | Bout en bout de l'API : appairage, état de l'appareil, catalogue, vente espèces, rejeu à l'identique, recherche par nom trop courte refusée, annulation retrouvée plutôt que refusée, recette. Bibliothèque standard uniquement |
+| [`dev/backoffice_test.py`](../dev/backoffice_test.py) | Rend les pages du back-office avec un vrai navigateur de session, chaque écran avec sa permission exacte — ceux de l'organisateur compris —, et l'export CSV |
 | [`dev/concurrency_test.py`](../dev/concurrency_test.py) | Martèle la caisse depuis plusieurs fils et vérifie que le journal tient. **À lancer sur PostgreSQL** : le savepoint du journal est indulgent sur SQLite et impitoyable sur PostgreSQL, ce que la suite backend ne peut pas voir |
 | [`dev/arrivals_test.py`](../dev/arrivals_test.py) | Sème son propre organisateur et vérifie l'histogramme, puis la page d'une soirée, sur des données connues |
 
@@ -2805,13 +3029,18 @@ l'installation — donc `npm i --no-save playwright` avant de s'en servir.
 | L'événement n'apparaît pas au moment de l'appairage ou dans *Réglages → Événement* | Plugin non activé sur l'événement (l'app le nomme alors, sous le champ), ou device sans accès à l'événement (*Appareils → cet appareil*). Que la boutique soit en ligne ne compte pas |
 | « Faites entrer » ne s'affiche jamais | Aucune liste de contrôle choisie dans *Open POS → Réglages*, ou aucun produit d'admission dans la vente |
 | Un billet refuse de se scanner | Code-barres non-QR : passer par la recherche par nom ou une douchette clavier |
+| La recherche par nom répond « Request denied by device security profile » | Moins de trois caractères, espaces non comptés : le serveur refuse une recherche qui rendrait toute la liste (§2.3) |
+| Une caisse n'a pas de liste embarquée, ou la porte hors ligne dit n'en avoir aucune | L'appareil est réglé *Caisse* dans *Open POS → Appareils de caisse* : seule une *Porte*, ou un appareil non attribué, reçoit la liste (§2.7) |
 | La caméra ne démarre pas | Contexte non sécurisé (HTTP), ou autorisation refusée dans les réglages du navigateur |
 | La recette ne correspond pas au tiroir | Vérifier la ligne « mode test » sur l'écran *Ventes* : elle est comptée à part. Sur un appareil rattaché à une caisse espèces, c'est le rapport de fermeture qui se rapproche du tiroir, pas la recette : elle ne compte ni le fond ni les entrées et sorties d'argent |
+| Le tiroir compté dépasse l'attendu | Une caisse du tiroir garde des ventes en espèces pas encore envoyées : c'est dit en orange à côté de l'attendu et sur *Appareils de caisse*. Remettre la tablette en réseau et la laisser les envoyer, puis relire le rapport (§5septies) |
 | La caisse refuse les espèces : « La caisse … n'est pas ouverte » | Ouvrir la caisse espèces (bouton billet de la barre du haut) sur un fond compté. Le client peut attendre : rien n'a été enregistré |
 | « Ouverte … et jamais fermée » | La caisse espèces n'a pas été fermée une soirée précédente. *Fermer sans compter* sur la caisse, ou fermer depuis son rapport avec le montant si quelqu'un l'a compté, puis ouvrir celle du soir |
 | « La caisse a bougé depuis le comptage » à la fermeture | Une vente ou un mouvement est passé depuis, souvent sur l'autre tablette du même tiroir : recompter, puis fermer |
 | L'app reste sur un vieux build | Une caisse ouverte compare sa version à celle du serveur au rafraîchissement du catalogue et affiche « Nouvelle version — recharger » entre deux clients ; sinon, fermer et rouvrir l'app force la reprise |
 | La liste des appareils affiche une ancienne version | Le device n'a pas été rouvert avec du réseau depuis la mise à jour : il déclare sa version à la première ouverture connectée. C'est aussi le moyen de voir, après un déploiement, quels appareils ont repris le nouveau JavaScript |
+| *Lecteurs de carte* n'apparaît pas dans le menu, ou répond 403 | L'écran demande le droit de modifier les réglages de l'organisateur, pas seulement les appareils (§2.5) |
+| Une alerte sur « Open POS periodic task failed », ou la page Ventes dit que la dernière comparaison avec SumUp est vieille | Lire la ligne ERROR dans les journaux du serveur : l'étape et la réponse de SumUp y sont (§5quinquies, *Quand ça échoue*). `read_history` à chaque passage, c'est souvent une clé d'API révoquée dans SumUp |
 
 ---
 
