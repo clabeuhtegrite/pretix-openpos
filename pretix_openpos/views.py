@@ -220,6 +220,33 @@ class Echo:
         return value
 
 
+#: What a spreadsheet takes for the start of a formula, at the start of a cell.
+FORMULA_STARTS = ("=", "+", "-", "@", "\t", "\r")
+
+
+def text_cell(value):
+    """
+    A text cell of an export, made safe to open in a spreadsheet.
+
+    Excel, LibreOffice and Google Sheets all run a cell that starts with one
+    of :data:`FORMULA_STARTS` as a formula — ``=HYPERLINK(…)``, ``@SUM(…)``,
+    or worse on an Excel that still honours DDE — and what a cashier's name,
+    a reason or a drawer's name says is decided by whoever typed it on a till
+    or in the back office. The exports are opened by whoever keeps the books,
+    on the machine that keeps them. A leading apostrophe is the spreadsheet's
+    own mark for "text, not a formula"; it shows, which is the price of the
+    file opening safely.
+
+    For text only. Amounts and numbers are written as they are, negative ones
+    included: ``-3.00`` is what a cancellation is worth, and quoting it would
+    turn a column somebody sums into text.
+    """
+    text = "" if value is None else str(value)
+    if text.startswith(FORMULA_STARTS):
+        return "'" + text
+    return text
+
+
 #: How long a card payment may sit unanswered before it is worth a human's
 #: attention.
 #:
@@ -692,17 +719,19 @@ class SalesView(EventPermissionRequiredMixin, ListView):
                     for line in sale.positions
                 )
                 tariff_total = off_tariff_total(sale)
+                # Every column that can carry text goes through text_cell,
+                # whoever wrote it; the numbers go out as numbers.
                 yield writer.writerow([
                     sale.seq,
-                    sale.kind,
+                    text_cell(sale.kind),
                     sale.datetime.astimezone(tz).isoformat(),
-                    sale.order_code,
-                    sale.device_name or sale.device_serial or (
+                    text_cell(sale.order_code),
+                    text_cell(sale.device_name or sale.device_serial or (
                         str(_("pretix back office")) if sale.from_back_office else ""
-                    ),
-                    sale.device_serial,
-                    sale.cashier,
-                    sale.payment_type,
+                    )),
+                    text_cell(sale.device_serial),
+                    text_cell(sale.cashier),
+                    text_cell(sale.payment_type),
                     sale.total,
                     "" if sale.cash_given is None else sale.cash_given,
                     "" if sale.cash_change is None else sale.cash_change,
@@ -711,9 +740,9 @@ class SalesView(EventPermissionRequiredMixin, ListView):
                     "" if tariff_total is None else tariff_total,
                     "" if tariff_total is None else sale.total - tariff_total,
                     "" if sale.cancels_seq is None else sale.cancels_seq,
-                    sale.reason,
-                    positions,
-                    sale.drawer_session.drawer.name if sale.drawer_session else "",
+                    text_cell(sale.reason),
+                    text_cell(positions),
+                    text_cell(sale.drawer_session.drawer.name if sale.drawer_session else ""),
                     sale.drawer_session_id or "",
                 ])
 

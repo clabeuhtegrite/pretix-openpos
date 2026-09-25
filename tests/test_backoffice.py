@@ -2,6 +2,8 @@
 The screens the organiser uses: the journal, and pretix' own order page — which
 the plugin renders part of, and once turned into a 500 for every cash sale.
 """
+import csv
+import io
 from decimal import Decimal
 
 import pytest
@@ -9,6 +11,7 @@ import pytest
 from pretix_openpos.models import PosSale
 
 from .conftest import sell
+from .test_drawers import give_drawer, open_it
 
 
 def sales_url(event):
@@ -58,6 +61,46 @@ def test_the_journal_exports_as_one_file(backoffice, till, event, ticket, beer):
     assert "seq;kind;datetime" in body
     assert "2× Entrée + 1× Bière" in body
     assert "Camille" in body
+
+
+@pytest.mark.django_db
+def test_what_people_typed_does_not_run_as_a_formula_in_the_export(
+    backoffice, till, device, event, ticket
+):
+    """
+    CSV injection, through every column somebody gets to type into.
+
+    A cashier's name and a reason come from a till, a till's name and a
+    drawer's from the back office; the file is opened in a spreadsheet by
+    whoever keeps the books. A cell starting with ``=``, ``+``, ``-`` or
+    ``@`` is a formula there, so it goes out behind an apostrophe and reads
+    as the text that was typed. The amounts do not: a cancellation is worth
+    -10.00, and a figure turned into text is a column that no longer adds up.
+    """
+    device.name = "+33 caisse"
+    device.save()
+    give_drawer(device, name="@Bar")
+    open_it(till)
+    sell(till, [{"item": ticket.pk, "count": 1}], cashier='=HYPERLINK("http://x";"clic")',
+         idempotency_key="sale-formula")
+    till.post("cancel", {"seq": 1, "idempotency_key": "cancel-formula",
+                         "cashier": "@Léa", "reason": "-2+3"})
+
+    body = b"".join(
+        backoffice.get(sales_url(event) + "?export=csv").streaming_content
+    ).decode("utf-8")
+
+    header, *rows = csv.reader(io.StringIO(body.lstrip("﻿")), delimiter=";")
+    sale, cancellation = (dict(zip(header, row)) for row in rows)
+    assert sale["cashier"] == "'=HYPERLINK(\"http://x\";\"clic\")"
+    assert sale["till"] == "'+33 caisse"
+    assert sale["drawer"] == "'@Bar"
+    assert sale["kind"] == "sale"
+    assert sale["positions"] == "1× Entrée"
+    assert cancellation["cashier"] == "'@Léa"
+    assert cancellation["reason"] == "'-2+3"
+    assert cancellation["total"] == "-10.00"
+    assert cancellation["cancels_seq"] == "1"
 
 
 @pytest.mark.django_db

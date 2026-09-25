@@ -38,7 +38,7 @@ from pretix.control.views.organizer import OrganizerDetailViewMixin
 
 from .drawers import DrawerError, archive_drawer, close_drawer, figures, open_session_of, restore_drawer
 from .models import PosDrawer, PosDrawerEntry, PosDrawerSession, PosSale
-from .views import Echo
+from .views import Echo, text_cell
 
 #: Openings per page on a drawer's screen. One an evening, so a season.
 SESSIONS_PER_PAGE = 50
@@ -497,12 +497,14 @@ class DrawerView(DrawerAccessMixin, OrganizerDetailViewMixin, TemplateView):
                 fig = figures(session)
                 closing = line["closing"]
                 opening = line["opening"]
+                # Names and the note are typed by people, so they go through
+                # text_cell; every figure goes out as a number.
                 yield writer.writerow([
                     session.pk,
                     session.opened_at.astimezone(tz).isoformat(),
-                    opening.cashier if opening else "",
+                    text_cell(opening.cashier if opening else ""),
                     session.closed_at.astimezone(tz).isoformat() if session.closed_at else "",
-                    closing.cashier if closing else "",
+                    text_cell(closing.cashier if closing else ""),
                     fig["float"],
                     fig["cash_sales"],
                     fig["cash_cancellations"],
@@ -517,7 +519,7 @@ class DrawerView(DrawerAccessMixin, OrganizerDetailViewMixin, TemplateView):
                         if closing and closing.amount is not None else None
                     ),
                     fig["card"],
-                    closing.reason if closing else "",
+                    text_cell(closing.reason if closing else ""),
                 ])
 
         response = StreamingHttpResponse(rows(), content_type="text/csv; charset=utf-8")
