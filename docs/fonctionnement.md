@@ -612,8 +612,10 @@ envoyée qu'une fois le paiement validé. Le §5quinquies décrit la séquence.
 [api/views.py](../pretix_openpos/api/views.py), méthode `checkout()` :
 
 ```
-1.  Rejeu ?           PosSale avec cette clé d'idempotence ?
-                      → oui : renvoyer la vente d'origine, 200, replayed=true. Fin.
+1.  Rejeu ?           La clé d'idempotence, lue seule, avant tout le reste.
+                      PosSale avec cette clé ? → oui : renvoyer la vente
+                      d'origine, 200, replayed=true, quoi que dise le reste de
+                      la requête. Fin. Une clé absente ou malformée : 400.
 
 2.  Résolution        Chaque ligne doit être un produit filter_available(channel=openpos).
                       Variante inconnue/inactive → 400. Produit à variantes sans
@@ -628,20 +630,28 @@ envoyée qu'une fois le paiement validé. Le §5quinquies décrit la séquence.
 5.  Monnaie           espèces et reçu < total → 400. Sinon rendu = reçu − total.
 
 ┌── transaction atomique ────────────────────────────────────────────────┐
+│ 5bis. Clé tenue     Verrou consultatif PostgreSQL sur la clé, puis on   │
+│                     relit : une autre tentative a enregistré la vente   │
+│                     entre-temps → réponse de rejeu, rien d'écrit.       │
 │ 6.  Commande        OrderCreateSerializer, status "p" (payée), provider │
 │                     openpos_cash|openpos_card, send_email=False,        │
 │                     sales_channel=openpos, une position par unité.      │
 │ 7.  Journal         PosSale.record() : chaîne sur la ligne précédente.  │
+│                     Clé déjà prise par une autre transaction → tout est │
+│                     annulé, commande comprise, et on répond le rejeu.   │
 │ 8.  Renvoi          journal_seq écrit dans le payment.info_data.        │
 └────────────────────────────────────────────────────────────────────────┘
 
-9.  Après commit      order_placed, order_paid, log_action, facture si l'événement
-                      en génère. Hors transaction : un échec ici ne doit jamais
-                      annuler une commande déjà payée par le client.
+9.  Après commit      order_placed, order_paid, log_action. Hors transaction :
+                      un échec ici ne doit jamais annuler une commande déjà
+                      payée par le client.
 
-10. Contrôle d'accès  perform_checkin() sur chaque position d'admission.
-                      Best-effort : l'argent est dans le tiroir, un pointage raté
-                      est remonté à l'app, jamais une raison d'échouer la vente.
+10. Traîne            Facture si l'événement en génère, puis perform_checkin()
+                      sur chaque position d'admission pas encore entrée. Dans
+                      une transaction à elle, la commande verrouillée : un rejeu
+                      qui la termine en même temps attend son tour. Best-effort :
+                      l'argent est dans le tiroir, un pointage raté est remonté à
+                      l'app, jamais une raison d'échouer la vente.
 
 11. Réponse           201 + code de commande, seq du journal, rendu, checked_in,
                       checkin_errors.
@@ -2043,6 +2053,39 @@ requête retrouve la vente et renvoie la commande d'origine avec `replayed: true
 
 C'est la façon la plus courante pour une caisse maison de perdre de l'argent.
 
+**La clé est lue avant tout le reste.** Une requête dont la clé est déjà au
+journal reçoit la vente enregistrée, quoi que dise le reste de son corps : le
+tarif a pu bouger depuis, la dernière place a pu partir avec cette vente-là, la
+date être passée. Jugée d'abord, une nouvelle tentative d'une vente passée
+pouvait revenir *refusée* — et la personne en caisse, lisant « refusé »,
+encaissait une deuxième fois. Seule une clé absente ou malformée reste un 400 :
+il n'y a alors rien à chercher.
+
+**Deux tentatives qui se chevauchent n'en font qu'une.** La recherche de la clé
+ne dit que « personne n'a *fini* cette vente ». Deux tentatives parties en même
+temps — une requête expirée côté app pendant que le serveur travaillait encore,
+des interrogations qui s'empilent derrière un SumUp lent et confirment deux
+fois — passaient toutes deux, et chacune créait sa commande : la seconde restait,
+payée, billet compris, sans ligne de journal. Désormais la transaction qui écrit
+commence par un verrou consultatif PostgreSQL sur la clé
+(`pg_advisory_xact_lock`, de portée transaction, dans un espace de clés distinct
+de ceux de pretix) puis relit : la seconde attend que la première ait fini, la
+trouve, et répond le rejeu sans avoir rien écrit — pas même le contrôle de quota,
+qui aurait refusé un client payé parce que la première venait de prendre la
+dernière place. Une tentative qui attend plus de 5 s reçoit un **503
+`sale_in_progress`** (avec `Retry-After`) : l'app renvoie tout 5xx sous la même
+clé, et ce renvoi est un rejeu. Filet de sécurité, sur toute base : si le journal
+trouve malgré tout la clé prise par une autre transaction, la commande que cette
+tentative venait de créer est annulée avec elle et la réponse est le rejeu. La
+même règle vaut pour la ligne de consigne rendue (sa clé est celle de la vente
+suivie de `:refund`, d'où le refus d'une clé qui finirait ainsi).
+
+La traîne — facture, pointages — tourne sous un verrou sur la commande, et ne
+refait que ce qui manque : le rejeu qui la termine en même temps que la première
+tentative ne produit ni seconde facture ni seconde entrée. La première tentative
+annonce toujours combien de billets de la commande sont entrés, qui que ce soit
+qui les ait pointés ; un rejeu annonce ce qu'il a lui-même pointé.
+
 La même clé couvre le paiement sur le lecteur, et c'est encore plus nécessaire
 là : le *reader checkout* de SumUp n'a aucune idempotence à lui, donc un
 deuxième appel démarre un deuxième paiement. `terminal/start` retrouve le
@@ -2538,9 +2581,10 @@ lui a servie. Quand il ne l'est pas, une caisse a rejoué une vente prise hors d
 ce que son rôle couvre : voir §2.7bis.
 
 `replayed` vaut `true` — avec un `200` au lieu d'un `201` — quand la clé
-d'idempotence désigne une vente déjà enregistrée. La réponse est alors celle de
-la vente d'origine, et ce qui manquait de la traîne (facture, pointages) est
-terminé au passage.
+d'idempotence désigne une vente déjà enregistrée, quel que soit le reste du
+corps. La réponse est alors celle de la vente d'origine, et ce qui manquait de la
+traîne (facture, pointages) est terminé au passage ; `checked_in` y compte ce que
+ce rejeu a pointé lui-même, `0` quand rien ne manquait.
 
 ### Réponse de `summary/`
 
@@ -2660,6 +2704,8 @@ le tarif d'hier.
 | Statut | Cas | Ce que fait l'app |
 |---|---|---|
 | 400 `price_changed` | Les prix ont bougé sous le panier | Recharge le catalogue, re-tarife, garde le panneau ouvert |
+| 400 `idempotency_key` | Clé absente, malformée, ou finissant par `:refund` | Ne devrait pas arriver : l'app frappe des UUID |
+| 503 `sale_in_progress` | Une autre tentative de la même vente est encore en cours d'écriture | Renvoie plus tard sous la même clé (tout 5xx) ; le renvoi est un rejeu |
 | 400 `positions` | Produit non vendable au guichet / variante inconnue | Affiche le message tel quel |
 | 400 `cash_given` | Reçu inférieur au dû, ou montant reçu sur un panier qui paie | Affiche le message |
 | 400 `terminal_required` | Vente carte qu'aucun paiement lecteur ne justifie | Ne devrait pas arriver : l'app passe par le lecteur (§5quinquies). Affiche le refus |

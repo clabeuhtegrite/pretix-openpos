@@ -1,8 +1,9 @@
+import hashlib
 import logging
 from datetime import datetime, time, timedelta
 from decimal import Decimal
 
-from django.db import IntegrityError, transaction
+from django.db import IntegrityError, OperationalError, connection, transaction
 from django.utils.timezone import make_aware, now
 from django.utils.translation import gettext_lazy as _
 from django_scopes import scopes_disabled
@@ -14,9 +15,10 @@ from pretix.base.services.checkin import CheckInError, RequiredMediaExchangeErro
 from pretix.base.services.invoices import generate_invoice, invoice_qualified
 from pretix.base.services.orders import OrderError, cancel_order
 from pretix.base.signals import order_paid, order_placed
+from pretix.helpers import OF_SELF
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import APIException, PermissionDenied, ValidationError
 from rest_framework.response import Response
 
 from .. import __version__
@@ -711,6 +713,104 @@ def hold_drawer_session(session, payment_type):
     return held
 
 
+#: How long an attempt at a sale waits for another attempt at the same sale.
+#:
+#: The other one is creating an order, which takes a fraction of a second; one
+#: still holding the key after this is stuck rather than busy, and the till is
+#: better off told to come back than kept waiting on it — which a 503 does,
+#: because the app retries anything the server could not take, under the same
+#: key, and that retry is a replay once the first attempt has committed.
+KEY_WAIT_SECONDS = 5
+
+#: The first half of every advisory lock taken on an idempotency key.
+#:
+#: PostgreSQL has two kinds of advisory lock key: one 64-bit number, which is
+#: what pretix' own quota and event locks use, and a pair of 32-bit numbers,
+#: which is a separate space entirely. The pair is used here so that no key of
+#: ours can ever collide with one of pretix' — a collision would not be wrong,
+#: only slow, but it would be slow in the middle of somebody's order. The
+#: number itself is "OPOS" in ASCII, so it names itself in ``pg_locks``.
+KEY_LOCK_CLASS = 0x4F504F53
+
+
+class SaleInProgress(APIException):
+    """Another attempt at this very sale is still being written."""
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+
+    def __init__(self):
+        super().__init__(
+            {
+                "detail": _("This sale is still being recorded. Try again in a moment."),
+                "code": "sale_in_progress",
+            }
+        )
+        # Retry-After, which is also what makes the app treat this as "not now"
+        # rather than "no": a 5xx is retried under the same key, a 4xx is not.
+        self.wait = 2
+
+
+def recorded_sale(event, idempotency_key):
+    """The journal row a till's transaction was recorded under, or ``None``."""
+    return PosSale.objects.filter(event=event, idempotency_key=idempotency_key).first()
+
+
+def hold_idempotency_key(event, idempotency_key):
+    """
+    Queue behind any other attempt at the same sale, then look for it again.
+
+    Called first thing inside the transaction that writes a sale. A key looked
+    up before that transaction only says nobody had *finished* this sale: two
+    attempts overlapping on two workers — a till whose request timed out while
+    the server was still working, polls stacking up behind a slow SumUp and
+    confirming twice — both passed that look-up, both created an order, and
+    the second found out only when the journal refused its row. By then its
+    order existed, paid, with a ticket in it and no line in the journal.
+
+    So the second attempt waits here until the first has committed or given
+    up, and then reads again. Under PostgreSQL's default isolation that read
+    sees the first attempt's row, and the caller answers as a replay without
+    having written anything — not even the quota check, which would otherwise
+    refuse a paid customer because the first attempt had just taken the last
+    place. Returns that row, or ``None`` when this attempt is the one to write.
+
+    A transaction-scoped lock rather than a session one, so it can never
+    outlive the request that took it: connections are pooled and reused, and
+    a session lock left on one would hold that key against every later
+    attempt. Only PostgreSQL has advisory locks; the database pretix runs on in
+    production does, and SQLite, which the tests run on, lets one writer in
+    at a time anyway. On any backend the journal's unique key stays the last
+    word — see ``existing_ok`` in :meth:`PosSale.record`.
+    """
+    if connection.vendor == "postgresql":
+        _lock_idempotency_key(event, idempotency_key)
+    return recorded_sale(event, idempotency_key)
+
+
+def _lock_idempotency_key(event, idempotency_key):
+    # Stable across processes and restarts, unlike hash(): every worker has to
+    # arrive at the same number for the same key. Four bytes because that is
+    # the size of the second half of the lock key; two different keys landing
+    # on the same number only ever makes one wait for the other.
+    digest = hashlib.blake2b(
+        f"{event.pk}:{idempotency_key}".encode(), digest_size=4
+    ).digest()
+    try:
+        # A savepoint of its own, so that giving up on the wait leaves the
+        # surrounding transaction usable for the rollback — and the lock
+        # outlives it: a transaction-level lock taken in a savepoint that is
+        # released belongs to the transaction until it ends.
+        with transaction.atomic(), connection.cursor() as cursor:
+            cursor.execute(f"SET LOCAL lock_timeout = '{KEY_WAIT_SECONDS}s'")
+            cursor.execute(
+                "SELECT pg_advisory_xact_lock(%s, %s)",
+                [KEY_LOCK_CLASS, int.from_bytes(digest, "big", signed=True)],
+            )
+            cursor.execute("SET LOCAL lock_timeout TO DEFAULT")
+    except OperationalError as exc:
+        raise SaleInProgress() from exc
+
+
 class OpenPosOrganizerViewSet(viewsets.ViewSet):
     """
     Organizer-level endpoint, so a till can find out which events it may sell for.
@@ -1021,6 +1121,72 @@ class OpenPosViewSet(viewsets.ViewSet):
 
     @action(detail=False, methods=["post"], url_path="checkout", url_name="checkout")
     def checkout(self, request, **kwargs):
+        from .serializers import KeySerializer
+
+        event = request.event
+
+        # The key, and only the key, before anything else is judged. A retry
+        # of a sale already recorded has to get that sale back whatever the
+        # rest of it says now: the tariff may have moved since, the last place
+        # may have gone to this very sale, the date may be over — and a retry
+        # answered with any of those refusals told the till that a sale which
+        # went through had not, so the cashier took the money a second time.
+        keyed = KeySerializer(data=request.data)
+        keyed.is_valid(raise_exception=True)
+        idempotency_key = keyed.validated_data["idempotency_key"]
+
+        replay = recorded_sale(event, idempotency_key)
+        if replay is not None:
+            return self._replay(request, replay)
+
+        try:
+            return self._checkout(request, idempotency_key)
+        except PosSale.AlreadyRecorded:
+            # Another attempt at this sale committed while this one was being
+            # written, and everything this one wrote has been rolled back with
+            # the exception — its order included. What is left to do is what a
+            # retry arriving a second later would have got.
+            replay = recorded_sale(event, idempotency_key)
+            if replay is None:
+                # The row in the way held a key derived from this one rather
+                # than this one. Nothing written here survived, which is the
+                # part that matters; the rest is a fault to look at.
+                raise
+            return self._replay(request, replay)
+        except ValidationError:
+            # A refusal is an answer only for a sale nobody recorded. One
+            # decided while another attempt was committing this same sale —
+            # judged before the transaction, against a catalogue the first
+            # attempt had just moved — would tell the till "not sold" about a
+            # sale that was.
+            replay = recorded_sale(event, idempotency_key)
+            if replay is None:
+                raise
+            return self._replay(request, replay)
+
+    def _replay(self, request, replay):
+        """
+        The answer to a sale already recorded: the original one, finished.
+
+        The original attempt may have died between committing the order and
+        the best-effort tail: the connection that carried this very retry is
+        proof that connections die at the worst moment. Whatever is missing —
+        the invoice, the check-ins, and nothing else — is done now. Idempotent:
+        a second retry finds nothing left to do.
+        """
+        body = self._checkout_payload(request.event, replay, replayed=True)
+        if replay.kind == PosSale.KIND_SALE and replay.order is not None:
+            checked_in, checkin_errors = self._finish(
+                request,
+                replay.order,
+                offline_at=replay.datetime if replay.offline else None,
+                replayed=True,
+            )
+            body["checked_in"] = checked_in
+            body["checkin_errors"] = checkin_errors
+        return Response(body, status=status.HTTP_200_OK)
+
+    def _checkout(self, request, idempotency_key):
         from .serializers import CheckoutSerializer
 
         event = request.event
@@ -1029,31 +1195,6 @@ class OpenPosViewSet(viewsets.ViewSet):
         serializer = CheckoutSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
-        idempotency_key = data["idempotency_key"]
-
-        # A retry of a sale we already committed must hand back the original
-        # rather than sell a second set of tickets.
-        replay = PosSale.objects.filter(
-            event=event, idempotency_key=idempotency_key
-        ).first()
-        if replay:
-            body = self._checkout_payload(event, replay, replayed=True)
-            # The original attempt may have died between committing the order
-            # and the best-effort tail: the connection that carried this very
-            # retry is proof that connections die at the worst moment. Whatever
-            # is missing — the invoice, the check-ins, and nothing else — is
-            # done now. Idempotent: a second retry finds nothing left to do.
-            if replay.kind == PosSale.KIND_SALE and replay.order is not None:
-                self._ensure_invoice(request, replay.order)
-                checked_in, checkin_errors = self._check_in(
-                    request,
-                    replay.order,
-                    only_missing=True,
-                    offline_at=replay.datetime if replay.offline else None,
-                )
-                body["checked_in"] = checked_in
-                body["checkin_errors"] = checkin_errors
-            return Response(body, status=status.HTTP_200_OK)
 
         # A till that drives a card reader may not record a card payment the
         # reader did not validate.
@@ -1371,6 +1512,12 @@ class OpenPosViewSet(viewsets.ViewSet):
         recorded_at = offline["recorded_at"] if offline else None
 
         with transaction.atomic():
+            # Before anything is locked or written: an attempt that finds this
+            # sale recorded meanwhile leaves with nothing to undo.
+            earlier = hold_idempotency_key(event, idempotency_key)
+            if earlier is not None:
+                raise PosSale.AlreadyRecorded(earlier)
+
             if not offline:
                 drawer_session = hold_drawer_session(drawer_session, data["payment_type"])
 
@@ -1441,6 +1588,11 @@ class OpenPosViewSet(viewsets.ViewSet):
                     offline=bool(offline),
                     recorded_at=recorded_at,
                     drawer_session=drawer_session,
+                    # A row under this key that this transaction did not write
+                    # belongs to another attempt at the same sale, and keeping
+                    # the order just created beside it would sell the tickets
+                    # twice. Raised instead, which undoes that order.
+                    existing_ok=False,
                 )
 
                 # Cross-reference the journal entry from the payment so the
@@ -1475,6 +1627,8 @@ class OpenPosViewSet(viewsets.ViewSet):
                     offline=bool(offline),
                     recorded_at=recorded_at,
                     drawer_session=drawer_session,
+                    # Either half, for the same reason as the sale's.
+                    existing_ok=False,
                 )
 
         # Everything below runs after the sale is durably committed: a failure
@@ -1482,7 +1636,7 @@ class OpenPosViewSet(viewsets.ViewSet):
         checked_in, checkin_errors = None, []
         if order is not None:
             self._post_commit(request, order)
-            checked_in, checkin_errors = self._check_in(
+            checked_in, checkin_errors = self._finish(
                 request, order, offline_at=recorded_at
             )
 
@@ -2742,7 +2896,13 @@ class OpenPosViewSet(viewsets.ViewSet):
         return body
 
     def _post_commit(self, request, order):
-        """Fire the signals and invoicing that pretix' own order API fires."""
+        """
+        Fire the signals pretix' own order API fires, once, for a new order.
+
+        Only ever for the attempt that created the order. The invoice pretix'
+        API would also issue here is left to :meth:`_finish`, which every
+        request for this sale goes through, retries included.
+        """
         payment = order.payments.last()
         if payment and payment.state == OrderPayment.PAYMENT_STATE_CONFIRMED:
             order.log_action(
@@ -2767,7 +2927,32 @@ class OpenPosViewSet(viewsets.ViewSet):
                 auth=request.auth,
             )
 
-        self._ensure_invoice(request, order)
+    def _finish(self, request, order, *, offline_at=None, replayed=False):
+        """
+        What is left once a sale is committed: its invoice and its check-ins.
+
+        Run by the attempt that recorded the sale, and again by every request
+        that finds it recorded — a retry, or a second attempt that overlapped
+        the first and lost — because the first may have died between its
+        commit and this. Each part looks at what exists before doing anything,
+        and the order's row is held while it does: the attempt that lost the
+        race gets here at the same moment as the one that won, and without the
+        lock both saw no invoice and no entry, and wrote one each — two
+        invoices for one sale, and one customer counted in twice.
+
+        A transaction of its own, never the sale's: nothing here may undo an
+        order the customer has paid for. A step that fails is rolled back to
+        its own savepoint and reported, and the steps after it still run.
+        """
+        with transaction.atomic():
+            # Only the order's own row: pretix' order manager joins the event
+            # for its scope, and a plain FOR UPDATE would lock the event row
+            # too — every till's tail waiting on every other's.
+            order = Order.objects.select_for_update(of=OF_SELF).get(pk=order.pk)
+            self._ensure_invoice(request, order)
+            return self._check_in(
+                request, order, offline_at=offline_at, replayed=replayed
+            )
 
     def _ensure_invoice(self, request, order):
         """
@@ -2775,7 +2960,7 @@ class OpenPosViewSet(viewsets.ViewSet):
 
         Called on the first attempt, and again on a replay: it checks what
         exists before doing anything, so running it twice costs a query, never
-        a second invoice.
+        a second invoice — and never both at once, see :meth:`_finish`.
         """
         settings = request.event.settings
         # The plugin answers for its own channel. An event set to invoice "by
@@ -2799,14 +2984,17 @@ class OpenPosViewSet(viewsets.ViewSet):
         # A zero-total order is not invoiceable anywhere, whatever the switch says.
         if wants_invoice and order.total and not order.invoices.last():
             try:
-                generate_invoice(order, trigger_pdf=True)
+                # Its own savepoint, so that a database error on the way leaves
+                # the check-ins after it a transaction they can still use.
+                with transaction.atomic():
+                    generate_invoice(order, trigger_pdf=True)
             except Exception as e:
                 logger.exception("Could not generate invoice for POS order %s", order.code)
                 order.log_action(
                     "pretix.event.order.invoice.failed", data={"exception": str(e)}
                 )
 
-    def _check_in(self, request, order, only_missing=False, offline_at=None):
+    def _check_in(self, request, order, *, offline_at=None, replayed=False):
         """
         Walk the customer straight in.
 
@@ -2814,10 +3002,16 @@ class OpenPosViewSet(viewsets.ViewSet):
         check-in that fails is reported back to the app for the operator to sort
         out, never a reason to fail the sale.
 
-        With ``only_missing`` — the replay-repair case — positions that already
-        have an entry on the list are left alone. The customer may have walked
-        to the door and been scanned there in the meantime, and forcing a second
-        entry would count one person twice.
+        Positions that already have an entry on the list are left alone,
+        whoever made it. On a replay the customer may have walked to the door
+        and been scanned there in the meantime; on the first attempt, a retry
+        that overlapped it may have finished the tail first. Forcing a second
+        entry would count one person twice either way.
+
+        The count answered is what the till announces. The first attempt says
+        how many of the order's tickets are in, whoever let them in, so a till
+        whose own retry got there first still says "let them in". A replay
+        says only what it did itself — nothing, when nothing was missing.
 
         ``offline_at`` is when a sale rung up with no network happened: the
         customer walked in then, not when the till found the network again.
@@ -2832,27 +3026,27 @@ class OpenPosViewSet(viewsets.ViewSet):
         # line has no door. Left unfiltered it also made the till announce
         # "let them in" after a pure shop sale.
         positions = [p for p in order.positions.select_related("item") if p.item.admission]
-        if only_missing and positions:
-            already = set(
-                Checkin.objects.filter(
-                    position__in=positions, list=clist, type=Checkin.TYPE_ENTRY
-                ).values_list("position_id", flat=True)
-            )
-            positions = [p for p in positions if p.pk not in already]
-        if not positions:
-            return 0, []
+        already = set(
+            Checkin.objects.filter(
+                position__in=positions, list=clist, type=Checkin.TYPE_ENTRY
+            ).values_list("position_id", flat=True)
+        ) if positions else set()
+        missing = [p for p in positions if p.pk not in already]
 
-        checked_in = 0
+        checked_in = 0 if replayed else len(already)
         errors = []
-        for position in positions:
+        for position in missing:
             try:
-                walk_in(
-                    position,
-                    clist,
-                    auth=request.auth,
-                    user=request.user if request.user.is_authenticated else None,
-                    offline_at=offline_at,
-                )
+                # A savepoint per ticket: one that fails in the database rolls
+                # back alone, and the next customer's ticket is still tried.
+                with transaction.atomic():
+                    walk_in(
+                        position,
+                        clist,
+                        auth=request.auth,
+                        user=request.user if request.user.is_authenticated else None,
+                        offline_at=offline_at,
+                    )
                 checked_in += 1
             except CheckInError as e:
                 errors.append(str(e))

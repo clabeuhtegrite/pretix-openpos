@@ -36,6 +36,10 @@ msgstr "Cette vente est datée dans le futur."
 msgid "This sale is too old to be replayed automatically."
 msgstr "Cette vente est trop ancienne pour être rejouée automatiquement."
 
+#: api/serializers.py:115
+msgid "This key is reserved for the deposit half of another sale."
+msgstr "Cette clé est réservée à la consigne rendue d’une autre vente."
+
 #: api/serializers.py:134
 msgid "A deposit refund carries no free-text amount."
 msgstr "Un rendu de consigne ne porte pas de montant libre."
@@ -126,6 +130,11 @@ msgstr ""
 #: api/views.py:519
 msgid "A free amount has to be more than nothing."
 msgstr "Un montant libre doit être supérieur à zéro."
+
+#: api/views.py:744
+msgid "This sale is still being recorded. Try again in a moment."
+msgstr ""
+"Cette vente est encore en cours d’enregistrement. Réessayez dans un instant."
 
 #: api/views.py:817
 #, python-brace-format
