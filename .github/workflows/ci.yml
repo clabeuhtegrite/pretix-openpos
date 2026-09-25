@@ -43,6 +43,9 @@ jobs:
   frontend:
     name: "Frontend: typecheck, tests, build"
     runs-on: ubuntu-latest
+    # A hung test would otherwise hold the runner for six hours, and hold
+    # every release with it: publishing waits for this workflow to finish.
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: frontend
@@ -63,6 +66,7 @@ jobs:
   lint:
     name: "Backend: lint"
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -76,6 +80,9 @@ jobs:
   backend:
     name: "Backend: tests (Python ${{ matrix.python }})"
     runs-on: ubuntu-latest
+    # libsass is compiled from source on a cold pip cache, which is most of
+    # the time this job can take.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:

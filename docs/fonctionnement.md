@@ -430,15 +430,16 @@ En Docker/Kubernetes, [`deploy/Dockerfile`](../deploy/Dockerfile) intègre le pl
 à l'image officielle :
 
 ```bash
-cd frontend && npm run build && cd ..
 docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.24.2 .
 ```
 
-Deux pièges :
+Le bundle PWA est généré, pas versionné : l'image le construit elle-même depuis
+l'arbre qu'on lui donne, puis `pretix rebuild` le collecte. Rien à compiler à la
+main avant. La CI et la publication vérifient qu'il est bien dans l'image
+(`app.js`) et qu'il porte la même version que le plugin.
 
-- **Compiler le front d'abord.** Le bundle PWA est généré, pas versionné. Une
-  image construite sans lui démarre très bien, puis renvoie des 500 sur le
-  JavaScript de la caisse.
+Un piège :
+
 - **`--platform linux/amd64` sur un Mac Apple Silicon.** Une image arm64 se
   construit, se pousse, passe tous les contrôles de manifeste, puis se fait
   refuser par le kubelet au moment du pull sur un nœud amd64.
@@ -3233,7 +3234,7 @@ pretix et ses migrations désactivées — le schéma est construit depuis les
 modèles, ce qui la rend rapide (une dizaine de secondes).
 
 ```bash
-pip install pretix && pip install --no-deps -e . && pip install pytest pytest-django
+pip install "pretix==2026.7.*" && pip install --no-deps -e . && pip install pytest pytest-django
 pytest
 
 # ou, sans rien installer sur la machine :
@@ -3314,7 +3315,7 @@ l'installation — donc `npm i --no-save playwright` avant de s'en servir.
 | Symptôme | Cause probable |
 |---|---|
 | L'app affiche les instructions d'installation alors qu'elle est installée | Le navigateur signale mal son mode d'affichage. Ouvrir une fois `/openpos/?browser=1` |
-| 500 sur le JavaScript de la caisse après déploiement | Image construite sans `npm run build` préalable |
+| 500 sur le JavaScript de la caisse après déploiement | Image construite autrement que par `deploy/Dockerfile` : bundle absent, ou `pretix rebuild` sauté. L'image publiée par la CI est vérifiée sur ce point |
 | L'image refuse de démarrer sur le cluster | Image arm64 sur un nœud amd64 : rebâtir avec `--platform linux/amd64` |
 | Aucun produit dans le catalogue | Canal **Open POS** non coché sur les produits, ou produits sans quota disponible |
 | Les photos de produits ne s'affichent pas | Le produit n'a pas d'image dans pretix — ou les médias sont servis depuis un autre domaine (S3, CDN) : la coquille annonce `img-src 'self' data:`, et une image d'ailleurs est bloquée. La case reste vide, la vente n'est pas gênée |
