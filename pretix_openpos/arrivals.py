@@ -312,7 +312,7 @@ class EventArrivalsView(EventPermissionRequiredMixin, TemplateView):
     permission = "event.orders:read"
 
     def chosen_subevent(self):
-        from .api.views import evening_subevent
+        from .api.evenings import evening_subevent
 
         event = self.request.event
         if not event.has_subevents:

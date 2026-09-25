@@ -25,7 +25,7 @@ from django.db import OperationalError, connection, connections
 from django.utils.timezone import now
 from pretix.base.models import Checkin, Order
 
-from pretix_openpos.api import views
+from pretix_openpos.api import sales
 from pretix_openpos.models import PosSale
 
 from .conftest import Till, sell
@@ -40,7 +40,7 @@ def overlapping(monkeypatch, till, positions, key, **kwargs):
     exactly where a first attempt still running on another worker would
     commit. Returns a dict that holds the first attempt's answer once it ran.
     """
-    real = views.drawer_session_for
+    real = sales.drawer_session_for
     first = {}
 
     def racing(*args, **kw):
@@ -49,7 +49,7 @@ def overlapping(monkeypatch, till, positions, key, **kwargs):
             first["response"] = sell(till, positions, idempotency_key=key, **kwargs)
         return real(*args, **kw)
 
-    monkeypatch.setattr(views, "drawer_session_for", racing)
+    monkeypatch.setattr(sales, "drawer_session_for", racing)
     return first
 
 
@@ -107,7 +107,7 @@ def test_an_order_is_never_kept_beside_another_attempts_journal_line(
     order this attempt had already created goes with the rollback, and the
     answer is the replay.
     """
-    monkeypatch.setattr(views, "hold_idempotency_key", lambda event, key: None)
+    monkeypatch.setattr(sales, "hold_idempotency_key", lambda event, key: None)
     first = overlapping(monkeypatch, till, [{"item": ticket.pk, "count": 1}], "safety-key-1")
 
     second = sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="safety-key-1")
@@ -125,7 +125,7 @@ def test_returned_cups_alone_are_paid_out_once_however_they_overlap(
 ):
     # A basket of returned cups is a journal row keyed on the till's key
     # itself, with no order: the same guard has to hold for it.
-    monkeypatch.setattr(views, "hold_idempotency_key", lambda event, key: None)
+    monkeypatch.setattr(sales, "hold_idempotency_key", lambda event, key: None)
     cups = [{"item": deposit.pk, "count": 2, "refund": True}]
     overlapping(monkeypatch, till, cups, "cups-key-1")
 
@@ -324,7 +324,7 @@ def test_the_invoice_and_the_entry_are_written_once_when_a_retry_finishes_first(
     customer is in, because they are.
     """
     event.settings.set("openpos_checkin_list", checkin_list.pk)
-    real = views.OpenPosViewSet._post_commit
+    real = sales.CheckoutActions._post_commit
     retry = {}
 
     def retry_gets_there_first(self, request, order):
@@ -335,7 +335,7 @@ def test_the_invoice_and_the_entry_are_written_once_when_a_retry_finishes_first(
                 till, [{"item": ticket.pk, "count": 1}], idempotency_key="tail-key-1"
             )
 
-    monkeypatch.setattr(views.OpenPosViewSet, "_post_commit", retry_gets_there_first)
+    monkeypatch.setattr(sales.CheckoutActions, "_post_commit", retry_gets_there_first)
 
     first = sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="tail-key-1")
 
@@ -361,7 +361,7 @@ def test_an_invoice_failing_in_the_database_still_leaves_the_check_in(
         with connection.cursor() as cursor:
             cursor.execute("SELECT * FROM a_table_that_does_not_exist")
 
-    monkeypatch.setattr(views, "generate_invoice", broken)
+    monkeypatch.setattr(sales, "generate_invoice", broken)
 
     body = sell(till, [{"item": ticket.pk, "count": 1}]).json()
 
@@ -406,24 +406,24 @@ class _PostgresStandIn:
 @pytest.mark.django_db
 def test_every_worker_takes_the_same_lock_for_the_same_sale(monkeypatch, event):
     stand_in = _PostgresStandIn()
-    monkeypatch.setattr(views, "connection", stand_in)
+    monkeypatch.setattr(sales, "connection", stand_in)
 
     def lock_for(on_event, key):
         stand_in.statements.clear()
-        views._lock_idempotency_key(on_event, key)
+        sales._lock_idempotency_key(on_event, key)
         return stand_in.lock_taken()
 
     # A number no worker could arrive at differently: fixed by the event and
     # the key alone, not by anything a process picks for itself at start-up
     # the way Python's own hash() does.
-    assert lock_for(SimpleNamespace(pk=1), "stable-key-01") == [views.KEY_LOCK_CLASS, -1913388828]
+    assert lock_for(SimpleNamespace(pk=1), "stable-key-01") == [sales.KEY_LOCK_CLASS, -1913388828]
     assert lock_for(event, "same-key-01") == lock_for(event, "same-key-01")
     assert lock_for(event, "same-key-01") != lock_for(event, "other-key-01")
     assert lock_for(event, "same-key-01") != lock_for(SimpleNamespace(pk=event.pk + 1), "same-key-01")
     # Waited on for a bounded time, which then stops applying to the rest of
     # the transaction: pretix' own locks further on keep their own patience.
     assert [sql for sql, _params in stand_in.statements] == [
-        f"SET LOCAL lock_timeout = '{views.KEY_WAIT_SECONDS}s'",
+        f"SET LOCAL lock_timeout = '{sales.KEY_WAIT_SECONDS}s'",
         "SELECT pg_advisory_xact_lock(%s, %s)",
         "SET LOCAL lock_timeout TO DEFAULT",
     ]
@@ -431,7 +431,7 @@ def test_every_worker_takes_the_same_lock_for_the_same_sale(monkeypatch, event):
 
 @pytest.mark.django_db
 def test_a_sale_whose_key_stays_held_is_answered_not_now(monkeypatch, till, event, ticket):
-    monkeypatch.setattr(views, "connection", _PostgresStandIn(gives_up=True))
+    monkeypatch.setattr(sales, "connection", _PostgresStandIn(gives_up=True))
 
     response = sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="held-key-01")
 
@@ -475,7 +475,7 @@ def _in_thread(target):
 @pytest.mark.django_db(transaction=True)
 def test_two_workers_on_one_sale_make_one_order(monkeypatch, event, ticket, device):
     _on_postgresql()
-    real = views.hold_drawer_session
+    real = sales.hold_drawer_session
     inside = threading.Event()
     writers = []
 
@@ -488,7 +488,7 @@ def test_two_workers_on_one_sale_make_one_order(monkeypatch, event, ticket, devi
             time.sleep(1)
         return real(session, payment_type)
 
-    monkeypatch.setattr(views, "hold_drawer_session", slow)
+    monkeypatch.setattr(sales, "hold_drawer_session", slow)
     basket = [{"item": ticket.pk, "count": 1}]
 
     first, first_result = _in_thread(
@@ -517,8 +517,8 @@ def test_an_attempt_stuck_behind_another_is_told_to_come_back(
     monkeypatch, event, ticket, device
 ):
     _on_postgresql()
-    monkeypatch.setattr(views, "KEY_WAIT_SECONDS", 1)
-    real = views.hold_drawer_session
+    monkeypatch.setattr(sales, "KEY_WAIT_SECONDS", 1)
+    real = sales.hold_drawer_session
     inside = threading.Event()
 
     def stuck(session, payment_type):
@@ -527,7 +527,7 @@ def test_an_attempt_stuck_behind_another_is_told_to_come_back(
             time.sleep(3)
         return real(session, payment_type)
 
-    monkeypatch.setattr(views, "hold_drawer_session", stuck)
+    monkeypatch.setattr(sales, "hold_drawer_session", stuck)
     basket = [{"item": ticket.pk, "count": 1}]
 
     first, first_result = _in_thread(

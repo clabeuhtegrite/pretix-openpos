@@ -606,7 +606,7 @@ class PosDevice(models.Model):
 
     #: Server time of this device's last authenticated call to an Open POS
     #: endpoint. Written at most once a minute: see ``note_contact`` in
-    #: ``api/views.py``.
+    #: ``api/contact.py``.
     last_seen_at = models.DateTimeField(null=True, blank=True)
     #: Server time at which the app last sent its status report.
     status_reported_at = models.DateTimeField(null=True, blank=True)

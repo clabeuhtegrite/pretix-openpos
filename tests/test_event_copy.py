@@ -15,7 +15,7 @@ import pytest
 from django.utils.timezone import now
 from pretix.base.models import Event, ItemCategory
 
-from pretix_openpos.api.views import checkin_list_for, custom_sale_item, deposit_item
+from pretix_openpos.api.catalog import checkin_list_for, custom_sale_item, deposit_item
 from pretix_openpos.models import PosCategory, PosDevice
 
 from .conftest import Till, sell

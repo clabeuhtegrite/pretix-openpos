@@ -458,7 +458,7 @@ def test_pretix_refusing_mid_cancellation_is_reported_not_swallowed(
 ):
     from pretix.base.services.orders import OrderError
 
-    from pretix_openpos.api import views
+    from pretix_openpos.api import cancellation
 
     sell(till, [{"item": ticket.pk, "count": 1}])
     sale = PosSale.objects.get(event=event, kind=PosSale.KIND_SALE)
@@ -466,7 +466,7 @@ def test_pretix_refusing_mid_cancellation_is_reported_not_swallowed(
     def refuse(*args, **kwargs):
         raise OrderError("Quota is gone.")
 
-    monkeypatch.setattr(views, "cancel_order", refuse)
+    monkeypatch.setattr(cancellation, "cancel_order", refuse)
 
     response = cancel(till, sale.seq)
 
