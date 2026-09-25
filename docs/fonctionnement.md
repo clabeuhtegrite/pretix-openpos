@@ -1188,6 +1188,15 @@ Un survendu reste un survendu : c'est un fait à réconcilier après la soirée,
   vente vieille de plus de sept jours — à ce stade c'est une restauration de
   sauvegarde, pas une coupure réseau. Le refus part alors dans la liste affichée
   jusqu'à ce qu'un humain la traite.
+- **L'heure d'une vente est celle de la caisse, remise à l'heure du serveur.**
+  Une tablette dont l'horloge avance de six minutes datait chaque vente de la
+  coupure six minutes dans le futur, et la reprise les refusait toutes. La caisse
+  dit maintenant l'heure de son horloge en envoyant (`sent_at`), le serveur en
+  déduit l'écart et corrige l'heure de la vente avant de la juger, au-delà d'une
+  minute d'écart ; la commande garde la trace de la correction. Une app qui
+  n'envoie pas `sent_at` est jugée comme avant. `config/` donne aussi
+  `server_time`, pour que la caisse puisse signaler une horloge fausse avant que
+  ça compte.
 
 ---
 
@@ -2466,7 +2475,7 @@ Base : `/api/v1`. Authentification : `Authorization: Device <token>`.
 | `POST` | `/device/initialize` | Appairage (endpoint pretix natif) |
 | `POST` | `/device/update` | Version et système du device, quand ils ont changé depuis le dernier envoi (endpoint pretix natif) |
 | `GET` | `/organizers/<org>/openpos/` | Événements de cette caisse : `results`, ceux où elle peut vendre ; `unavailable`, ceux qu'elle atteint sans pouvoir y vendre, avec `reason` (`plugin_disabled`) |
-| `GET` | `/organizers/<org>/events/<ev>/openpos/config/` | Événement, device, listes de contrôle, produits d'admission, coupures, boutons montant libre et consigne |
+| `GET` | `/organizers/<org>/events/<ev>/openpos/config/` | Événement, device, listes de contrôle, produits d'admission, coupures, boutons montant libre et consigne, heure du serveur (`server_time`, ISO 8601 en UTC) |
 | `GET` | `…/openpos/catalog/` | Catalogue par catégorie, prix, stock restant |
 | `POST` | `…/openpos/checkout/` | Encaissement |
 | `GET` | `…/openpos/summary/` | Recette de l'événement (d'une date, dans une série) : total, par produit, consignes, par appareil, par soirée |
@@ -2538,7 +2547,11 @@ client** :
   "positions": [ { "item": 12, "variation": null, "count": 2, "price": "8.50" } ],
   "payment_type": "cash",
   "cash_given": "20.00",
-  "offline": { "recorded_at": "2026-08-16T22:02:21Z", "charged_total": "17.00" }
+  "offline": {
+    "recorded_at": "2026-08-16T22:02:21Z",
+    "charged_total": "17.00",
+    "sent_at": "2026-08-17T09:15:03.120Z"
+  }
 }
 ```
 
@@ -2547,6 +2560,19 @@ Toutes les lignes doivent porter leur prix ou aucune, la somme doit tomber sur
 `expected_total` est interdit — il répondrait à une question que la caisse ne
 pouvait pas poser. La réponse ajoute alors `off_tariff` : les lignes dont le
 tarif serveur diffère de ce qui a été encaissé. Voir §5ter.
+
+`sent_at`, facultatif (ISO 8601 avec décalage), est l'heure de l'horloge de la
+caisse au moment où elle envoie cette tentative. S'il s'écarte de plus de 60 s
+de l'heure du serveur, l'horloge de la caisse est fausse de δ = `sent_at` −
+maintenant, et `recorded_at` est corrigé de −δ **avant** tout contrôle et tout
+enregistrement : c'est l'heure corrigée que jugent les bornes (5 min dans le
+futur, sept jours dans le passé), et celle que portent le journal, le paiement et
+les pointages. La correction laisse une entrée dans l'historique de la commande
+(`pretix_openpos.order.clock_corrected` : « Encaissée hors ligne sur Caisse bar,
+dont l'horloge avançait de 6 min 5 s. Datée du …, et non du … comme le disait la
+caisse. ») et la réponse porte `clock_correction_seconds`, le nombre de secondes
+ajoutées à `recorded_at` — négatif quand l'horloge de la caisse avance, `0` sans
+correction. Sans `sent_at` (app plus ancienne), rien ne change.
 
 ### Réponse
 
@@ -2563,6 +2589,7 @@ tarif serveur diffère de ce qui a été encaissé. Voir §5ter.
   "checkin_errors": [],
   "off_tariff": [],
   "off_role": [],
+  "clock_correction_seconds": 0,
   "deposit_refund": null,
   "deposit_refund_seq": null,
   "net_total": "17.00"

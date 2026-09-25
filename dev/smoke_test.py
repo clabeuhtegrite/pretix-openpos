@@ -81,6 +81,13 @@ def main():
         check("currency present", config.get("event", {}).get("currency") == "EUR", str(config))
         # What lets a till that stays open across a deploy notice it is stale.
         check("plugin version announced", bool(config.get("version")), str(config.get("version")))
+        # And what lets it notice its own clock is wrong.
+        server_time = config.get("server_time") or ""
+        check("server clock announced, in UTC",
+              server_time.endswith("+00:00")
+              and abs(datetime.fromisoformat(server_time) - datetime.now(timezone.utc))
+              < timedelta(minutes=2),
+              server_time)
         check("check-in configured", config.get("checkin", {}).get("enabled") is True, str(config.get("checkin")))
         # The scanning screen needs these to tell an entry from a T-shirt, and
         # they must cover the whole event, not just what the till may sell.
@@ -204,7 +211,14 @@ def main():
     # Une vente encaissée pendant la coupure : elle porte son heure réelle et le
     # prix effectivement payé — ici volontairement à côté du tarif, ce qui doit
     # être signalé plutôt que lissé.
-    sold_at = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat()
+    #
+    # Et l'horloge de cette tablette avance d'une demi-heure, comme celle d'un
+    # iPad réglé à la main : la vente d'il y a vingt minutes y est datée de dans
+    # dix minutes. La caisse dit l'heure de son horloge en envoyant (sent_at),
+    # et le serveur remet la vente à son heure au lieu de la refuser comme datée
+    # dans le futur.
+    skew = timedelta(minutes=30)
+    sold_at = (datetime.now(timezone.utc) - timedelta(minutes=20) + skew).isoformat()
     off_price = round(float(full["price"]) - 1.00, 2)
     offline_key = str(uuid.uuid4())
     offline_body = {
@@ -213,11 +227,18 @@ def main():
         "payment_type": "cash",
         "cash_given": f"{off_price:.2f}",
         "cashier": "Alice",
-        "offline": {"recorded_at": sold_at, "charged_total": f"{off_price:.2f}"},
+        "offline": {
+            "recorded_at": sold_at,
+            "charged_total": f"{off_price:.2f}",
+            "sent_at": (datetime.now(timezone.utc) + skew).isoformat(),
+        },
     }
     status, offline_sale = call("POST", f"/organizers/{ORG}/events/{EVENT}/openpos/checkout/", offline_body, token)
     check("offline sale accepted", status == 201, f"HTTP {status}: {offline_sale}")
     if status == 201:
+        check("and put back on the server's clock",
+              -1810 <= offline_sale.get("clock_correction_seconds", 0) <= -1790,
+              str(offline_sale.get("clock_correction_seconds")))
         check("it is recorded at the price actually charged",
               float(offline_sale["order"]["total"]) == off_price,
               f"{offline_sale['order']['total']} vs {off_price:.2f}")

@@ -15,6 +15,19 @@ MAX_LINES = 100
 #: dropout. A night is hours; a week is somebody replaying an old backup.
 MAX_OFFLINE_AGE = timedelta(days=7)
 
+#: How far ahead of the server a queued sale may be dated: a till clock a few
+#: minutes out, which no correction has caught.
+MAX_OFFLINE_LEAD = timedelta(minutes=5)
+
+#: How far a till's clock may be from the server's before the times it wrote
+#: down are corrected by the difference.
+#:
+#: Wide enough that the time a request spends in flight, and the drift of any
+#: clock that is set by the network, never count as a wrong clock; narrow
+#: enough that one wrong by minutes — an iPad set by hand, one whose battery
+#: ran flat — is corrected rather than refused.
+CLOCK_TOLERANCE = timedelta(seconds=60)
+
 
 class CheckoutPositionSerializer(serializers.Serializer):
     item = serializers.IntegerField()
@@ -51,19 +64,47 @@ class OfflineSerializer(serializers.Serializer):
     quietly rewriting either one.
     """
 
-    #: When the customer actually paid.
+    #: When the customer actually paid, by the till's clock.
     recorded_at = serializers.DateTimeField()
     #: What the till took, as a checksum against a queue corrupted in storage.
     charged_total = serializers.DecimalField(max_digits=13, decimal_places=2)
+    #: The till's clock at the moment it sent this attempt.
+    #:
+    #: Optional, because a till running an older build does not send it. Sent,
+    #: it is what makes ``recorded_at`` readable: the difference between the
+    #: two clocks is known at this instant, and it is the same difference that
+    #: was in ``recorded_at`` when the sale was rung up.
+    sent_at = serializers.DateTimeField(required=False, allow_null=True, default=None)
 
-    def validate_recorded_at(self, value):
-        if value > now() + timedelta(minutes=5):
-            raise serializers.ValidationError(_("This sale is dated in the future."))
-        if value < now() - MAX_OFFLINE_AGE:
+    def validate(self, data):
+        moment = now()
+        sent_at = data.get("sent_at")
+        # The time the sale says, put on the server's clock. A till whose
+        # clock ran six minutes fast dated every sale it queued six minutes
+        # into the future, and every one of them was refused on replay as
+        # "dated in the future" — for a customer who had paid and walked in.
+        # Corrected before it is judged or stored, so the window below and
+        # the journal both see the moment the money actually moved.
+        correction = timedelta(0)
+        if sent_at is not None and abs(sent_at - moment) > CLOCK_TOLERANCE:
+            correction = moment - sent_at
+        recorded_at = data["recorded_at"] + correction
+
+        if recorded_at > moment + MAX_OFFLINE_LEAD:
             raise serializers.ValidationError(
-                _("This sale is too old to be replayed automatically.")
+                {"recorded_at": [_("This sale is dated in the future.")]}
             )
-        return value
+        if recorded_at < moment - MAX_OFFLINE_AGE:
+            raise serializers.ValidationError(
+                {"recorded_at": [_("This sale is too old to be replayed automatically.")]}
+            )
+        # What the till said is kept beside what is stored, for the trace the
+        # checkout leaves on the order: a corrected date is a fact about the
+        # till as much as about the sale.
+        data["claimed_at"] = data["recorded_at"]
+        data["recorded_at"] = recorded_at
+        data["clock_correction"] = correction
+        return data
 
 
 class TerminalStartSerializer(serializers.Serializer):

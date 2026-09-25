@@ -883,6 +883,43 @@ msgstr "{count}× {item}, dans {category}"
 msgid "no category"
 msgstr "aucune catégorie"
 
+#: logdisplay.py:585
+#, python-brace-format
+msgid "{minutes} min {seconds} s"
+msgstr "{minutes} min {seconds} s"
+
+#: logdisplay.py:589
+#, python-brace-format
+msgid "{hours} h {minutes} min"
+msgstr "{hours} h {minutes} min"
+
+#: logdisplay.py:592
+#, python-brace-format
+msgid "{days} d {hours} h"
+msgstr "{days} j {hours} h"
+
+#: logdisplay.py:626
+#, python-brace-format
+msgid ""
+"Rung up offline on {device}, whose clock was {offset} fast. Dated "
+"{recorded_at}, not {claimed_at} as the till had it."
+msgstr ""
+"Encaissée hors ligne sur {device}, dont l’horloge avançait de {offset}. "
+"Datée du {recorded_at}, et non du {claimed_at} comme le disait la caisse."
+
+#: logdisplay.py:629
+#, python-brace-format
+msgid ""
+"Rung up offline on {device}, whose clock was {offset} slow. Dated "
+"{recorded_at}, not {claimed_at} as the till had it."
+msgstr ""
+"Encaissée hors ligne sur {device}, dont l’horloge retardait de {offset}. "
+"Datée du {recorded_at}, et non du {claimed_at} comme le disait la caisse."
+
+#: logdisplay.py:633
+msgid "a till"
+msgstr "une caisse"
+
 #: logdisplay.py:586
 #, python-brace-format
 msgid "#{seq}, reversing #{target}: {total}"

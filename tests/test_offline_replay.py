@@ -11,6 +11,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 import pytest
+from django.utils import translation
 from django.utils.timezone import now
 from pretix.base.models import Order
 
@@ -19,20 +20,18 @@ from pretix_openpos.models import PosSale
 from .conftest import sell
 
 
-def offline_sale(till, positions, at=None, charged=None, **kwargs):
+def offline_sale(till, positions, at=None, charged=None, sent_at=None, **kwargs):
     """A sale rung up with no network, arriving late."""
     total = charged or sum(
         (Decimal(p["price"]) * p["count"] for p in positions), Decimal("0.00")
     )
-    return sell(
-        till,
-        positions,
-        offline={
-            "recorded_at": (at or (now() - timedelta(hours=2))).isoformat(),
-            "charged_total": str(total),
-        },
-        **kwargs,
-    )
+    offline = {
+        "recorded_at": (at or (now() - timedelta(hours=2))).isoformat(),
+        "charged_total": str(total),
+    }
+    if sent_at is not None:
+        offline["sent_at"] = sent_at.isoformat()
+    return sell(till, positions, offline=offline, **kwargs)
 
 
 @pytest.mark.django_db
@@ -263,3 +262,197 @@ def test_a_replayed_basket_with_an_unpriced_line_is_refused_whole(till, ticket, 
 
     assert response.status_code == 400
     assert "must carry the price charged" in str(response.json()["positions"])
+
+
+# -- a till whose clock is wrong ------------------------------------------------
+#
+# A till dates what it queues by its own clock, and says what that clock reads
+# when it sends the queue (``sent_at``). The difference with the server's is the
+# error that is in every date the till wrote, and it is taken out before the
+# sale is judged or stored.
+
+
+def journal_row(body):
+    return PosSale.objects.get(seq=body["journal_seq"])
+
+
+def clock_entry(body):
+    return (
+        Order.objects.get(code=body["order"]["code"])
+        .all_logentries()
+        .filter(action_type="pretix_openpos.order.clock_corrected")
+        .first()
+    )
+
+
+@pytest.mark.django_db
+def test_a_till_six_minutes_fast_no_longer_has_its_queue_refused(till, ticket, device):
+    """
+    The case this exists for: an iPad whose clock runs six minutes fast.
+
+    It dated a sale rung up half a minute ago five and a half minutes into the
+    future, and the replay refused it as dated in the future — every sale of
+    the dropout, for customers who had paid and walked in.
+    """
+    fast = timedelta(minutes=6)
+    rung_up = now() - timedelta(seconds=30)
+    line = [{"item": ticket.pk, "count": 1, "price": "10.00"}]
+
+    refused = offline_sale(till, line, at=rung_up + fast, idempotency_key="fast-old-1")
+    assert refused.status_code == 400
+
+    response = offline_sale(
+        till, line, at=rung_up + fast, sent_at=now() + fast, idempotency_key="fast-new-1"
+    )
+
+    assert response.status_code == 201, response.content
+    body = response.json()
+    assert -362 <= body["clock_correction_seconds"] <= -358
+    # The journal and the payment carry the moment the money moved, on the
+    # server's clock.
+    assert abs(journal_row(body).datetime - rung_up) < timedelta(seconds=3)
+    order = Order.objects.get(code=body["order"]["code"])
+    assert abs(order.payments.first().payment_date - rung_up) < timedelta(seconds=3)
+    # And the order says it was corrected, from what, by how much, on which till.
+    entry = clock_entry(body)
+    assert entry.parsed_data["seconds"] == body["clock_correction_seconds"]
+    assert entry.parsed_data["device"] == device.name
+    with translation.override("en"):
+        text = str(entry.display())
+    assert "fast" in text and "6 min" in text and device.name in text
+
+
+@pytest.mark.django_db
+def test_a_till_days_slow_is_corrected_the_other_way(till, event, ticket):
+    # A tablet whose battery ran flat came back a week and a day behind: its
+    # sale from an hour ago looked too old to replay.
+    slow = timedelta(days=8)
+    rung_up = now() - timedelta(hours=1)
+
+    response = offline_sale(
+        till, [{"item": ticket.pk, "count": 1, "price": "10.00"}],
+        at=rung_up - slow, sent_at=now() - slow,
+    )
+
+    assert response.status_code == 201, response.content
+    body = response.json()
+    assert body["clock_correction_seconds"] >= 8 * 86400 - 2
+    assert abs(journal_row(body).datetime - rung_up) < timedelta(seconds=3)
+    with translation.override("en"):
+        text = str(clock_entry(body).display())
+    assert "slow" in text and "8 d" in text
+
+
+@pytest.mark.django_db
+def test_a_clock_within_a_minute_is_left_alone(till, ticket):
+    rung_up = now() - timedelta(hours=1)
+
+    response = offline_sale(
+        till, [{"item": ticket.pk, "count": 1, "price": "10.00"}],
+        at=rung_up, sent_at=now() + timedelta(seconds=40),
+    )
+
+    # Forty seconds is a request in flight or a clock drifting, not a wrong
+    # clock: nothing is moved, and nothing is said.
+    body = response.json()
+    assert body["clock_correction_seconds"] == 0
+    assert abs(journal_row(body).datetime - rung_up) < timedelta(seconds=1)
+    assert clock_entry(body) is None
+
+
+@pytest.mark.django_db
+def test_an_older_till_that_sends_no_clock_is_judged_as_before(till, ticket):
+    rung_up = now() - timedelta(hours=1)
+
+    body = offline_sale(
+        till, [{"item": ticket.pk, "count": 1, "price": "10.00"}], at=rung_up
+    ).json()
+
+    assert body["clock_correction_seconds"] == 0
+    assert abs(journal_row(body).datetime - rung_up) < timedelta(seconds=1)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "rung_up_real",
+    [
+        # Still in the future once the till's clock is accounted for.
+        timedelta(minutes=20),
+        # Still older than a week.
+        -timedelta(days=8),
+    ],
+)
+def test_the_window_still_applies_once_the_clock_is_corrected(till, ticket, rung_up_real):
+    fast = timedelta(hours=1)
+
+    response = offline_sale(
+        till, [{"item": ticket.pk, "count": 1, "price": "10.00"}],
+        at=now() + rung_up_real + fast, sent_at=now() + fast,
+    )
+
+    assert response.status_code == 400
+    assert "recorded_at" in response.json()["offline"]
+
+
+@pytest.mark.django_db
+def test_a_basket_of_returned_cups_is_corrected_too(till, event, deposit):
+    # No order to write the trace on — the journal row and the answer carry it.
+    fast = timedelta(minutes=10)
+    rung_up = now() - timedelta(minutes=2)
+
+    body = offline_sale(
+        till, [{"item": deposit.pk, "count": 1, "refund": True, "price": "-1.00"}],
+        at=rung_up + fast, sent_at=now() + fast,
+    ).json()
+
+    assert body["clock_correction_seconds"] <= -598
+    assert abs(journal_row(body).datetime - rung_up) < timedelta(seconds=3)
+
+
+@pytest.mark.django_db
+def test_a_sale_rung_up_online_reports_no_correction(till, ticket):
+    body = sell(till, [{"item": ticket.pk, "count": 1}]).json()
+
+    assert body["clock_correction_seconds"] == 0
+
+
+@pytest.mark.django_db
+def test_the_till_is_told_the_server_s_clock(till):
+    from datetime import datetime, timezone
+
+    body = till.get("config").json()
+
+    # UTC, with milliseconds at most, which every browser's Date can read.
+    assert body["server_time"].endswith("+00:00")
+    server = datetime.fromisoformat(body["server_time"])
+    assert server.tzinfo is not None
+    assert abs(server - datetime.now(timezone.utc)) < timedelta(seconds=5)
+    assert len(body["server_time"].split(".")[1]) == len("123+00:00")
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "seconds, says",
+    [(-75, "1 min 15 s"), (-7260, "2 h 1 min"), (90000, "1 d 1 h")],
+)
+def test_a_correction_is_said_in_the_units_a_person_would_use(event, seconds, says):
+    from pretix_openpos.logdisplay import ClockCorrected
+
+    class Entry:
+        pass
+
+    entry = Entry()
+    entry.event = event
+    with translation.override("en"):
+        text = str(ClockCorrected().display(entry, {
+            "seconds": seconds,
+            "recorded_at": "2026-08-16T21:00:00+00:00",
+            "claimed_at": "not a date",
+            "device": "",
+        }))
+
+    assert says in text
+    assert ("fast" if seconds < 0 else "slow") in text
+    # What was written, when it cannot be read as a date; a till, when none is named.
+    assert "not a date" in text
+    assert "a till" in text

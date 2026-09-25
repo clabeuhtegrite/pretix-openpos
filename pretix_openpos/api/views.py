@@ -1,6 +1,6 @@
 import hashlib
 import logging
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone as dt_timezone
 from decimal import Decimal
 
 from django.db import IntegrityError, OperationalError, connection, transaction
@@ -952,6 +952,14 @@ class OpenPosViewSet(viewsets.ViewSet):
                 # festival weekend, routinely — compares this against its own
                 # build on the idle refresh and offers a reload.
                 "version": __version__,
+                # The server's clock, in UTC, for the till to compare its own
+                # with. A tablet whose clock is off dates every sale it queues
+                # offline by it; the checkout corrects that on replay (see
+                # ``offline.sent_at``), and this is how the till can say so to
+                # whoever is holding it before it matters.
+                "server_time": now().astimezone(dt_timezone.utc).isoformat(
+                    timespec="milliseconds"
+                ),
                 "event": {
                     "slug": event.slug,
                     "organizer": event.organizer.slug,
@@ -1510,6 +1518,14 @@ class OpenPosViewSet(viewsets.ViewSet):
         sale = None
         refund = None
         recorded_at = offline["recorded_at"] if offline else None
+        #: What the till's clock was off by, already taken out of recorded_at.
+        correction = offline["clock_correction"] if offline else timedelta(0)
+        correction_seconds = round(correction.total_seconds())
+        if correction_seconds:
+            logger.info(
+                "Offline sale %s from %s dated by the server's clock: the till's was %+d s out",
+                idempotency_key, device.name if device else "?", -correction_seconds,
+            )
 
         with transaction.atomic():
             # Before anything is locked or written: an attempt that finds this
@@ -1569,6 +1585,26 @@ class OpenPosViewSet(viewsets.ViewSet):
                     order.log_action(
                         "pretix_openpos.order.off_role",
                         data={"lines": off_role, "device": device.name if device else ""},
+                        user=request.user if request.user.is_authenticated else None,
+                        auth=request.auth,
+                    )
+
+                if correction_seconds:
+                    # The order and the journal carry the corrected moment and
+                    # nothing else would ever say it was corrected: the till's
+                    # own figure is gone by the time anybody wonders why a sale
+                    # is dated two minutes before the one rung up after it.
+                    # Both clocks' readings are kept, so the entry explains
+                    # itself without the till.
+                    order.log_action(
+                        "pretix_openpos.order.clock_corrected",
+                        data={
+                            "seconds": correction_seconds,
+                            "recorded_at": offline["recorded_at"].isoformat(),
+                            "claimed_at": offline["claimed_at"].isoformat(),
+                            "sent_at": offline["sent_at"].isoformat(),
+                            "device": device.name if device else "",
+                        },
                         user=request.user if request.user.is_authenticated else None,
                         auth=request.auth,
                     )
@@ -1651,6 +1687,11 @@ class OpenPosViewSet(viewsets.ViewSet):
         # its role covers, and the resync panel is where the operator holding
         # the tablet finds out.
         body["off_role"] = off_role
+        # Seconds added to the moment the till said the sale was rung up, to
+        # put it on the server's clock: negative when the till's clock runs
+        # fast. Zero on everything but an offline sale from a till whose clock
+        # was more than a minute out — which the till can then say out loud.
+        body["clock_correction_seconds"] = correction_seconds
         return Response(body, status=status.HTTP_201_CREATED)
 
     # -- offline snapshot ---------------------------------------------------
