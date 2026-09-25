@@ -272,7 +272,7 @@ describe("a closed drawer", () => {
     await user.click(openWith(2000));
     expect(await screen.findByText(t("error.offline"))).toBeDefined();
     await user.click(openWith(2000));
-    await screen.findByText("HTTP 502");
+    await screen.findByText(t("error.server", { status: 502 }));
     await user.click(more("20.00"));
     await user.click(openWith(4000));
 
