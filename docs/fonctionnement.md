@@ -1311,10 +1311,14 @@ question, avant de fermer, est de savoir laquelle aller chercher. Chaque
 appareil appairé dit donc au serveur (`POST openpos/status/`, au niveau de
 l'organisateur) combien de ventes il a en attente, l'heure de la plus
 ancienne, l'heure du dernier envoi où tout est parti, et sa version : au
-lancement, au retour du réseau, chaque minute, et trois secondes après que la
-file a cessé de bouger — pas à chaque vente d'une reprise. Rien ne se voit sur
-la caisse : un rapport qui ne passe pas repart à l'occasion suivante, et ne met
-jamais la caisse hors ligne à lui seul.
+lancement, chaque minute, trois secondes après que la file a cessé de bouger —
+pas à chaque vente d'une reprise —, et au retour du réseau s'il n'en est pas
+parti un dans la minute, pour qu'un réseau qui va et vient ne fasse pas un
+rapport à chaque retour. Rien ne se voit sur la caisse : un rapport qui ne
+passe pas repart à l'occasion suivante, et ne met jamais la caisse hors ligne à
+lui seul. Un rapport que le serveur refuse (400, 401, 403) n'est pas renvoyé
+tel quel toutes les minutes : le suivant part quand il a du nouveau à dire, ou
+après un nouvel appairage.
 
 Une vente qui appartient à **un autre événement** — la caisse a changé
 d'événement avec une file non vide — n'est ni envoyée ici ni bloquante : elle est
