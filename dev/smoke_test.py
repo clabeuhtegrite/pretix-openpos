@@ -146,6 +146,9 @@ def main():
           f"got {sale['order']['total']}, expected {expected_total:.2f}")
     check("change correct", float(sale["cash_change"]) == 50.00 - expected_total,
           f"got {sale['cash_change']}")
+    # The order's secret opens the customer's own page; a till never needed it.
+    check("no link to the order in the answer", set(sale["order"]) == {"code", "total"},
+          f"order carries {sorted(sale['order'])}")
     # Two admission tickets and three beers: only the tickets are an entry.
     # Checking in the beers would put merch on the door list and make the till
     # announce "let them in" after a pure shop sale.

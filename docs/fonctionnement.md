@@ -2660,7 +2660,7 @@ correction. Sans `sent_at` (app plus ancienne), rien ne change.
 
 ```json
 {
-  "order": { "code": "ABCDE", "total": "17.00", "url": "/demo/festival/order/ABCDE/…/" },
+  "order": { "code": "ABCDE", "total": "17.00" },
   "journal_seq": 42,
   "payment_type": "cash",
   "cash_given": "20.00",
@@ -2684,6 +2684,10 @@ le constate ; `net_total` est ce qui a changé de mains, négatif quand c'est le
 tiroir qui paie. Quand rien n'a été vendu, `order.code` est vide et
 `order.total` vaut `"0.00"` : il n'y a pas de commande, et en annoncer une à
 moins trois euros serait pire que de n'en annoncer aucune.
+
+La réponse ne porte plus de lien vers la commande (`order.url`, jusqu'à la
+0.24.2) : construit sur le secret de la commande, il ouvrait au porteur la page
+du client, billets et facture compris, et la caisse ne s'en servait pas.
 
 `off_role` est vide sur tout ce que l'app pouvait taper dans la grille qu'on
 lui a servie. Quand il ne l'est pas, une caisse a rejoué une vente prise hors de

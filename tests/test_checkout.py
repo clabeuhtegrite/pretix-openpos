@@ -53,6 +53,22 @@ def test_a_retry_under_the_same_key_hands_back_the_first_sale(till, event, ticke
 
 
 @pytest.mark.django_db
+def test_the_answer_carries_no_way_into_the_customer_s_order(till, event, ticket):
+    """
+    The order's secret opens the customer's own page — tickets, invoice, the
+    lot. The till never needed it, and a key is not a secret: anybody holding
+    one could have it replayed back to them.
+    """
+    first = sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="no-secret-1")
+    again = sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="no-secret-1")
+    order = Order.objects.get(event=event)
+
+    for response in (first, again):
+        assert response.json()["order"] == {"code": order.code, "total": "10.00"}
+        assert order.secret not in response.content.decode()
+
+
+@pytest.mark.django_db
 def test_a_different_key_is_a_different_sale(till, event, ticket):
     sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="first-sale-1")
     sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="second-sale")

@@ -3093,16 +3093,12 @@ class OpenPosViewSet(viewsets.ViewSet):
             else str(sale.total)
         )
         return {
-            "order": {
-                "code": sale.order_code,
-                "total": total,
-                "url": (
-                    f"/{sale.event.organizer.slug}/{sale.event.slug}/order/"
-                    f"{sale.order_code}/{sale.order.secret}/"
-                    if sale.order
-                    else None
-                ),
-            },
+            # No link to the order. It used to be here, built from the order's
+            # secret: the customer's own page, tickets and invoice included,
+            # handed to every device that could replay a key. The till never
+            # read it, and a till has no business holding what the customer
+            # alone should.
+            "order": {"code": sale.order_code, "total": total},
             "journal_seq": sale.seq,
             "payment_type": sale.payment_type,
             "cash_given": None if sale.cash_given is None else str(sale.cash_given),
