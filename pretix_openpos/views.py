@@ -516,10 +516,18 @@ def unresolved_terminal_payments(event):
     if not candidates:
         return []
 
-    # One query for the journal side rather than one per row.
+    # One query for the journal side rather than one per row. Only a card sale
+    # settles a reader payment — the rule ``PosTerminalPayment.settling`` reads
+    # the other way round. Any row carrying the key used to count: a till that
+    # gave up on the reader and took cash under the same key booked a cash
+    # sale, and the card debit that landed afterwards vanished from this list,
+    # the one place it could have been seen. The app now takes that cash under
+    # a key of its own; an older one still in use on a counter does not.
     booked = set(
         PosSale.objects.filter(
             event=event,
+            kind=PosSale.KIND_SALE,
+            payment_type=PosSale.PAYMENT_CARD,
             idempotency_key__in=[payment.idempotency_key for payment in candidates],
         ).values_list("idempotency_key", flat=True)
     )

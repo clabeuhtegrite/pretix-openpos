@@ -412,6 +412,33 @@ def test_a_card_payment_that_became_a_sale_is_not_listed(
 
 
 @pytest.mark.django_db
+def test_a_card_charged_after_the_basket_went_through_in_cash_is_listed(
+    backoffice, till, event, ticket, reader_till, sumup
+):
+    """
+    The reader seemed to hang, so the till gave up and took cash — under the
+    same key, as the app used to. Then the card went through after all.
+    The cash sale carries the key, and any sale with it used to count as the
+    reader payment's own: the one charge nobody knows about vanished from the
+    one list that could show it. Only a card sale settles a reader payment.
+    """
+    from pretix_openpos.models import PosTerminalPayment
+
+    put_on_reader(till, [{"item": ticket.pk, "count": 1}], "en-especes-01")
+    sell(till, [{"item": ticket.pk, "count": 1}], idempotency_key="en-especes-01")
+    payment = PosTerminalPayment.objects.get(idempotency_key="en-especes-01")
+    sumup.pay(payment.client_transaction_id, transaction_id="tx_en_trop")
+    till.get("terminal/status", idempotency_key="en-especes-01")
+
+    context = backoffice.get(sales_url(event)).context
+
+    assert [row["payment"].idempotency_key for row in context["unresolved_card"]] == [
+        "en-especes-01"
+    ]
+    assert context["unresolved_card"][0]["paid"] is True
+
+
+@pytest.mark.django_db
 def test_a_refusal_is_not_something_to_chase(
     backoffice, till, event, ticket, reader_till, sumup
 ):
