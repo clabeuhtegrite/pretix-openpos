@@ -116,8 +116,10 @@
                     between them. They take turns: while one has a basket on the reader the
                     other is told it is busy and takes that sale in cash.
                 {% endblocktrans %}
-                <br>
-                <a href="{{ sumup_url }}">{% trans "Set up the card readers" %}</a>
+                {% if sumup_url %}
+                    <br>
+                    <a href="{{ sumup_url }}">{% trans "Set up the card readers" %}</a>
+                {% endif %}
             </div>
 
             <div class="alert alert-info">

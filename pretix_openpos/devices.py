@@ -23,6 +23,7 @@ from pretix.control.views.organizer import OrganizerDetailViewMixin
 
 from .models import PosDevice, PosDrawer
 from .sumup import SumUpAccount, SumUpError
+from .sumup_views import SumUpView
 
 #: What may be stored, so a hand-made POST cannot invent a role.
 VALID_ROLES = {choice for choice, _label in PosDevice.ROLE_CHOICES}
@@ -138,10 +139,14 @@ class DevicesView(OrganizerDetailViewMixin, OrganizerPermissionRequiredMixin, Te
         )
         ctx["readers"] = readers
         ctx["reader_error"] = reader_error
+        # Linked only for whoever may open it: the card readers page asks for
+        # the organizer settings permission, which this one does not.
         ctx["sumup_url"] = reverse(
             "plugins:pretix_openpos:sumup",
             kwargs={"organizer": self.request.organizer.slug},
-        )
+        ) if self.request.user.has_organizer_permission(
+            self.request.organizer, SumUpView.permission, request=self.request
+        ) else None
         ctx["till_role"] = PosDevice.ROLE_TILL
         return ctx
 

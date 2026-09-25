@@ -11,9 +11,11 @@ from pretix.helpers.periodic import minimum_interval
 
 from .arrivals import EventArrivalsView
 from .channels import PosSalesChannelType
+from .devices import DevicesView
 from .drawer_views import can_read_drawers
 from .payment import OpenPosCardProvider, OpenPosCashProvider
 from .security import OpenPosSecurityProfile
+from .sumup_views import SumUpView
 from .views import CategoriesView, SalesView
 
 
@@ -167,11 +169,13 @@ def openpos_nav_organizer(sender, request=None, **kwargs):
             "active": here and url.url_name == "arrivals",
         }
     ]
-    # Assigning a role is a device setting, so it is offered to whoever may
-    # change devices — the same gate the screen itself enforces. Anyone else
-    # simply does not see the entry, rather than finding a 403 behind it.
+    # Each entry asks the permission its screen's own view enforces, read off
+    # that view rather than copied: anyone else simply does not see the entry,
+    # rather than finding a 403 behind it. Assigning a role is a device
+    # setting; the card readers page holds the SumUp account, which is the
+    # organizer's settings.
     if request.user.has_organizer_permission(
-        request.organizer, "organizer.devices:write", request=request
+        request.organizer, DevicesView.permission, request=request
     ):
         nav.append(
             {
@@ -184,6 +188,9 @@ def openpos_nav_organizer(sender, request=None, **kwargs):
                 "active": here and url.url_name == "devices",
             }
         )
+    if request.user.has_organizer_permission(
+        request.organizer, SumUpView.permission, request=request
+    ):
         nav.append(
             {
                 "label": _("Card readers"),

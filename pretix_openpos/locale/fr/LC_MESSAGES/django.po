@@ -1285,6 +1285,17 @@ msgstr "{message} Réponse de SumUp : {reason}"
 msgid "SumUp accepted the payment but named no transaction."
 msgstr "SumUp a accepté le paiement sans nommer de transaction."
 
+#: sumup.py:133
+msgid ""
+"SumUp was not asked: the request named something that is not a SumUp id."
+msgstr ""
+"SumUp n’a pas été interrogé : la demande nommait quelque chose qui n’est pas "
+"un identifiant SumUp."
+
+#: sumup.py:368 sumup_views.py:223
+msgid "This is not a SumUp reader."
+msgstr "Ce n’est pas un lecteur SumUp."
+
 #: sumup_views.py:152
 msgid "We could not save your changes. See below for details."
 msgstr ""
