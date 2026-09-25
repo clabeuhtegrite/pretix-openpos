@@ -8,9 +8,10 @@ import {
 /**
  * How far this device's clock is from the server's.
  *
- * A sale rung up with no network is dated by this clock, so a tablet set by
- * hand — or left on another country's time — files its sales wrongly. What is
- * pinned here is the reading itself, and when it is worth a line on screen.
+ * A sale rung up with no network is dated by this clock, so a tablet whose
+ * clock was set by hand — to read right under a time zone left on another
+ * country's, say — files its sales wrongly. What is pinned here is the
+ * reading itself, and when it is worth a line on screen.
  */
 
 const T = Date.parse("2026-08-16T22:00:00.000Z");

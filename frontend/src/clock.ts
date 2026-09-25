@@ -88,9 +88,11 @@ function worthSaying(value: number | null): number | null {
 /**
  * A drift of ``minutes`` as somebody reads it: "7 min", "2 h 05".
  *
- * Hours past the hour, because a tablet that never had its clock set is as
- * likely to be hours off as minutes — a timezone left on another country —
- * and "185 min" is a sum to do rather than a fact to read.
+ * Hours past the hour, because a tablet whose clock was set by hand is as
+ * likely to be hours off as minutes — its time zone left on another
+ * country's, and the hour then set to read right on it — and "185 min" is a
+ * sum to do rather than a fact to read. A time zone alone moves nothing: the
+ * clock underneath is the same instant everywhere, and that is what is read.
  */
 export function formatDrift(minutes: number): string {
   const total = Math.abs(minutes);
