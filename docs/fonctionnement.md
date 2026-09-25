@@ -1461,6 +1461,22 @@ peut pas presser une seconde fois, jusqu'à ce que le paiement soit clos —
 annulé, ou payé si la carte est passée entre-temps. Si rien n'est venu au bout
 de dix secondes, *Annuler le paiement* revient, pour redemander l'arrêt.
 
+**L'arrêt n'est envoyé qu'au lecteur qui est encore celui de ce paiement.** SumUp
+arrête ce qui est sur le lecteur, quel que soit le paiement, et deux caisses
+peuvent partager un lecteur. Une caisse qui a mis un paiement de côté — le
+caissier a pris des espèces pendant que le lecteur ne répondait pas — le retire
+du lecteur une fois le réseau revenu, quelques minutes plus tard ; entre-temps,
+l'autre caisse a pu y poser le sien. Donc, quand un paiement plus récent a été
+posé sur le même lecteur, ou que le paiement a dépassé les cinq minutes pendant
+lesquelles un lecteur lui est réservé, rien n'est envoyé au lecteur : le serveur
+demande seulement à SumUp ce qu'est devenu ce paiement. Payé, la réponse le dit
+(`successful` : une carte a été débitée, en plus des espèces que la caisse a
+prises) ; clos par SumUp, il est clos comme par une relève ; encore ouvert selon
+SumUp, ou SumUp injoignable, la réponse est un 400 `reader_moved_on`, qui porte
+aussi l'état du paiement et `sumup_unreachable`. Le paiement n'est pas radié
+pour autant : seul SumUp dit si une carte a été débitée, et la prochaine
+question posée à son sujet le réglera.
+
 ### Un paiement que personne ne paie
 
 L'API Transactions n'a rien tant qu'aucune carte n'a été présentée. Seule, elle
@@ -1499,8 +1515,13 @@ retirer le serveur du service. D'où quatre règles :
   comparaison périodique gardent les délais longs : ils ne se répètent pas
   toutes les deux secondes. Une relève restée sans réponse répond ce que dit la
   ligne enregistrée — « en cours » —, dans la forme habituelle et en 200 : la
-  caisse continue d'attendre, elle ne lit jamais un échec. L'annulation
-  (`terminal/cancel`) suit la même règle.
+  caisse continue d'attendre, elle ne lit jamais un échec. Mais elle le sait :
+  la réponse porte alors `"sumup_unreachable": true` (délai dépassé, pas de
+  connexion, ou SumUp en panne de son côté), là où elle porte `false` chaque
+  fois que SumUp a répondu — de quoi proposer au caissier une porte de sortie
+  plutôt qu'un lecteur qui semble attendre sans fin. Une réponse tirée de la
+  ligne enregistrée (règle suivante) répète ce qu'a trouvé la dernière
+  question. L'annulation (`terminal/cancel`) suit la même règle.
 - **Une question à la fois par paiement, et pas plus d'une toutes les deux
   secondes.** Une relève qui arrive pendant qu'une autre interroge SumUp sur ce
   paiement, ou moins de deux secondes après la précédente, répond depuis la
@@ -2566,7 +2587,7 @@ Base : `/api/v1`. Authentification : `Authorization: Device <token>`.
 | `GET` | `…/openpos/offline/?list=<id>` | Liste embarquée pour scanner sans réseau |
 | `POST` | `…/openpos/cancel/` | Annule une vente de cette caisse (avoir + remboursement + contrepassation) |
 | `POST` | `…/openpos/terminal/start/` | Met le panier sur le lecteur de cette caisse |
-| `GET` | `…/openpos/terminal/status/?idempotency_key=<clé>` | Où en est ce paiement lecteur |
+| `GET` | `…/openpos/terminal/status/?idempotency_key=<clé>` | Où en est ce paiement lecteur : `status`, `amount`, `currency`, `failure`, et `sumup_unreachable` (SumUp n'a pas pu être interrogé ; même forme pour `terminal/start` et `terminal/cancel`) |
 | `POST` | `…/openpos/terminal/cancel/` | Retire le panier du lecteur |
 | `GET` | `…/openpos/drawer/` | La caisse espèces de cet appareil : ouverte ou non, fond, entrées et sorties, dernier comptage, et ce qu'elle doit contenir maintenant (`expected`, avec `cash_sales`, `cash_returned`, `cash_in`, `cash_out`) |
 | `POST` | `…/openpos/drawer/open/` | Ouvre la caisse sur le fond compté (`amount`, `denominations` facultatif) |
@@ -2846,6 +2867,7 @@ le tarif d'hier.
 | 400 `sold_out` | Produit épuisé, vérifié avant de demander la carte | Affiche le message tel quel |
 | 400 `terminal_unreachable` | SumUp a refusé de solliciter le lecteur : lecteur hors ligne, encore occupé par la demande précédente, clé refusée… | Affiche le motif, avec *Réessayer* (nouvelle clé) |
 | 400 `no_payment` | `terminal/status` ou `terminal/cancel` sur un panier jamais démarré | Affiche le motif |
+| 400 `reader_moved_on` | `terminal/cancel` d'un paiement qui n'est plus celui du lecteur (un paiement plus récent y a été posé, ou la réservation de cinq minutes est passée) et que SumUp dit encore ouvert, ou n'a pas pu dire : rien n'a été envoyé au lecteur. Le corps porte aussi `status`, `amount`, `currency`, `failure`, `sumup_unreachable` | Ne pas croire le paiement annulé ; avec `sumup_unreachable`, redemander plus tard |
 | 400 `drawer_closed` | Espèces (vente, consigne rendue, annulation) alors que la caisse espèces de l'appareil n'est pas ouverte | Relit l'état de la caisse ; le panneau de paiement propose de l'ouvrir |
 | 400 `drawer_stale` | Espèces alors que la caisse espèces est ouverte depuis un jour précédent | Idem ; le panneau de la caisse propose de la fermer sans compter |
 | 400 `drawer_open` | Ouverture d'une caisse déjà ouverte, par exemple depuis l'autre tablette | Revient à la vue de la caisse, relue |

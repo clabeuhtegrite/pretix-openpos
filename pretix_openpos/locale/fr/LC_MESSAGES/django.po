@@ -143,7 +143,7 @@ msgstr ""
 msgid "A free amount has to be more than nothing."
 msgstr "Un montant libre doit être supérieur à zéro."
 
-#: api/views.py:941
+#: api/views.py:992
 msgid "This sale is still being recorded. Try again in a moment."
 msgstr ""
 "Cette vente est encore en cours d’enregistrement. Réessayez dans un instant."
@@ -207,6 +207,14 @@ msgstr "Rien n’est dû sur ce panier. Réglez-le en espèces."
 #: api/views.py:1763 api/views.py:1786
 msgid "No card payment was started for this basket."
 msgstr "Aucun paiement par carte n’a été lancé pour ce panier."
+
+#: api/views.py:2308
+msgid ""
+"This payment is no longer the one on the card reader, so the reader was left "
+"alone."
+msgstr ""
+"Ce paiement n’est plus celui qui occupe le lecteur de carte : le lecteur n’a "
+"pas été touché."
 
 #: api/views.py:1820 api/views.py:2461
 msgid "Unknown check-in list."

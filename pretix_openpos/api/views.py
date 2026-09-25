@@ -676,7 +676,15 @@ def settle_terminal_payment(payment, account):
     never after a question that got no answer at all. Every call here is bounded
     by the timeout of ``account``; a poll's account gives up early, and giving
     up leaves the row as it was.
+
+    Giving up is said, though, on the payment itself: ``sumup_unreachable`` is
+    left on it — not a column, only an answer to this call — true when SumUp
+    could not be asked this time: no answer in time, no connection, or SumUp
+    failing on its side. The row then says "pending" because nobody could find
+    out otherwise, which is not the same news for a cashier as a cardholder
+    still looking for their card, and the till is told so.
     """
+    payment.sumup_unreachable = False
     if payment.settled:
         return payment
     if not payment.client_transaction_id:
@@ -692,6 +700,7 @@ def settle_terminal_payment(payment, account):
             # Nothing is written. "We could not ask" is not "it failed", and
             # writing the latter would lose a payment that went through while
             # a cable was out — money taken, no sale, and nothing to point at.
+            payment.sumup_unreachable = True
             return payment
         payment.status = PosTerminalPayment.STATUS_FAILED
         payment.failure = str(exc.message)[:190]
@@ -782,14 +791,23 @@ def poll_terminal_payment(payment, account):
     before and come back "pending": skipping the callback's own question on its
     account would leave the payment waiting for the next poll — or for nothing,
     once the till has gone.
+
+    A poll answered from the row says whether the last question got through,
+    as one that asks does (``sumup_unreachable``, see
+    :func:`settle_terminal_payment`): a till whose every other poll was
+    answered from the row would otherwise hear that SumUp is out of reach only
+    every other time.
     """
     if payment.settled:
         return payment
     marks = f"pretix_openpos:terminal:{payment.pk}"
-    if not cache.add(f"{marks}:asked", True, timeout=ASK_SUMUP_EVERY):
-        return payment
+    unreachable = f"{marks}:unreachable"
     asking = f"{marks}:asking"
-    if not cache.add(asking, True, timeout=ASKING_FOR_AT_MOST):
+    if not (
+        cache.add(f"{marks}:asked", True, timeout=ASK_SUMUP_EVERY)
+        and cache.add(asking, True, timeout=ASKING_FOR_AT_MOST)
+    ):
+        payment.sumup_unreachable = bool(cache.get(unreachable))
         return payment
     try:
         # Read again now that this is the one question. Another may have
@@ -797,9 +815,42 @@ def poll_terminal_payment(payment, account):
         # the mark, and asking SumUp once more would only hear the same answer
         # a second time.
         payment.refresh_from_db()
-        return settle_terminal_payment(payment, account)
+        settle_terminal_payment(payment, account)
+        # Kept for as long as a question may take: the polls answered from the
+        # row while the next one is under way repeat what this one found.
+        if payment.sumup_unreachable:
+            cache.set(unreachable, True, timeout=ASKING_FOR_AT_MOST)
+        else:
+            cache.delete(unreachable)
+        return payment
     finally:
         cache.delete(asking)
+
+
+def reader_moved_on(payment, organizer):
+    """
+    Whether the reader this payment was put on is no longer this payment's.
+
+    SumUp's terminate stops whatever is on the reader, not a payment of our
+    choosing, and two tills can share one machine. So a stop is only sent while
+    this payment can still be the one on it. Not once a newer payment has been
+    put on the same reader, whichever till it belongs to: the stop would be
+    that payment's. And not past :data:`READER_HELD_FOR`: by then the prompt
+    has long timed out on the device, and the machine counts as free for any
+    till that asks for it. A till tidying up a payment it left aside — the
+    cashier took cash while the reader was not answering, and the network is
+    back — meets exactly this, some minutes later.
+    """
+    if payment.created <= now() - READER_HELD_FOR:
+        return True
+    return PosTerminalPayment.objects.filter(
+        # Two tills pressing card in the same instant can write the same
+        # timestamp; the row written second is then the newer one, so that
+        # of two such payments exactly one may still stop the reader.
+        Q(created__gt=payment.created) | Q(created=payment.created, pk__gt=payment.pk),
+        event__organizer=organizer,
+        reader_id=payment.reader_id,
+    ).exists()
 
 
 def card_mode(pos_device) -> str:
@@ -1940,6 +1991,14 @@ class OpenPosViewSet(DeviceThrottleMixin, viewsets.ViewSet):
             "amount": str(payment.amount),
             "currency": payment.currency,
             "failure": payment.failure,
+            # True when this answer is the stored row because SumUp could not
+            # be asked — this time, or by the question a moment ago this poll
+            # was answered from. "pending" then means "nobody could find out",
+            # and a till that has been told that long enough can offer the
+            # cashier a way out rather than a reader that seems to wait
+            # forever. False whenever SumUp answered, and on a payment just
+            # put on the reader, which nobody has asked about yet.
+            "sumup_unreachable": getattr(payment, "sumup_unreachable", False),
         }
 
     @staticmethod
@@ -2212,9 +2271,19 @@ class OpenPosViewSet(DeviceThrottleMixin, viewsets.ViewSet):
         asked for — a card tapped in the same second is a payment, and the till
         has to be told that rather than a cancellation that did not happen.
 
-        The stop itself is always sent. What the payment became is asked the
-        way a poll asks it, and the till reads a "pending" here exactly as it
-        reads one from a poll: its next poll says how it ended.
+        The stop is sent whenever the reader can still be this payment's, and
+        what the payment became is then asked the way a poll asks it: the till
+        reads a "pending" here exactly as it reads one from a poll, and its
+        next poll says how it ended.
+
+        When the reader has moved on (:func:`reader_moved_on`), nothing is sent
+        to it, and SumUp is asked directly what became of this payment: a card
+        charged is answered as such, a request SumUp calls over closes the
+        payment as any poll would, and one still open by SumUp's account — or
+        one SumUp could not be asked about — is answered ``reader_moved_on``.
+        The row is not written off then: only SumUp says whether a card was
+        charged, and a payment left open is still settled by the next question
+        anybody asks about it.
         """
         device, _pos_device, account = self._terminal_context(request, waiting=True)
         payment = PosTerminalPayment.objects.filter(
@@ -2226,6 +2295,25 @@ class OpenPosViewSet(DeviceThrottleMixin, viewsets.ViewSet):
                 {"detail": [_("No card payment was started for this basket.")],
                  "code": "no_payment"}
             )
+        if not payment.settled and reader_moved_on(payment, request.event.organizer):
+            # Directly rather than through the poll's guard: this answer says
+            # whether a card was charged for a basket the cashier may since have
+            # taken in cash, and a one-off request like this one is not what
+            # the guard protects the workers from.
+            settle_terminal_payment(payment, account)
+            if not payment.settled:
+                return Response(
+                    {
+                        "detail": [
+                            _("This payment is no longer the one on the card reader, so the "
+                              "reader was left alone.")
+                        ],
+                        "code": "reader_moved_on",
+                        **self._terminal_payload(payment),
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            return Response(self._terminal_payload(payment))
         if not payment.settled:
             try:
                 # The reader this payment was put on, not whichever one the
