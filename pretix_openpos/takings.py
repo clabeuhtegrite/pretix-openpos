@@ -142,7 +142,7 @@ def summarise(event, rows, *, device=None, night_of=None):
     money never existed, and it must not reach the figure a drawer is counted
     against.
     """
-    from .api.views import deposit_item
+    from .api.catalog import deposit_item
 
     rows = list(rows)
     real = [row for row in rows if not row["testmode"]]

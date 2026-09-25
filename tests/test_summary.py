@@ -18,7 +18,7 @@ import pytest
 from django.utils.timezone import now
 from pretix.base.models import ItemCategory
 
-from pretix_openpos.api.views import BUSINESS_DAY_STARTS_AT, evening_subevent, start_of_business_day
+from pretix_openpos.api.evenings import BUSINESS_DAY_STARTS_AT, evening_subevent, start_of_business_day
 from pretix_openpos.models import PosSale
 
 from .conftest import Till, sell
@@ -99,6 +99,7 @@ def entries(event, ticket):
 
 def freeze(monkeypatch, when):
     """Pretend the till is asking at this moment."""
+    monkeypatch.setattr("pretix_openpos.api.evenings.now", lambda: when)
     monkeypatch.setattr("pretix_openpos.api.views.now", lambda: when)
 
 
@@ -507,7 +508,10 @@ def test_a_series_reports_the_date_the_till_is_selling(season, monkeypatch):
     event, last_week, tonight, item, till = season
     # Last week's evening, rung up last week.
     monkeypatch.setattr(
-        "pretix_openpos.api.views.now", lambda: now() - timedelta(days=7)
+        "pretix_openpos.api.evenings.now", lambda: now() - timedelta(days=7)
+    )
+    monkeypatch.setattr(
+        "pretix_openpos.api.sales.now", lambda: now() - timedelta(days=7)
     )
     sell(till, [{"item": item.pk, "count": 3}], idempotency_key="last-week-1")
     monkeypatch.undo()
@@ -525,7 +529,10 @@ def test_a_series_reports_the_date_the_till_is_selling(season, monkeypatch):
 def test_last_week_s_sale_reversed_tonight_corrects_last_week(season, monkeypatch):
     event, last_week, tonight, item, till = season
     monkeypatch.setattr(
-        "pretix_openpos.api.views.now", lambda: now() - timedelta(days=7)
+        "pretix_openpos.api.evenings.now", lambda: now() - timedelta(days=7)
+    )
+    monkeypatch.setattr(
+        "pretix_openpos.api.sales.now", lambda: now() - timedelta(days=7)
     )
     sale = sell(till, [{"item": item.pk, "count": 3}], idempotency_key="last-week-1").json()
     monkeypatch.undo()

@@ -15,7 +15,7 @@ from django.utils.dateparse import parse_datetime
 from django.utils.timezone import now
 from pretix.base.models import Checkin, Order, OrderPosition
 
-from pretix_openpos.api.views import OFFLINE_SNAPSHOT_LIMIT
+from pretix_openpos.api.door import OFFLINE_SNAPSHOT_LIMIT
 
 
 def admit(event, item, names):
@@ -144,7 +144,7 @@ def test_reading_the_guest_list_costs_the_same_whatever_its_size(
 def test_the_snapshot_says_so_when_it_had_to_stop(
     till, event, ticket, checkin_list, monkeypatch
 ):
-    monkeypatch.setattr("pretix_openpos.api.views.OFFLINE_SNAPSHOT_LIMIT", 2)
+    monkeypatch.setattr("pretix_openpos.api.door.OFFLINE_SNAPSHOT_LIMIT", 2)
     admit(event, ticket, ["A", "B", "C"])
 
     body = till.get("offline", list=checkin_list.pk).json()

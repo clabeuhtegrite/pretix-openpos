@@ -293,7 +293,7 @@ def arrivals(clist, subevent=None):
     to find the fullest the room got. That differs from the arrivals only once
     somebody has been scanned out, which is the one case it is shown in.
     """
-    from .api.views import start_of_business_day
+    from .api.evenings import start_of_business_day
 
     event = clist.event
     tz = event.timezone
@@ -379,7 +379,7 @@ def door_list(event, subevent=None, lists=None):
     is a list of this date; otherwise a list kept for this very date, then one
     kept for every date. ``lists`` are the candidates, when already fetched.
     """
-    from .api.views import checkin_list_for
+    from .api.catalog import checkin_list_for
 
     candidates = lists if lists is not None else lists_of(event, subevent)
     configured = checkin_list_for(event)
@@ -410,7 +410,7 @@ def is_over(event, subevent=None):
     Its end when pretix has one, otherwise the six o'clock that closes the
     night it started in.
     """
-    from .api.views import start_of_business_day
+    from .api.evenings import start_of_business_day
 
     target = subevent or event
     ends = target.date_to or start_of_business_day(event, target.date_from) + timedelta(days=1)

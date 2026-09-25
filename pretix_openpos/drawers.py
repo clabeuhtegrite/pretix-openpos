@@ -134,7 +134,7 @@ def is_stale(session, event, at=None):
     that crosses midnight is one opening, and a drawer nobody closed last
     Saturday is not tonight's.
     """
-    from .api.views import start_of_business_day
+    from .api.evenings import start_of_business_day
 
     return session.opened_at < start_of_business_day(event, at)
 

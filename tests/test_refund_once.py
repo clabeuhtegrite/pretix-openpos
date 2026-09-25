@@ -22,7 +22,7 @@ from pretix.base.models import Order
 from pretix.base.models.orders import OrderRefund
 
 from pretix_openpos import reconcile, sumup as sumup_module
-from pretix_openpos.api import views
+from pretix_openpos.api import cancellation
 from pretix_openpos.models import PosSale, PosTerminalPayment
 from pretix_openpos.reconcile import REFUNDING_KEY, reconcile_all, wait_for_refund
 
@@ -46,7 +46,7 @@ def cancelled_meanwhile(monkeypatch, till, seq, key):
     where a first attempt still running on another worker would commit.
     Returns a dict holding the first attempt's answer once it ran.
     """
-    real = views.drawer_session_for
+    real = cancellation.drawer_session_for
     first = {}
 
     def racing(*args, **kwargs):
@@ -55,7 +55,7 @@ def cancelled_meanwhile(monkeypatch, till, seq, key):
             first["response"] = cancel(till, seq, key=key)
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(views, "drawer_session_for", racing)
+    monkeypatch.setattr(cancellation, "drawer_session_for", racing)
     return first
 
 
@@ -159,7 +159,7 @@ def test_an_order_that_could_no_longer_be_cancelled_meanwhile_is_refused_in_word
     monkeypatch, till, event, ticket
 ):
     sale = sell(till, [{"item": ticket.pk, "count": 1}]).json()
-    real = views.drawer_session_for
+    real = cancellation.drawer_session_for
 
     def meanwhile(*args, **kwargs):
         # Changed by something that writes no journal line: read again under
@@ -167,7 +167,7 @@ def test_an_order_that_could_no_longer_be_cancelled_meanwhile_is_refused_in_word
         Order.objects.filter(code=sale["order"]["code"]).update(status=Order.STATUS_CANCELED)
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(views, "drawer_session_for", meanwhile)
+    monkeypatch.setattr(cancellation, "drawer_session_for", meanwhile)
 
     response = cancel(till, sale["journal_seq"])
 
@@ -184,7 +184,7 @@ def test_a_key_clash_the_journal_cannot_account_for_is_not_passed_off_as_a_repla
     sale = PosSale.objects.get(event=event, kind=PosSale.KIND_SALE)
     # Something under the key when the transaction looked, nothing once it
     # had rolled back: there is no answer to hand back, so there is none.
-    monkeypatch.setattr(views, "hold_idempotency_key", lambda event, key: sale)
+    monkeypatch.setattr(cancellation, "hold_idempotency_key", lambda event, key: sale)
 
     with pytest.raises(PosSale.AlreadyRecorded):
         cancel(till, sale.seq)
@@ -210,7 +210,7 @@ def test_a_till_waits_for_the_refund_in_hand_rather_than_asking_again(
         cache.delete(REFUNDING_KEY.format(payment.pk))
         return True
 
-    monkeypatch.setattr(views, "wait_for_refund", the_other_request_is_answered)
+    monkeypatch.setattr(cancellation, "wait_for_refund", the_other_request_is_answered)
 
     response = cancel(till, sale["journal_seq"])
 
@@ -234,7 +234,7 @@ def test_a_refund_let_go_of_with_nothing_written_is_finished_by_the_till(
         cache.delete(REFUNDING_KEY.format(payment.pk))
         return True
 
-    monkeypatch.setattr(views, "wait_for_refund", let_go)
+    monkeypatch.setattr(cancellation, "wait_for_refund", let_go)
 
     response = cancel(till, sale["journal_seq"])
 
@@ -279,7 +279,7 @@ def test_a_refund_taken_again_the_moment_it_was_let_go_is_answered_not_yet(
 ):
     sale = card_sale(till, sumup, [{"item": ticket.pk, "count": 1}])
     held_by_someone_else(PosTerminalPayment.objects.get())
-    monkeypatch.setattr(views, "wait_for_refund", lambda payment: True)
+    monkeypatch.setattr(cancellation, "wait_for_refund", lambda payment: True)
 
     response = cancel(till, sale["journal_seq"])
 

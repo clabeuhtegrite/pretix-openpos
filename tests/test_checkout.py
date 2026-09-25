@@ -294,12 +294,12 @@ def test_an_invoice_that_will_not_generate_does_not_lose_the_sale(
     # The money is in the drawer. Failing the sale because the PDF renderer
     # fell over would be the wrong trade every time — and the failure is
     # written into the order's own log so it can be picked up afterwards.
-    from pretix_openpos.api import views
+    from pretix_openpos.api import sales
 
     def explode(*args, **kwargs):
         raise RuntimeError("no fonts")
 
-    monkeypatch.setattr(views, "generate_invoice", explode)
+    monkeypatch.setattr(sales, "generate_invoice", explode)
 
     response = sell(till, [{"item": ticket.pk, "count": 1}])
 
@@ -317,14 +317,14 @@ def test_a_check_in_that_fails_unexpectedly_is_reported_not_swallowed(
 ):
     # The customer is standing there. The sale stands, and the screen says the
     # ticket has to be waved through by hand.
-    from pretix_openpos.api import views
+    from pretix_openpos.api import sales
 
     event.settings.set("openpos_checkin_list", str(checkin_list.pk))
 
     def explode(*args, **kwargs):
         raise RuntimeError("the check-in service is having a moment")
 
-    monkeypatch.setattr(views, "perform_checkin", explode)
+    monkeypatch.setattr(sales, "perform_checkin", explode)
 
     response = sell(till, [{"item": ticket.pk, "count": 1}])
 
@@ -340,14 +340,14 @@ def test_a_ticket_pretix_refuses_at_the_door_is_named_in_the_answer(
 ):
     from pretix.base.services.checkin import CheckInError
 
-    from pretix_openpos.api import views
+    from pretix_openpos.api import sales
 
     event.settings.set("openpos_checkin_list", str(checkin_list.pk))
 
     def refuse(*args, **kwargs):
         raise CheckInError("Ticket blocked.", "blocked")
 
-    monkeypatch.setattr(views, "perform_checkin", refuse)
+    monkeypatch.setattr(sales, "perform_checkin", refuse)
 
     body = sell(till, [{"item": ticket.pk, "count": 1}]).json()
 

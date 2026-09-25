@@ -528,7 +528,7 @@ def test_a_poll_answered_from_the_row_repeats_what_the_last_question_found(
     time. Out of reach has to be said on those answers too, or the till hears
     it only half the time — and not at all once SumUp is slower than a poll.
     """
-    from pretix_openpos.api.views import ASK_SUMUP_EVERY
+    from pretix_openpos.api.terminal import ASK_SUMUP_EVERY
 
     start(till, [{"item": ticket.pk, "count": 1}])
     sumup.next_exception = requests.ReadTimeout("too slow")
@@ -623,7 +623,7 @@ def test_a_poll_straight_after_another_is_answered_without_asking_sumup(
 def test_the_first_poll_after_the_pause_asks_again(
     till, ticket, reader_till, sumup, real_cache, monkeypatch
 ):
-    from pretix_openpos.api.views import ASK_SUMUP_EVERY
+    from pretix_openpos.api.terminal import ASK_SUMUP_EVERY
 
     start(till, [{"item": ticket.pk, "count": 1}])
     status(till)
@@ -674,7 +674,7 @@ def test_a_poll_arriving_while_sumup_is_being_asked_does_not_ask_too(
 def test_a_question_left_behind_by_a_dead_worker_holds_the_payment_for_so_long(
     till, ticket, reader_till, sumup, real_cache, monkeypatch
 ):
-    from pretix_openpos.api.views import ASKING_FOR_AT_MOST
+    from pretix_openpos.api.terminal import ASKING_FOR_AT_MOST
 
     start(till, [{"item": ticket.pk, "count": 1}])
     payment = PosTerminalPayment.objects.get()
@@ -691,7 +691,7 @@ def test_a_question_left_behind_by_a_dead_worker_holds_the_payment_for_so_long(
 def test_a_payment_another_question_settled_meanwhile_is_not_asked_about(
     till, organizer, ticket, reader_till, sumup
 ):
-    from pretix_openpos.api.views import poll_terminal_payment
+    from pretix_openpos.api.terminal import poll_terminal_payment
     from pretix_openpos.sumup import SumUpAccount
 
     start(till, [{"item": ticket.pk, "count": 1}])
@@ -829,7 +829,7 @@ def test_cancelling_a_basket_nobody_started_is_refused(till, reader_till, sumup)
 
 def left_aside(key=KEY):
     """Age a payment past the time a reader is held for it."""
-    from pretix_openpos.api.views import READER_HELD_FOR
+    from pretix_openpos.api.terminal import READER_HELD_FOR
 
     PosTerminalPayment.objects.filter(idempotency_key=key).update(
         created=now() - READER_HELD_FOR - timedelta(minutes=1)
@@ -1744,7 +1744,7 @@ def test_a_basket_nobody_ever_answered_stops_holding_the_reader(
     of the evening, with nobody able to say why. Long past any customer still
     standing there, the machine is cleared and the next basket goes on.
     """
-    from pretix_openpos.api.views import READER_HELD_FOR
+    from pretix_openpos.api.terminal import READER_HELD_FOR
 
     start(till, [{"item": ticket.pk, "count": 1}], key="abandonnee-01")
     PosTerminalPayment.objects.filter(idempotency_key="abandonnee-01").update(
@@ -1766,7 +1766,7 @@ def test_the_abandoned_payment_is_not_written_off_by_the_till_that_took_over(
     # Clearing a screen says nothing about whether a card was charged. Only
     # SumUp's own transaction does, and that is what settling asks — so the
     # row stays open for the back office rather than being guessed at here.
-    from pretix_openpos.api.views import READER_HELD_FOR
+    from pretix_openpos.api.terminal import READER_HELD_FOR
 
     start(till, [{"item": ticket.pk, "count": 1}], key="abandonnee-01")
     PosTerminalPayment.objects.filter(idempotency_key="abandonnee-01").update(

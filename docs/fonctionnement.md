@@ -805,7 +805,7 @@ envoyée qu'une fois le paiement validé. Le §5quinquies décrit la séquence.
 
 ### 4.2 Côté serveur
 
-[api/views.py](../pretix_openpos/api/views.py), méthode `checkout()` :
+[api/sales.py](../pretix_openpos/api/sales.py), méthode `checkout()` :
 
 ```
 1.  Rejeu ?           La clé d'idempotence, lue seule, avant tout le reste.

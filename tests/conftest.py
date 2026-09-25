@@ -93,7 +93,7 @@ def event(organizer):
 @pytest.fixture
 def channel(organizer):
     """The POS sales channel, created the way the plugin creates it."""
-    from pretix_openpos.api.views import get_pos_channel
+    from pretix_openpos.api.catalog import get_pos_channel
 
     return get_pos_channel(organizer)
 

@@ -18,7 +18,7 @@ from pretix.base.models import Event
 from pretix.control.permissions import EventPermissionRequiredMixin
 from pretix.control.views.event import EventSettingsFormView, EventSettingsViewMixin
 
-from .api.views import BUSINESS_DAY_STARTS_AT
+from .api.evenings import BUSINESS_DAY_STARTS_AT
 from .backoffice import cancelled_outside_the_journal, catch_up
 from .forms import OpenPosSettingsForm
 from .models import PosCategory, PosDevice, PosSale

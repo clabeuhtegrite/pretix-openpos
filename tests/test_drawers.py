@@ -358,7 +358,7 @@ def test_a_drawer_closed_under_a_sale_s_feet_refuses_the_cash(till, device, beer
     """The lock the checkout takes finds the opening closed, and writes nothing."""
     from rest_framework.exceptions import ValidationError
 
-    from pretix_openpos.api.views import hold_drawer_session
+    from pretix_openpos.api.drawer_api import hold_drawer_session
 
     drawer = give_drawer(device)
     open_it(till)

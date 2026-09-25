@@ -18,7 +18,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: pretix-openpos\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-09-25 13:45+0000\n"
+"POT-Creation-Date: 2026-09-25 14:10+0000\n"
 "PO-Revision-Date: 2026-09-22 09:51+0000\n"
 "Last-Translator: clabeuhtegrite\n"
 "Language-Team: French\n"
@@ -27,6 +27,142 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=2; plural=(n > 1);\n"
+
+#: api/cancellation.py:48
+msgid ""
+"The card refund of this sale is still being asked of SumUp. Try again in a "
+"moment."
+msgstr ""
+"Le remboursement carte de cette vente est encore en cours auprès de SumUp. "
+"Réessayez dans un instant."
+
+#: api/cancellation.py:167
+msgid "This key already names another entry of the journal."
+msgstr "Cette clé désigne déjà une autre écriture du journal."
+
+#: api/cancellation.py:180
+msgid "No such entry in this event's journal."
+msgstr "Cette écriture n’existe pas dans le journal de cet événement."
+
+#: api/cancellation.py:185
+msgid "This sale was made on another till and can only be corrected there."
+msgstr ""
+"Cette vente a été faite sur une autre caisse et ne peut être corrigée que là-"
+"bas."
+
+#: api/cancellation.py:188
+msgid "This journal entry is not a sale."
+msgstr "Cette écriture du journal n’est pas une vente."
+
+#: api/cancellation.py:204
+msgid "The order behind this sale no longer exists."
+msgstr "La commande derrière cette vente n’existe plus."
+
+#: api/cancellation.py:209 api/cancellation.py:273
+#, python-brace-format
+msgid "pretix will not let this order be cancelled: {status}."
+msgstr "pretix refuse l’annulation de cette commande : {status}."
+
+#: api/catalog.py:218
+#, python-brace-format
+msgid "Product {id} is not on sale at the till."
+msgstr "Le produit {id} n’est pas en vente à la caisse."
+
+#: api/catalog.py:234
+#, python-brace-format
+msgid "This till does not sell {category}."
+msgstr "Cette caisse ne vend pas {category}."
+
+#: api/catalog.py:248
+#, python-brace-format
+msgid "Unknown option for product {name}."
+msgstr "Déclinaison inconnue pour le produit {name}."
+
+#: api/catalog.py:252
+#, python-brace-format
+msgid "Product {name} requires an option to be chosen."
+msgstr "Le produit {name} demande de choisir une déclinaison."
+
+#: api/catalog.py:274
+#, python-brace-format
+msgid "{name} cannot be sold for less than nothing."
+msgstr "Impossible de vendre {name} en dessous de zéro."
+
+#: api/catalog.py:288
+msgid "This product is not the one deposits are taken on."
+msgstr "Ce produit n’est pas celui sur lequel les consignes sont prises."
+
+#: api/catalog.py:303
+msgid "Free amounts can only be sold on the product set aside for them."
+msgstr ""
+"Les montants libres ne peuvent être vendus que sur le produit prévu pour eux."
+
+#: api/catalog.py:310
+msgid "A free amount has to be more than nothing."
+msgstr "Un montant libre doit être supérieur à zéro."
+
+#: api/catalog.py:353
+#, python-brace-format
+msgid "A sale can hold at most {max} items. Split it into several sales."
+msgstr ""
+"Une vente ne peut pas compter plus de {max} articles. Répartissez-la en "
+"plusieurs ventes."
+
+#: api/door.py:89
+msgid ""
+"This device is set up as a till, not for the door: it is not given the guest "
+"list."
+msgstr ""
+"Cet appareil est réglé en caisse, pas pour la porte : la liste des billets "
+"ne lui est pas donnée."
+
+#: api/door.py:97 api/door.py:164
+msgid "Unknown check-in list."
+msgstr "Liste de contrôle inconnue."
+
+#: api/drawer_api.py:190 drawers.py:100
+msgid "No cash drawer is assigned to this till."
+msgstr "Aucune caisse espèces n’est attribuée à cet appareil."
+
+#: api/drawer_api.py:312 api/serializers.py:402 drawers.py:387 drawers.py:396
+msgid "Count the drawer before closing it."
+msgstr "Comptez la caisse avant de la fermer."
+
+#: api/evenings.py:117
+msgid ""
+"Nothing is on tonight. This event is a series, and the till sells for the "
+"date that is on — add one for tonight, or check that it is switched on."
+msgstr ""
+"Rien n’est programmé ce soir. Cet événement est une série, et la caisse vend "
+"la date qui a lieu — ajoutez-en une pour ce soir, ou vérifiez qu’elle est "
+"activée."
+
+#: api/sales.py:168
+msgid "This sale is still being recorded. Try again in a moment."
+msgstr ""
+"Cette vente est encore en cours d’enregistrement. Réessayez dans un instant."
+
+#: api/sales.py:367
+msgid ""
+"This till has a card reader assigned, so a card payment has to be validated "
+"by the reader. Take this payment on the reader, or in cash."
+msgstr ""
+"Cette caisse a un lecteur attribué : un paiement par carte doit être validé "
+"par le lecteur. Encaissez sur le lecteur, ou en espèces."
+
+#: api/sales.py:569
+#, python-brace-format
+msgid "Prices changed: this basket now comes to {total}, not {expected}."
+msgstr ""
+"Les prix ont changé : ce panier fait maintenant {total}, et non {expected}."
+
+#: api/sales.py:586
+msgid "Nothing is due: this transaction pays money out."
+msgstr "Rien n’est dû : cette opération sort de l’argent."
+
+#: api/sales.py:590
+msgid "The amount received is less than the total due."
+msgstr "Le montant reçu est inférieur au total dû."
 
 #: api/serializers.py:106
 msgid "This sale is dated in the future."
@@ -85,121 +221,11 @@ msgstr "Le montant reçu ne s’applique qu’aux paiements en espèces."
 msgid "“{value}” is not an amount."
 msgstr "« {value} » n’est pas un montant."
 
-#: api/serializers.py:402 api/views.py:3207 drawers.py:387 drawers.py:396
-msgid "Count the drawer before closing it."
-msgstr "Comptez la caisse avant de la fermer."
-
-#: api/throttling.py:69
-msgid "This device is sending too many requests. Try again in a moment."
-msgstr "Cet appareil envoie trop de requêtes. Réessayez dans un instant."
-
-#: api/views.py:340
-msgid ""
-"Nothing is on tonight. This event is a series, and the till sells for the "
-"date that is on — add one for tonight, or check that it is switched on."
-msgstr ""
-"Rien n’est programmé ce soir. Cet événement est une série, et la caisse vend "
-"la date qui a lieu — ajoutez-en une pour ce soir, ou vérifiez qu’elle est "
-"activée."
-
-#: api/views.py:477
-#, python-brace-format
-msgid "Product {id} is not on sale at the till."
-msgstr "Le produit {id} n’est pas en vente à la caisse."
-
-#: api/views.py:493
-#, python-brace-format
-msgid "This till does not sell {category}."
-msgstr "Cette caisse ne vend pas {category}."
-
-#: api/views.py:507
-#, python-brace-format
-msgid "Unknown option for product {name}."
-msgstr "Déclinaison inconnue pour le produit {name}."
-
-#: api/views.py:511
-#, python-brace-format
-msgid "Product {name} requires an option to be chosen."
-msgstr "Le produit {name} demande de choisir une déclinaison."
-
-#: api/views.py:533
-#, python-brace-format
-msgid "{name} cannot be sold for less than nothing."
-msgstr "Impossible de vendre {name} en dessous de zéro."
-
-#: api/views.py:547
-msgid "This product is not the one deposits are taken on."
-msgstr "Ce produit n’est pas celui sur lequel les consignes sont prises."
-
-#: api/views.py:562
-msgid "Free amounts can only be sold on the product set aside for them."
-msgstr ""
-"Les montants libres ne peuvent être vendus que sur le produit prévu pour eux."
-
-#: api/views.py:569
-msgid "A free amount has to be more than nothing."
-msgstr "Un montant libre doit être supérieur à zéro."
-
-#: api/views.py:612
-#, python-brace-format
-msgid "A sale can hold at most {max} items. Split it into several sales."
-msgstr ""
-"Une vente ne peut pas compter plus de {max} articles. Répartissez-la en "
-"plusieurs ventes."
-
-#: api/views.py:1062
-msgid "This sale is still being recorded. Try again in a moment."
-msgstr ""
-"Cette vente est encore en cours d’enregistrement. Réessayez dans un instant."
-
-#: api/views.py:1080
-msgid ""
-"The card refund of this sale is still being asked of SumUp. Try again in a "
-"moment."
-msgstr ""
-"Le remboursement carte de cette vente est encore en cours auprès de SumUp. "
-"Réessayez dans un instant."
-
-#: api/views.py:1231
-msgid "Only a paired device can report its status."
-msgstr "Seul un appareil appairé peut donner son état."
-
-#: api/views.py:1314
-#, python-brace-format
-msgid "Open POS is not enabled for the event {slug}."
-msgstr "Open POS n’est pas activé sur l’événement {slug}."
-
-#: api/views.py:1517
-msgid "Uncategorised"
-msgstr "Sans catégorie"
-
-#: api/views.py:1649
-msgid ""
-"This till has a card reader assigned, so a card payment has to be validated "
-"by the reader. Take this payment on the reader, or in cash."
-msgstr ""
-"Cette caisse a un lecteur attribué : un paiement par carte doit être validé "
-"par le lecteur. Encaissez sur le lecteur, ou en espèces."
-
-#: api/views.py:1851
-#, python-brace-format
-msgid "Prices changed: this basket now comes to {total}, not {expected}."
-msgstr ""
-"Les prix ont changé : ce panier fait maintenant {total}, et non {expected}."
-
-#: api/views.py:1868
-msgid "Nothing is due: this transaction pays money out."
-msgstr "Rien n’est dû : cette opération sort de l’argent."
-
-#: api/views.py:1872
-msgid "The amount received is less than the total due."
-msgstr "Le montant reçu est inférieur au total dû."
-
-#: api/views.py:2125
+#: api/terminal.py:282
 msgid "No card reader is assigned to this till."
 msgstr "Aucun lecteur n’est attribué à cette caisse."
 
-#: api/views.py:2197
+#: api/terminal.py:354
 msgid ""
 "The card reader is taking another payment. Wait for it to finish, or take "
 "this basket in cash."
@@ -207,20 +233,20 @@ msgstr ""
 "Le lecteur encaisse un autre paiement. Attendez la fin, ou prenez ce panier "
 "en espèces."
 
-#: api/views.py:2294
+#: api/terminal.py:451
 #, python-brace-format
 msgid "{name} is sold out."
 msgstr "{name} est épuisé."
 
-#: api/views.py:2317
+#: api/terminal.py:474
 msgid "Nothing is due on this basket. Settle it in cash."
 msgstr "Rien n’est dû sur ce panier. Réglez-le en espèces."
 
-#: api/views.py:2405 api/views.py:2442
+#: api/terminal.py:562 api/terminal.py:599
 msgid "No card payment was started for this basket."
 msgstr "Aucun paiement par carte n’a été lancé pour ce panier."
 
-#: api/views.py:2455
+#: api/terminal.py:612
 msgid ""
 "This payment is no longer the one on the card reader, so the reader was left "
 "alone."
@@ -228,48 +254,22 @@ msgstr ""
 "Ce paiement n’est plus celui qui occupe le lecteur de carte : le lecteur n’a "
 "pas été touché."
 
-#: api/views.py:2508
-msgid ""
-"This device is set up as a till, not for the door: it is not given the guest "
-"list."
-msgstr ""
-"Cet appareil est réglé en caisse, pas pour la porte : la liste des billets "
-"ne lui est pas donnée."
+#: api/throttling.py:69
+msgid "This device is sending too many requests. Try again in a moment."
+msgstr "Cet appareil envoie trop de requêtes. Réessayez dans un instant."
 
-#: api/views.py:2516 api/views.py:3246
-msgid "Unknown check-in list."
-msgstr "Liste de contrôle inconnue."
+#: api/views.py:108
+msgid "Only a paired device can report its status."
+msgstr "Seul un appareil appairé peut donner son état."
 
-#: api/views.py:2659
-msgid "This key already names another entry of the journal."
-msgstr "Cette clé désigne déjà une autre écriture du journal."
-
-#: api/views.py:2672
-msgid "No such entry in this event's journal."
-msgstr "Cette écriture n’existe pas dans le journal de cet événement."
-
-#: api/views.py:2677
-msgid "This sale was made on another till and can only be corrected there."
-msgstr ""
-"Cette vente a été faite sur une autre caisse et ne peut être corrigée que là-"
-"bas."
-
-#: api/views.py:2680
-msgid "This journal entry is not a sale."
-msgstr "Cette écriture du journal n’est pas une vente."
-
-#: api/views.py:2696
-msgid "The order behind this sale no longer exists."
-msgstr "La commande derrière cette vente n’existe plus."
-
-#: api/views.py:2701 api/views.py:2765
+#: api/views.py:156
 #, python-brace-format
-msgid "pretix will not let this order be cancelled: {status}."
-msgstr "pretix refuse l’annulation de cette commande : {status}."
+msgid "Open POS is not enabled for the event {slug}."
+msgstr "Open POS n’est pas activé sur l’événement {slug}."
 
-#: api/views.py:3085 drawers.py:100
-msgid "No cash drawer is assigned to this till."
-msgstr "Aucune caisse espèces n’est attribuée à cet appareil."
+#: api/views.py:359
+msgid "Uncategorised"
+msgstr "Sans catégorie"
 
 #: apps.py:13 apps.py:25 apps.py:28 apps.py:29 apps.py:30 channels.py:12
 #: security.py:46 signals.py:138 templates/pretix_openpos/settings.html:4

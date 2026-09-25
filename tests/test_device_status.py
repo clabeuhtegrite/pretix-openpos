@@ -248,7 +248,7 @@ def test_a_cache_that_is_down_costs_the_till_nothing(till, device, monkeypatch, 
             raise ConnectionError("redis is gone")
 
     # This module's cache only: pretix reads its own through the same proxy.
-    monkeypatch.setattr("pretix_openpos.api.views.cache", Down())
+    monkeypatch.setattr("pretix_openpos.api.contact.cache", Down())
 
     assert till.get("config").status_code == 200
     assert "could not write down the last contact" in caplog.text

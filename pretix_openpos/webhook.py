@@ -76,7 +76,7 @@ def sumup_callback(request, organizer, token):
     single field — which payment to go and look up — and nothing in it is
     written down.
     """
-    from .api.views import settle_terminal_payment
+    from .api.terminal import settle_terminal_payment
     from .models import PosTerminalPayment
     from .sumup import SumUpAccount
 
