@@ -2076,29 +2076,21 @@ class OpenPosViewSet(viewsets.ViewSet):
             event=event, idempotency_key=data["idempotency_key"]
         ).first()
         if replay:
-            original = PosSale.objects.filter(event=event, seq=replay.cancels_seq).first()
-            body = self._cancellation_payload(replay, original, replayed=True)
-            # Asked again rather than remembered, and for a reason: the first
-            # attempt may have committed the cancellation and then lost the
-            # connection before it refunded the card. This is what finishes the
-            # job — and when it did run, it answers "already" rather than
-            # sending the money a second time.
-            body["card_refund"], refusal = (
-                self._refund_card(event, original) if original else ("none", "")
-            )
-            # And the books are brought in line with what just happened. A
-            # cancellation whose card refund was refused the first time leaves a
-            # failed refund on the order; succeeding on the retry has to clear
-            # it, or the order page keeps saying the customer was never paid
-            # back long after they were.
-            if original is not None and original.order_id:
-                self._settle_refund(
-                    request,
-                    original.order.refunds.order_by("-local_id").first(),
-                    body["card_refund"],
-                    refusal,
+            if device is None or replay.device_id != device.pk or replay.kind != PosSale.KIND_CANCELLATION:
+                # A key names one request, and this one names somebody else's
+                # entry: a sale, another till's cancellation, or one the back
+                # office wrote — whose keys are spelt out in backoffice.py, so
+                # anybody can type one. Answering it as a replay would hand
+                # this till that entry, and ask SumUp to finish a refund the
+                # back office may have chosen not to make.
+                raise ValidationError(
+                    {"idempotency_key": [_("This key already names another entry of the journal.")]}
                 )
-            return Response(body, status=status.HTTP_200_OK)
+            original = PosSale.objects.filter(event=event, seq=replay.cancels_seq).first()
+            return Response(
+                self._found_cancellation(request, replay, original, already_cancelled=False),
+                status=status.HTTP_200_OK,
+            )
 
         sale = PosSale.objects.filter(event=event, seq=data["seq"]).select_related("order").first()
         if sale is None:
@@ -2111,8 +2103,20 @@ class OpenPosViewSet(viewsets.ViewSet):
             )
         if sale.kind != PosSale.KIND_SALE:
             raise ValidationError({"seq": [_("This journal entry is not a sale.")]})
-        if PosSale.cancelled_seqs(event, [sale.seq]):
-            raise ValidationError({"seq": [_("This sale has already been cancelled.")]})
+        standing = self._standing_cancellation(event, sale)
+        if standing is not None:
+            # Cancelled already, under another key: a first attempt that went
+            # through and timed out on the way back, retried by a till that
+            # could no longer tell it was the same one — the history panel
+            # closed and reopened, the app reloaded. Refusing it with "already
+            # cancelled" was the whole answer once, and the till never showed
+            # the amount to hand back nor offered to ring the order up again.
+            # So the cancellation that stands is answered as a fresh one would
+            # be, with what it was, and how it came to be there.
+            return Response(
+                self._found_cancellation(request, standing, sale, already_cancelled=True),
+                status=status.HTTP_200_OK,
+            )
         if sale.order is None:
             raise ValidationError({"seq": [_("The order behind this sale no longer exists.")]})
 
@@ -2695,16 +2699,126 @@ class OpenPosViewSet(viewsets.ViewSet):
             ),
         }
 
-    def _cancellation_payload(self, cancellation, sale, replayed):
+    def _cancellation_payload(self, cancellation, sale, replayed, already_cancelled=False):
+        """
+        A cancellation as the till reads it, however it was reached.
+
+        One shape for all three ways, so the till has one screen for them, and
+        three flags to say which way it was:
+
+        ``replayed``
+            The cancellation was already in the journal before this request:
+            nothing was written this time.
+        ``already_cancelled``
+            …and it was not this request's own, retried under the same key:
+            the sale had been cancelled before, under another key.
+        ``by_back_office``
+            …by somebody in pretix' back office rather than by a till. The money
+            was dealt with there, if at all, and the till is told so it can
+            say so rather than offer to hand anything back.
+        """
         return {
             "cancellation": self._journal_payload(cancellation),
             # The lines of the sale that was reversed, so the till can put them
             # straight back in the basket for the operator to correct.
             "sale": self._journal_payload(sale, {sale.seq}) if sale else None,
             "replayed": replayed,
+            "already_cancelled": already_cancelled,
+            "by_back_office": cancellation.from_back_office,
             "credit_note": None,
             "refunded": False,
         }
+
+    @staticmethod
+    def _standing_cancellation(event, sale):
+        """
+        The cancellation of this sale that stands, or ``None``.
+
+        The latest one no reactivation has undone — the journal's own rule, as
+        :meth:`PosSale.cancelled_seqs` applies it: pretix' back office can
+        bring a cancelled order back, and the till cancel it again afterwards.
+        """
+        cancellations = list(
+            PosSale.objects.filter(
+                event=event, kind=PosSale.KIND_CANCELLATION, cancels_seq=sale.seq
+            ).order_by("-seq")
+        )
+        if not cancellations:
+            return None
+        undone = set(
+            PosSale.objects.filter(
+                event=event,
+                kind=PosSale.KIND_REACTIVATION,
+                cancels_seq__in=[c.seq for c in cancellations],
+            ).values_list("cancels_seq", flat=True)
+        )
+        return next((c for c in cancellations if c.seq not in undone), None)
+
+    def _found_cancellation(self, request, cancellation, sale, *, already_cancelled):
+        """
+        A cancellation already in the journal, answered as it was the first time.
+
+        With the credit note and what became of the money, which the till needs
+        to show the same screen: the amount to hand back, the credit to ring the
+        order up again with. And the job finished where it was left: a first
+        attempt may have committed the cancellation and lost the connection
+        before it refunded the card. Asked again rather than remembered — when
+        the refund did go through, the answer is "already", never a second one.
+
+        Except for a cancellation made in the back office. Whoever made it
+        decided about the money there, and pretix' own refund dialog is where
+        a card is given back from it: asking SumUp from here could refund a
+        card somebody chose not to. So that one only says where the card
+        stands, and asks nobody.
+        """
+        body = self._cancellation_payload(
+            cancellation, sale, replayed=True, already_cancelled=already_cancelled
+        )
+        order = sale.order if sale is not None else None
+        if order is not None:
+            body["credit_note"] = self._credit_note_number(order)
+            body["refunded"] = order.refunds.exists()
+        if sale is None:
+            body["card_refund"] = "none"
+            return body
+        if cancellation.from_back_office:
+            body["card_refund"] = self._card_refund_state(sale)
+            return body
+        body["card_refund"], refusal = self._refund_card(request.event, sale)
+        # And the books are brought in line with what just happened. A
+        # cancellation whose card refund was refused the first time leaves a
+        # failed refund on the order; succeeding on the retry has to clear it,
+        # or the order page keeps saying the customer was never paid back long
+        # after they were.
+        if order is not None:
+            self._settle_refund(
+                request, order.refunds.order_by("-local_id").first(), body["card_refund"], refusal
+            )
+        return body
+
+    @staticmethod
+    def _card_refund_state(sale):
+        """
+        What became of a sale's card money, from what is written down alone.
+
+        The words of :meth:`_refund_card`, for a cancellation this server did
+        not refund itself: ``none`` when no reader took the money, ``already``
+        once the reader payment was refunded, ``pending`` while a refund of it
+        waits for SumUp, ``failed`` when the last one was refused. A reader
+        payment nobody has tried to refund is ``none`` as well: nothing was
+        asked of SumUp, so there is nothing to report.
+        """
+        payment = PosTerminalPayment.settling(sale)
+        if payment is None:
+            return "none"
+        if payment.refunded:
+            return "already"
+        latest = sale.order.refunds.order_by("-local_id").first() if sale.order_id else None
+        if latest is not None and latest.state == OrderRefund.REFUND_STATE_TRANSIT:
+            return "pending"
+        if latest is not None and latest.state == OrderRefund.REFUND_STATE_FAILED:
+            return "failed"
+        return "none"
 
     def _record_refund(self, request, order, sale, reason, *, settle_now):
         """

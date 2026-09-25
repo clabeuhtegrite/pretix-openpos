@@ -199,6 +199,10 @@ msgstr ""
 "Cet appareil est réglé en caisse, pas pour la porte : la liste des billets ne "
 "lui est pas donnée."
 
+#: api/views.py:2087
+msgid "This key already names another entry of the journal."
+msgstr "Cette clé désigne déjà une autre écriture du journal."
+
 #: api/views.py:1965
 msgid "No such entry in this event's journal."
 msgstr "Cette écriture n’existe pas dans le journal de cet événement."
@@ -212,10 +216,6 @@ msgstr ""
 #: api/views.py:1973
 msgid "This journal entry is not a sale."
 msgstr "Cette écriture du journal n’est pas une vente."
-
-#: api/views.py:1975
-msgid "This sale has already been cancelled."
-msgstr "Cette vente a déjà été annulée."
 
 #: api/views.py:1977
 msgid "The order behind this sale no longer exists."
