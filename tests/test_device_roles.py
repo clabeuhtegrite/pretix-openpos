@@ -9,6 +9,8 @@ holds whatever the app on the tablet believes. So the refusals below are
 checked over HTTP, against a real device token, the way a stale or edited app
 would actually reach the endpoint.
 """
+from datetime import timedelta
+
 import pytest
 from django.utils.timezone import now
 from pretix.base.models import Device
@@ -134,7 +136,10 @@ def test_a_card_sale_replayed_from_a_reader_till_is_refused_too(till, device, ti
         till,
         [{"item": ticket.pk, "count": 1, "price": "10.00"}],
         payment_type="card",
-        offline={"recorded_at": "2026-09-19T21:30:00+02:00", "charged_total": "10.00"},
+        # Inside the replay window whatever day the suite runs: a fixed date
+        # here aged out of it a week after it was written, and the sale was
+        # then refused for being too old before the reader was ever asked.
+        offline={"recorded_at": (now() - timedelta(hours=2)).isoformat(), "charged_total": "10.00"},
     )
 
     assert response.status_code == 400

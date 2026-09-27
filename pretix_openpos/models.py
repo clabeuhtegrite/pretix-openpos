@@ -890,6 +890,51 @@ class PosCategory(models.Model):
         }
 
 
+class PosAssociation(models.Model):
+    """
+    One of the associations that run an organizer's evenings together.
+
+    An evening is often several associations' at once: one sells the tickets
+    online, another takes the money at the door, a third runs the bar — and
+    each keeps its own books. pretix knows one organizer and, per event, one
+    issuer of invoices; nothing in it says which of the three a euro belongs
+    to. This row is the name that answers, and the statements screen
+    (:mod:`pretix_openpos.statements`) is what reads it.
+
+    Organizer-level, like the drawers and the SumUp account it may be said to
+    hold the money of: the bar's association is the bar's association whichever
+    evening is on. Which association counts which part of an evening is said
+    per event, in the event's settings (:mod:`pretix_openpos.associations`),
+    because it is a fact about that evening, and a copied event keeps it.
+
+    Nothing is written on a sale. A statement is computed from the journal and
+    the orders with the settings as they stand, so a category reserved the
+    morning after puts that evening right too. The other side of that is the
+    reason an association cannot be deleted while anything still names it:
+    the statements of past evenings would change hands without a word.
+    """
+
+    organizer = models.ForeignKey(
+        Organizer, on_delete=models.CASCADE, related_name="openpos_associations"
+    )
+    name = models.CharField(max_length=190, verbose_name=_("Name"))
+    created = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = _("Association")
+        verbose_name_plural = _("Associations")
+        ordering = ("name", "pk")
+        constraints = [
+            # Two associations of one name are two statements nobody can tell apart.
+            models.UniqueConstraint(
+                fields=["organizer", "name"], name="openpos_association_unique_name"
+            ),
+        ]
+
+    def __str__(self):
+        return self.name
+
+
 class PosDrawer(models.Model):
     """
     A cash drawer: the box of notes and coins behind a counter.
@@ -923,6 +968,17 @@ class PosDrawer(models.Model):
     #: with it — so this is how one stops being offered: out of the list and
     #: out of the tills' choice, its evenings still there to read.
     archived_at = models.DateTimeField(null=True, blank=True)
+    #: The association whose bank account this drawer's cash ends up in, if
+    #: anybody has said.
+    #:
+    #: Only the statements read it, to say who owes whom when the bar's
+    #: association keeps a drawer the door also sold into. Empty is the usual
+    #: case and means no such thing: the cash of each sale is counted as held
+    #: by the association the sale belongs to.
+    held_by = models.ForeignKey(
+        PosAssociation, null=True, blank=True, on_delete=models.PROTECT,
+        related_name="drawers", verbose_name=_("Held by"),
+    )
 
     class Meta:
         verbose_name = _("Cash drawer")

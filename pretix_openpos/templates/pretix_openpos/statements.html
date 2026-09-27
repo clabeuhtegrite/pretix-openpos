@@ -1,0 +1,355 @@
+{% extends "pretixcontrol/event/base.html" %}
+{% load i18n %}
+{% load money %}
+{% block title %}{% trans "Statements" %}{% endblock %}
+{% block content %}
+    <h1>
+        {% trans "Statements" %}
+        {% if subevent %}
+            <small>{{ subevent }}</small>
+        {% elif whole_series %}
+            <small>{% trans "All dates" %}</small>
+        {% endif %}
+    </h1>
+
+    <p class="text-muted">
+        {% blocktrans trimmed %}
+            Each association's share of the evening: what it sold, and the money it took. The
+            online sales are every order that did not come from a till. What the tills sold goes
+            to the door or to the bar by the category reserved for it on
+        {% endblocktrans %}
+        <a href="{{ categories_url }}">{% trans "Who sells what" %}</a>{% blocktrans trimmed %},
+            and otherwise by the role of the device that sold it.
+        {% endblocktrans %}
+    </p>
+
+    {% if subevents %}
+        {% comment %}A button rather than a select that submits itself: the
+        control panel's CSP runs no inline script.{% endcomment %}
+        <form method="get" action="" class="form-inline helper-space-below">
+            <label for="op-date">{% trans "Date" context "arrivals" %}</label>
+            <select name="date" id="op-date" class="form-control">
+                <option value="all" {% if whole_series %}selected{% endif %}>{% trans "All dates" %}</option>
+                {% for date in subevents %}
+                    <option value="{{ date.pk }}" {% if date == subevent %}selected{% endif %}>{{ date }}</option>
+                {% endfor %}
+            </select>
+            <button type="submit" class="btn btn-default">{% trans "Show" context "arrivals" %}</button>
+        </form>
+    {% endif %}
+
+    <h3>{% trans "Who counts what" %}</h3>
+    {% if not associations %}
+        <div class="alert alert-info">
+            {% trans "No association yet, so the evening is shown part by part." %}
+            {% if associations_url %}
+                {% blocktrans trimmed with url=associations_url %}
+                    Add the associations that share it on the <a href="{{ url }}">Associations</a>
+                    page, then say here which one counts what.
+                {% endblocktrans %}
+            {% endif %}
+        </div>
+    {% elif can_configure %}
+        <form action="" method="post">
+            {% csrf_token %}
+            <div class="table-responsive">
+                <table class="table table-condensed">
+                    <tbody>
+                    {% for row in parts %}
+                        <tr>
+                            <td><label for="op-{{ row.field }}">{{ row.label }}</label></td>
+                            <td>
+                                <select name="{{ row.field }}" id="op-{{ row.field }}" class="form-control">
+                                    <option value="">—</option>
+                                    {% for association in associations %}
+                                        <option value="{{ association.pk }}"
+                                                {% if association == row.association %}selected{% endif %}>
+                                            {{ association.name }}
+                                        </option>
+                                    {% endfor %}
+                                </select>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                    <tr>
+                        <td>
+                            <label for="op-online-holder">{% trans "Online payments land with" %}</label>
+                            <br><small class="text-muted">
+                                {% trans "Leave it on “—” when they land with the association of the online sales." %}
+                            </small>
+                        </td>
+                        <td>
+                            <select name="online_holder" id="op-online-holder" class="form-control">
+                                <option value="">—</option>
+                                {% for association in associations %}
+                                    <option value="{{ association.pk }}"
+                                            {% if association == online_holder %}selected{% endif %}>
+                                        {{ association.name }}
+                                    </option>
+                                {% endfor %}
+                            </select>
+                        </td>
+                    </tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="help-block">
+                {% blocktrans trimmed %}
+                    Said once for the whole event, and read again every time this page is shown:
+                    change it, and the statements of its past dates change with it.
+                {% endblocktrans %}
+                {% if associations_url %}
+                    {% blocktrans trimmed with url=associations_url %}
+                        Whose account the SumUp payments and each drawer's cash go to is said on the
+                        <a href="{{ url }}">Associations</a> page.
+                    {% endblocktrans %}
+                {% endif %}
+            </p>
+            <div class="form-group submit-group">
+                <button type="submit" class="btn btn-primary btn-save">{% trans "Save" %}</button>
+            </div>
+        </form>
+    {% else %}
+        <ul class="list-unstyled">
+            {% for row in parts %}
+                <li><strong>{{ row.label }}</strong> {{ row.association.name|default:"—" }}</li>
+            {% endfor %}
+            {% if online_holder %}
+                <li><strong>{% trans "Online payments land with" %}</strong> {{ online_holder.name }}</li>
+            {% endif %}
+        </ul>
+    {% endif %}
+
+    <h3>{% trans "Shares of the evening" %}</h3>
+    <div class="table-responsive">
+        <table class="table table-condensed">
+            <thead>
+            <tr>
+                <th>{% trans "Association" %}</th>
+                <th class="text-right">{% trans "Sold" context "statements" %}</th>
+                <th class="text-right">{% trans "Deposits" %}</th>
+                <th class="text-right">{% trans "Cash" %}</th>
+                <th class="text-right">{% trans "Card" %}</th>
+                <th class="text-right">{% trans "Online" context "statements" %}</th>
+                <th class="text-right">{% trans "Total" %}</th>
+            </tr>
+            </thead>
+            <tbody>
+            {% for share in report.shares %}
+                <tr>
+                    <td>
+                        <a href="#op-share-{{ forloop.counter }}">
+                            {% if share.association %}<strong>{{ share.label }}</strong>{% else %}<em>{{ share.label }}</em>{% endif %}
+                        </a>
+                        {% if share.association and share.parts %}
+                            <br><small class="text-muted">{{ share.parts|join:", " }}</small>
+                        {% endif %}
+                    </td>
+                    <td class="text-right">{{ share.sold|money:currency }}</td>
+                    <td class="text-right">{{ share.deposits_total|money:currency }}</td>
+                    <td class="text-right">{{ share.cash|money:currency }}</td>
+                    <td class="text-right">{{ share.card|money:currency }}</td>
+                    <td class="text-right">{{ share.online|money:currency }}</td>
+                    <td class="text-right"><strong>{{ share.total|money:currency }}</strong></td>
+                </tr>
+            {% empty %}
+                <tr><td colspan="7">{% trans "Nothing has been sold for this evening yet." %}</td></tr>
+            {% endfor %}
+            </tbody>
+            {% if report.shares|length > 1 %}
+                <tfoot>
+                <tr>
+                    <th>{% trans "All associations" %}</th>
+                    <th class="text-right">{{ report.totals.sold|money:currency }}</th>
+                    <th class="text-right">{{ report.totals.deposits_total|money:currency }}</th>
+                    <th class="text-right">{{ report.totals.cash|money:currency }}</th>
+                    <th class="text-right">{{ report.totals.card|money:currency }}</th>
+                    <th class="text-right">{{ report.totals.online|money:currency }}</th>
+                    <th class="text-right">{{ report.totals.total|money:currency }}</th>
+                </tr>
+                </tfoot>
+            {% endif %}
+        </table>
+    </div>
+
+    {% if associations and report.missing_parts %}
+        <div class="alert alert-warning">
+            {% blocktrans trimmed with parts=report.missing_parts|join:", " %}
+                Nobody counts these parts yet: {{ parts }}. They are shown under their own name,
+                and no transfer is worked out for them.
+            {% endblocktrans %}
+        </div>
+    {% endif %}
+    {% if report.reader_unheld %}
+        <div class="alert alert-warning">
+            {% blocktrans trimmed with amount=report.reader_unheld|money:currency %}
+                {{ amount }} of card payments went into the SumUp account, and nobody has said which
+                association it belongs to, so the transfers below leave it out.
+            {% endblocktrans %}
+            {% if associations_url %}
+                {% blocktrans trimmed with url=associations_url %}
+                    Say it on the <a href="{{ url }}">Associations</a> page.
+                {% endblocktrans %}
+            {% endif %}
+        </div>
+    {% endif %}
+    {% if report.unplaced %}
+        <p class="text-muted">
+            {% blocktrans trimmed with amount=report.unplaced|money:currency %}
+                {{ amount }} is held by an association for a part nobody counts, and is left out of
+                the transfers.
+            {% endblocktrans %}
+        </p>
+    {% endif %}
+    {% for share in report.shares %}
+        {% if share.gap %}
+            <p class="text-muted">
+                {% blocktrans trimmed with name=share.label amount=share.gap|money:currency %}
+                    {{ name }}: a difference of {{ amount }} between the money taken and what was
+                    sold. It comes from an online order paid in part, or refunded without being
+                    cancelled.
+                {% endblocktrans %}
+            </p>
+        {% endif %}
+    {% endfor %}
+    {% if report.test_rows %}
+        <p class="text-muted">
+            {% blocktrans trimmed count n=report.test_rows %}
+                One sale made in test mode is left out.
+            {% plural %}
+                {{ n }} sales made in test mode are left out.
+            {% endblocktrans %}
+        </p>
+    {% endif %}
+
+    {% if associations %}
+        <h3>{% trans "Transfers between associations" %}</h3>
+        {% if report.transfers %}
+            <ul class="list-group">
+                {% for line in report.transfers %}
+                    <li class="list-group-item">
+                        {% blocktrans trimmed with payer=line.payer.name payee=line.payee.name amount=line.amount|money:currency %}
+                            <strong>{{ payer }}</strong> pays <strong>{{ amount }}</strong> to <strong>{{ payee }}</strong>
+                        {% endblocktrans %}
+                        <ul class="small text-muted">
+                            {% for detail in line.details %}
+                                <li>
+                                    {% blocktrans trimmed with holder=detail.holder.name owner=detail.owner.name amount=detail.amount|money:currency why=detail.why_text %}
+                                        {{ holder }} holds {{ amount }} for {{ owner }}: {{ why }}.
+                                    {% endblocktrans %}
+                                </li>
+                            {% endfor %}
+                        </ul>
+                    </li>
+                {% endfor %}
+            </ul>
+        {% else %}
+            <p class="text-muted">{% trans "Nobody owes anybody: each association holds its own money." %}</p>
+        {% endif %}
+    {% endif %}
+
+    {% for share in report.shares %}
+        {% if share.categories or share.fees or share.deposits or share.unallocated %}
+            <div class="panel panel-default" id="op-share-{{ forloop.counter }}">
+                <div class="panel-heading">
+                    <h3 class="panel-title">
+                        {{ share.label }}
+                        {% if share.association and share.parts %}
+                            <small>{{ share.parts|join:", " }}</small>
+                        {% endif %}
+                    </h3>
+                </div>
+                <div class="panel-body">
+                    <div class="row">
+                        <div class="col-md-7">
+                            <table class="table table-condensed">
+                                <thead>
+                                <tr>
+                                    <th>{% trans "Product" %}</th>
+                                    <th class="text-right">{% trans "Quantity" %}</th>
+                                    <th class="text-right">{% trans "Amount" %}</th>
+                                </tr>
+                                </thead>
+                                {% for group in share.categories %}
+                                    <tbody>
+                                    <tr class="active">
+                                        <th>{% if group.name %}{{ group.name }}{% else %}{% trans "No category" context "takings" %}{% endif %}</th>
+                                        <th class="text-right">{{ group.count }}</th>
+                                        <th class="text-right">{{ group.total|money:currency }}</th>
+                                    </tr>
+                                    {% for line in group.items %}
+                                        <tr>
+                                            <td>
+                                                {{ line.name }}
+                                                {% if line.variation_name %}<small class="text-muted">{{ line.variation_name }}</small>{% endif %}
+                                            </td>
+                                            <td class="text-right">{{ line.count }}</td>
+                                            <td class="text-right">{{ line.total|money:currency }}</td>
+                                        </tr>
+                                    {% endfor %}
+                                    </tbody>
+                                {% endfor %}
+                                {% if share.fees %}
+                                    <tbody>
+                                    <tr class="active">
+                                        <th colspan="3">{% trans "Fees" %}</th>
+                                    </tr>
+                                    {% for fee in share.fees %}
+                                        <tr>
+                                            <td>{{ fee.name }}</td>
+                                            <td class="text-right">{{ fee.count }}</td>
+                                            <td class="text-right">{{ fee.total|money:currency }}</td>
+                                        </tr>
+                                    {% endfor %}
+                                    </tbody>
+                                {% endif %}
+                            </table>
+                            {% if share.unallocated %}
+                                <p class="text-muted">
+                                    {% blocktrans trimmed with amount=share.unallocated|money:currency %}
+                                        {{ amount }} of the takings comes from journal entries that name no product.
+                                    {% endblocktrans %}
+                                </p>
+                            {% endif %}
+                        </div>
+                        <div class="col-md-5">
+                            {% if share.deposits %}
+                                <h4>{% trans "Deposits" %}</h4>
+                                <table class="table table-condensed">
+                                    <tbody>
+                                    <tr>
+                                        <td>{% trans "Taken" context "deposits" %}</td>
+                                        <td class="text-right">{{ share.deposits.taken.count }}</td>
+                                        <td class="text-right">{{ share.deposits.taken.total|money:currency }}</td>
+                                    </tr>
+                                    <tr>
+                                        <td>{% trans "Handed back" context "deposits" %}</td>
+                                        <td class="text-right">{{ share.deposits.returned.count }}</td>
+                                        <td class="text-right">{{ share.deposits.returned.total|money:currency }}</td>
+                                    </tr>
+                                    </tbody>
+                                    <tfoot>
+                                    <tr>
+                                        <th colspan="2">{% trans "Balance" context "deposits" %}</th>
+                                        <th class="text-right">{{ share.deposits.total|money:currency }}</th>
+                                    </tr>
+                                    </tfoot>
+                                </table>
+                                <p class="text-muted">
+                                    {% trans "Kept apart from the products: a deposit is owed to whoever brings the cup back." %}
+                                </p>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        {% endif %}
+    {% endfor %}
+
+    <p>
+        <a href="{{ export_query }}" class="btn btn-default">
+            <span class="fa fa-download"></span>
+            {% trans "Download as a spreadsheet (CSV)" %}
+        </a>
+    </p>
+{% endblock %}

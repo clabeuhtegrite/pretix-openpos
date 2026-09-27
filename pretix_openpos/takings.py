@@ -44,7 +44,7 @@ def money(amount):
     return str(amount.quantize(CENT))
 
 
-def journal_rows(queryset, subevent=None):
+def journal_rows(queryset, subevent=None, extra=()):
     """
     The journal rows of ``queryset`` in ``seq`` order, as plain dicts.
 
@@ -54,8 +54,11 @@ def journal_rows(queryset, subevent=None):
     whose takings it corrects. Filtered here rather than in the database
     because the date lives inside the JSON snapshot, which SQLite cannot search
     and PostgreSQL could only through an operator the test suite never runs.
+
+    ``extra`` names more fields to read than :data:`ROW_FIELDS`, for a report
+    that needs them.
     """
-    rows = queryset.order_by("seq").values(*ROW_FIELDS)
+    rows = queryset.order_by("seq").values(*ROW_FIELDS, *extra)
     for row in rows.iterator(chunk_size=2000):
         if subevent is not None and not any(
             line.get("subevent") == subevent.pk for line in row["positions"] or ()

@@ -1,6 +1,6 @@
 # Fonctionnement de pretix-openpos
 
-Documentation de fonctionnement du plugin, version 0.25.1. Elle couvre trois
+Documentation de fonctionnement du plugin, version 0.26.0. Elle couvre trois
 choses, dans cet ordre : ce que le plugin ajoute à pretix, comment le mettre en
 service, et ce qui se passe exactement quand un bénévole encaisse.
 
@@ -183,12 +183,13 @@ de caisse à la fermeture) et **`PosDrawerEntry`** (le journal du tiroir, chaîn
 lui aussi) — décrits au §5septies. Une vente porte l'ouverture de caisse dans
 laquelle son argent est entré, dans le champ `drawer_session`.
 
-### 2.5 Huit écrans de back-office
+### 2.5 Dix écrans de back-office
 
 [views.py](../pretix_openpos/views.py), [arrivals.py](../pretix_openpos/arrivals.py),
 [devices.py](../pretix_openpos/devices.py),
-[sumup_views.py](../pretix_openpos/sumup_views.py) et
-[drawer_views.py](../pretix_openpos/drawer_views.py), montés par
+[sumup_views.py](../pretix_openpos/sumup_views.py),
+[drawer_views.py](../pretix_openpos/drawer_views.py) et
+[association_views.py](../pretix_openpos/association_views.py), montés par
 [urls.py](../pretix_openpos/urls.py).
 
 | URL | Écran | Permission exigée |
@@ -196,20 +197,24 @@ laquelle son argent est entré, dans le champ `drawer_session`.
 | `/control/event/<org>/<ev>/openpos/` | Réglages (liste de contrôle d'accès) | `event.settings.general:write` |
 | `…/openpos/categories/` | Qui vend quoi : la catégorie réservée au bar ou à la porte | `event.items:write` |
 | `…/openpos/sales/` | Journal des ventes + recette par caisse et par produit | `event.orders:read` |
+| `…/openpos/statements/` | Relevés : la part de chaque association dans la soirée, et les virements entre elles (§5octies) | `event.orders:read` ; dire qui compte quoi, `event.settings.general:write` |
 | `…/openpos/arrivals/` | Arrivées de la soirée : entrés, pas venus, arrivées par quart d'heure, scans par appareil, refus par motif | `event.orders:read` |
 | `/control/organizer/<org>/openpos/arrivals/` | Arrivées : une ligne par soirée, et l'heure d'arrivée sur toutes les soirées passées | `event.orders:read` sur ≥ 1 événement |
 | `/control/organizer/<org>/openpos/devices/` | Appareils de caisse : rôle, lecteur et caisse espèces de chacun, dernier contact, ventes pas encore envoyées | `organizer.devices:write` |
 | `/control/organizer/<org>/openpos/sumup/` | Lecteurs de carte : le compte SumUp et ses lecteurs | `organizer.settings.general:write` |
 | `/control/organizer/<org>/openpos/drawers/` | Caisses espèces : les tiroirs, l'historique de chacun et le rapport de chaque soirée (§5septies) | `organizer.devices:write` ; en lecture, `event.orders:read` sur **tous** les événements |
+| `/control/organizer/<org>/openpos/associations/` | Associations : celles qui partagent les soirées, et qui détient l'argent du compte SumUp et de chaque tiroir (§5octies) | `organizer.settings.general:write` |
 
 La page Ventes porte aussi une action, `…/openpos/sales/catch-up/` (POST,
 `event.orders:write`), qui écrit au journal les annulations que pretix a faites
 sans lui (§5bis).
 
-Les quatre derniers sont au niveau *organisateur*, et pas par événement : une
+Les cinq derniers sont au niveau *organisateur*, et pas par événement : une
 caisse est appairée une fois, un lecteur et un tiroir appartiennent à
-l'association, et « à quelle heure les gens arrivent-ils ? » est une question
-qui porte sur toutes les soirées passées — chacune ayant en plus sa page à elle.
+l'association, les associations qui partagent les soirées sont les mêmes d'un
+événement à l'autre, et « à quelle heure les gens arrivent-ils ? » est une
+question qui porte sur toutes les soirées passées — chacune ayant en plus sa
+page à elle.
 Les appareils et les tiroirs sont gardés par la permission des devices de
 pretix — qui peut appairer une caisse peut dire à quoi elle sert. Les lecteurs
 de carte, eux, demandent le droit de modifier les réglages de l'organisateur,
@@ -219,9 +224,9 @@ appairer, libérer ou oublier un lecteur agit sur ce compte. Jusqu'à la 0.24.2,
 il suffisait de pouvoir modifier les appareils. Le lien vers cet écran, depuis
 le menu comme depuis *Appareils de caisse*, n'apparaît qu'à qui peut l'ouvrir.
 
-Sept d'entre eux ont leur entrée dans le menu latéral de pretix : *Qui vend
-quoi*, *Ventes* et *Arrivées* sous **Open POS** dans celui de l'événement, les
-quatre écrans d'organisateur dans celui de l'organisateur. Un lien n'y apparaît
+Neuf d'entre eux ont leur entrée dans le menu latéral de pretix : *Qui vend
+quoi*, *Ventes*, *Relevés* et *Arrivées* sous **Open POS** dans celui de
+l'événement, les cinq écrans d'organisateur dans celui de l'organisateur. Un lien n'y apparaît
 qu'à qui a la permission de l'écran derrière lui, et le menu **Open POS**
 n'apparaît pas du tout à qui ne peut en ouvrir aucun. Le huitième, *Réglages*,
 reste sur la carte du plugin, sous *Paramètres → Plugins*.
@@ -473,7 +478,7 @@ En Docker/Kubernetes, [`deploy/Dockerfile`](../deploy/Dockerfile) intègre le pl
 à l'image officielle :
 
 ```bash
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.25.1 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.26.0 .
 ```
 
 Le bundle PWA est généré, pas versionné : l'image le construit elle-même depuis
@@ -564,7 +569,9 @@ suffit pas : Django la retire de la base une fois la colonne créée, et c'est
 exactement ce qui rend `0009` infranchissable. La migration `0012`, qui ajoute
 des réglages aux appareils de caisse, n'ajoute que des colonnes qui acceptent
 d'être vides : on revient par-dessus sans risque, et les réglages faits avec la
-version récente sont toujours là quand on y revient.
+version récente sont toujours là quand on y revient. La migration `0013`, celle
+des associations (§5octies), est du même genre : une table, et une colonne du
+tiroir qui accepte d'être vide.
 
 ### 3.2 Configurer l'événement
 
@@ -2719,6 +2726,117 @@ appareil ou depuis le back-office, et une clé d'idempotence : une ouverture
 renvoyée après une coupure réseau revient comme l'originale, sans ouvrir deux
 fois.
 
+## 5octies. Les relevés par association
+
+Une soirée organisée à plusieurs : une association vend les billets en ligne,
+une autre tient la porte, une troisième le bar, et chacune tient sa propre
+comptabilité. pretix émet toutes les factures d'un événement au nom inscrit
+dans ses réglages de facturation, dans une seule numérotation, et aucun de ses
+rapports ne se découpe par canal de vente ou par catégorie. Le plugin ne touche
+donc pas aux factures : il découpe la recette de chaque soirée en une part par
+association, et dit qui doit quoi à qui
+([statements.py](../pretix_openpos/statements.py),
+[associations.py](../pretix_openpos/associations.py)).
+
+### Mise en route
+
+1. *Open POS → Associations*, dans le menu de l'organisateur : ajouter les
+   associations qui partagent les soirées. L'écran demande le droit de modifier
+   les réglages de l'organisateur, comme *Lecteurs de carte*.
+2. Sur la même page, **Qui détient l'argent** : l'association titulaire du
+   compte SumUp, et celle chez qui repartent les espèces de chaque tiroir,
+   archivés compris. « — » veut dire que cet argent compte comme détenu par
+   l'association à qui il revient.
+3. Dans chaque événement, *Open POS → Relevés*, **Qui compte quoi** :
+   l'association des ventes en ligne, celle de la porte, celle du bar, et, si les
+   paiements en ligne n'arrivent pas sur le compte de l'association des ventes
+   en ligne, celle chez qui ils arrivent. Le dire demande le droit de modifier
+   les réglages de l'événement ; lire la page, celui de lire les commandes. Un
+   événement copié garde ces réglages, sauf copié depuis un autre organisateur,
+   dont les associations ne sont pas celles-ci.
+
+Chaque changement est écrit dans l'historique de l'organisateur ou de
+l'événement, avec l'avant et l'après.
+
+### Qui compte quoi
+
+- **Ventes en ligne** : toutes les commandes de l'événement qui ne viennent pas
+  d'une caisse, hors mode test. Ce qui est *vendu* se lit sur les commandes
+  payées, comme l'aperçu des commandes de pretix ; l'*argent* est celui de
+  toutes les commandes, paiements confirmés moins remboursements, comme pretix
+  fait le solde d'une commande. L'écart entre les deux — une commande payée en
+  partie, un remboursement fait sans annuler — est dit sous le tableau.
+- **Porte et bar** : le journal des caisses, les mêmes lignes que la recette de
+  la page Ventes, réparties ligne par ligne. D'abord par la catégorie réservée à
+  la porte ou au bar dans *Qui vend quoi* (§2.7bis) : une bière vendue sur la
+  tablette de la porte reste au bar. Une ligne qu'aucune catégorie ne place —
+  un montant libre, des frais d'annulation — suit les autres lignes de sa vente
+  quand elles vont toutes au même comptoir, et sinon le rôle de l'appareil qui
+  l'a vendue. Une ligne que rien ne place — un montant libre sur une tablette
+  sans rôle — est montrée à part, *Non attribué*.
+- Une annulation ou une réactivation suit la vente qu'elle défait, faite depuis
+  le back-office de pretix comprise. Les consignes restent à part, comme sur la
+  page Ventes. Les ventes en mode test sont laissées de côté, et la page dit
+  combien.
+- Une part que personne ne compte reste sous son propre nom (*Porte*, *Bar*,
+  *Ventes en ligne*) plutôt que d'être versée dans une autre. Chaque euro est
+  sur une seule ligne, et les lignes font la recette des caisses et de la
+  billetterie.
+
+### Qui doit quoi à qui
+
+L'argent n'est pas toujours là où il appartient. Une carte passée sur un lecteur
+arrive sur le compte SumUp, à l'association qui en est titulaire ; les espèces
+d'un tiroir repartent avec l'association qui le garde ; les paiements en ligne
+arrivent sur le compte du moyen de paiement configuré dans pretix. Le relevé
+suit chaque euro jusqu'à l'association qui le détient, et ce qu'une association
+détient de l'argent d'une autre devient un **virement** en bas de la page : qui
+verse combien à qui, et pourquoi. Deux associations qui se doivent chacune
+quelque chose ne font qu'un virement, du solde ; le détail garde les deux sens.
+
+Une carte passée sur un téléphone, sans lecteur, et les espèces d'une caisse
+sans tiroir ou d'un tiroir dont personne n'a dit qui le garde, restent chez
+l'association à qui elles reviennent : personne ne doit rien pour elles. Tant
+que personne n'a dit à qui est le compte SumUp, ce qui est passé sur un lecteur
+reste hors des virements, et la page le dit, avec le montant.
+
+### Une série
+
+Dans une série, la page montre une date — celle qu'on choisit, sinon celle de
+ce soir — ou toutes. Une ligne de caisse appartient à la date pour laquelle elle
+a été vendue, un billet en ligne à la date de sa position. L'argent d'une
+commande qui couvre plusieurs dates est réparti au prorata de ce qu'elle
+contient pour chacune, et ses frais vont avec sa première date.
+
+### Ce que ça ne fait pas
+
+- **Les factures ne changent pas.** Elles restent émises au nom de l'événement,
+  dans une seule numérotation. Le relevé est une répartition entre associations,
+  pas une facture.
+- **Rien n'est figé.** Le relevé est recalculé à chaque affichage, avec les
+  réglages du moment : changer qui compte quoi change aussi les relevés des
+  dates passées de l'événement, et changer qui détient le compte SumUp ou un
+  tiroir change ceux de toutes les soirées. Le CSV d'une soirée close est ce qui
+  la fige, chez chaque trésorier.
+- Une association encore citée — compte SumUp, tiroir, événement — ne peut pas
+  être supprimée ; la page dit où elle l'est.
+
+### L'export
+
+**Télécharger en tableur (CSV)** emporte le relevé affiché, une ligne par
+chiffre : pour chaque association, chaque produit avec sa catégorie, les frais,
+les consignes prises et rendues, ce qui n'est rattaché à aucun produit, les
+espèces, la carte et l'en ligne ; puis une ligne par virement, avec
+l'association qui le reçoit. Point-virgule, montants avec un point, cellules de
+texte protégées contre les formules, comme l'export du journal (§7.2).
+
+Côté données : trois réglages d'événement (`openpos_share_online`,
+`openpos_share_door`, `openpos_share_bar`) plus `openpos_online_holder`, un
+réglage d'organisateur (`openpos_sumup_holder`), et la colonne `held_by` du
+tiroir, ajoutée par la migration 0013 avec la table des associations. Aucune
+vente n'est réécrite, et rien n'est écrit sur une vente : revenir à la 0.25.x
+laisse la table et la colonne en place, sans les lire.
+
 ---
 
 ## 6. Les garde-fous
@@ -3524,7 +3642,7 @@ d'attente appartient à la tablette, pas à une soirée.
   "pending_sales": 3,
   "oldest_pending_at": "2026-08-16T19:14:05.000Z",
   "last_sync_at": "2026-08-16T19:02:40.000Z",
-  "version": "0.25.1"
+  "version": "0.26.0"
 }
 ```
 
@@ -3778,7 +3896,9 @@ pas de **remboursement partiel** depuis la caisse — une vente s'annule en enti
 refait corrigée, rembourser deux bières sur trois reste un travail de back-office
 —, pas de **remboursement libre sur carte** : rendre une consigne se fait en
 espèces, et ce n'est pas un choix mais une contrainte de SumUp (§5quater), pas
-d'**impression** de reçu ni de billet, pas de **questions au contrôle**, pas
+de **factures au nom de chaque association** — pretix émet celles d'un
+événement sous un seul nom, et les relevés (§5octies) répartissent la recette
+sans y toucher —, pas d'**impression** de reçu ni de billet, pas de **questions au contrôle**, pas
 de **Tap to Pay** (Stripe ne l'expose que par ses SDK natifs), et **aucune
 certification fiscale** — le journal est conçu pour qu'un travail de conformité
 reste possible, mais aucune revendication n'est faite sur les législations

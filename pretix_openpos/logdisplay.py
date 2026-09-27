@@ -487,6 +487,102 @@ class SumUpSettingsChanged(OrganizerLogEntryType):
                  "written to this history.").format(fields=", ".join(names))
 
 
+def _who(name):
+    """An association as the entry named it, or nobody."""
+    return escape(name) if name else _("nobody")
+
+
+@organizer_entry_types.new()
+class AssociationCreated(OrganizerLogEntryType):
+    action_type = "pretix_openpos.association.created"
+
+    def display(self, logentry, data):
+        return _("An association was added: {name}.").format(name=data.get("name") or "?")
+
+
+@organizer_entry_types.new()
+class AssociationChanged(OrganizerLogEntryType):
+    action_type = "pretix_openpos.association.changed"
+
+    def display(self, logentry, data):
+        return _("The association {before} was renamed {name}.").format(
+            before=data.get("name_before") or "?", name=data.get("name") or "?"
+        )
+
+
+@organizer_entry_types.new()
+class AssociationDeleted(OrganizerLogEntryType):
+    action_type = "pretix_openpos.association.deleted"
+
+    def display(self, logentry, data):
+        return _("The association {name} was deleted.").format(name=data.get("name") or "?")
+
+
+@organizer_entry_types.new()
+class HoldersChanged(OrganizerLogEntryType):
+    """Whose account the SumUp money, and each drawer's cash, goes to."""
+
+    action_type = "pretix_openpos.holders.changed"
+
+    def display(self, logentry, data):
+        changed = data.get("changed") or []
+        if not changed:
+            return _("Who holds the money was saved with nothing changed.")
+        return format_html(
+            "{}<ul>{}</ul>",
+            _("Who holds the money was changed:"),
+            format_html_join("", "<li>{}</li>", ((self._line(row),) for row in changed)),
+        )
+
+    def _line(self, row):
+        if row.get("what") == "drawer":
+            return format_html(
+                _("cash drawer {drawer}: {before} → {after}"),
+                drawer=escape(row.get("drawer_name") or "?"),
+                before=_who(row.get("name_before")),
+                after=_who(row.get("name")),
+            )
+        return format_html(
+            _("SumUp account: {before} → {after}"),
+            before=_who(row.get("name_before")),
+            after=_who(row.get("name")),
+        )
+
+
+@log_entry_types.new()
+class SharesChanged(NoOpShredderMixin, EventLogEntryType):
+    """Which association counts the online sales, the door and the bar."""
+
+    action_type = "pretix_openpos.shares.changed"
+
+    def display(self, logentry, data):
+        from .associations import PART_LABELS
+
+        changed = data.get("changed") or []
+        if not changed:
+            return _("Who counts what was saved with nothing changed.")
+        labels = {**PART_LABELS, "online_holder": _("online payments held by")}
+        return format_html(
+            "{}<ul>{}</ul>",
+            _("Who counts what was changed:"),
+            format_html_join(
+                "",
+                "<li>{}</li>",
+                (
+                    (
+                        format_html(
+                            _("{part}: {before} → {after}"),
+                            part=labels.get(row.get("part"), "?"),
+                            before=_who(row.get("name_before")),
+                            after=_who(row.get("name")),
+                        ),
+                    )
+                    for row in changed
+                ),
+            ),
+        )
+
+
 @log_entry_types.new()
 class SoldOffTariff(NoOpShredderMixin, OrderLogEntryType):
     """
