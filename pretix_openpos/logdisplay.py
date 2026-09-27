@@ -502,11 +502,37 @@ class AssociationCreated(OrganizerLogEntryType):
 
 @organizer_entry_types.new()
 class AssociationChanged(OrganizerLogEntryType):
+    """
+    An association's profile saved with something changed.
+
+    Up to 0.26.0 a name was all there was to change, and those entries say
+    nothing else: they read as a renaming.
+    """
+
     action_type = "pretix_openpos.association.changed"
 
     def display(self, logentry, data):
-        return _("The association {before} was renamed {name}.").format(
-            before=data.get("name_before") or "?", name=data.get("name") or "?"
+        from .models import PosAssociation
+
+        fields = data.get("fields")
+        if fields is None:
+            return _("The association {before} was renamed {name}.").format(
+                before=data.get("name_before") or "?", name=data.get("name") or "?"
+            )
+        labels = []
+        for field in fields:
+            try:
+                labels.append(str(PosAssociation._meta.get_field(field).verbose_name).lower())
+            except Exception:
+                labels.append(field)
+        name = data.get("name") or "?"
+        before = data.get("name_before")
+        if before and before != name:
+            return _("The association {before}, now {name}, was changed: {fields}.").format(
+                before=before, name=name, fields=", ".join(labels)
+            )
+        return _("The association {name} was changed: {fields}.").format(
+            name=name, fields=", ".join(labels)
         )
 
 
@@ -520,17 +546,20 @@ class AssociationDeleted(OrganizerLogEntryType):
 
 @organizer_entry_types.new()
 class HoldersChanged(OrganizerLogEntryType):
-    """Whose account the SumUp money, and each drawer's cash, goes to."""
+    """
+    Whose account the SumUp money, and each drawer's cash, goes to — and so
+    who invoices it. In 0.26.0 the same setting only said who held the money.
+    """
 
     action_type = "pretix_openpos.holders.changed"
 
     def display(self, logentry, data):
         changed = data.get("changed") or []
         if not changed:
-            return _("Who holds the money was saved with nothing changed.")
+            return _("Who invoices what is taken on site was saved with nothing changed.")
         return format_html(
             "{}<ul>{}</ul>",
-            _("Who holds the money was changed:"),
+            _("Who invoices what is taken on site was changed:"),
             format_html_join("", "<li>{}</li>", ((self._line(row),) for row in changed)),
         )
 
@@ -551,17 +580,26 @@ class HoldersChanged(OrganizerLogEntryType):
 
 @log_entry_types.new()
 class SharesChanged(NoOpShredderMixin, EventLogEntryType):
-    """Which association counts the online sales, the door and the bar."""
+    """
+    Which association counted the online sales, the door and the bar.
+
+    Written by 0.26.0's statements only, which are gone: kept so that the
+    history of an event set up then still reads.
+    """
 
     action_type = "pretix_openpos.shares.changed"
 
-    def display(self, logentry, data):
-        from .associations import PART_LABELS
+    LABELS = {
+        "online": _("Online sales"),
+        "door": _("Door"),
+        "pos": _("Bar"),
+        "online_holder": _("online payments held by"),
+    }
 
+    def display(self, logentry, data):
         changed = data.get("changed") or []
         if not changed:
             return _("Who counts what was saved with nothing changed.")
-        labels = {**PART_LABELS, "online_holder": _("online payments held by")}
         return format_html(
             "{}<ul>{}</ul>",
             _("Who counts what was changed:"),
@@ -572,7 +610,7 @@ class SharesChanged(NoOpShredderMixin, EventLogEntryType):
                     (
                         format_html(
                             _("{part}: {before} → {after}"),
-                            part=labels.get(row.get("part"), "?"),
+                            part=self.LABELS.get(row.get("part"), "?"),
                             before=_who(row.get("name_before")),
                             after=_who(row.get("name")),
                         ),
@@ -580,6 +618,36 @@ class SharesChanged(NoOpShredderMixin, EventLogEntryType):
                     for row in changed
                 ),
             ),
+        )
+
+
+@log_entry_types.new()
+class InvoicingChanged(NoOpShredderMixin, EventLogEntryType):
+    """Who invoices the event's online ticketing, and whether it numbers on its own."""
+
+    action_type = "pretix_openpos.invoicing.changed"
+
+    def display(self, logentry, data):
+        changed = data.get("changed") or []
+        if not changed:
+            return _("Who invoices what was saved with nothing changed.")
+        return format_html(
+            "{}<ul>{}</ul>",
+            _("Who invoices what was changed:"),
+            format_html_join("", "<li>{}</li>", ((self._line(row),) for row in changed)),
+        )
+
+    def _line(self, row):
+        if row.get("what") == "series":
+            return format_html(
+                _("the event's own numbering: {before} → {after}"),
+                before=escape(row.get("value_before") or "—"),
+                after=escape(row.get("value") or "—"),
+            )
+        return format_html(
+            _("online ticketing: {before} → {after}"),
+            before=_who(row.get("name_before")),
+            after=_who(row.get("name")),
         )
 
 

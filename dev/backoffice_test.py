@@ -143,7 +143,7 @@ with scopes_disabled():
             ("settings", base, "event.settings.general:write"),
             ("categories", base + "categories/", "event.items:write"),
             ("sales", base + "sales/", "event.orders:read"),
-            ("statements", base + "statements/", "event.orders:read"),
+            ("invoices by association", base + "invoices/", "event.orders:read"),
         ):
             check(f"{label} renders for an admin", client.get(path).status_code == 200)
 
@@ -163,7 +163,7 @@ with scopes_disabled():
             ("settings", base, "event.settings.general:write"),
             ("categories", base + "categories/", "event.items:write"),
             ("sales", base + "sales/", "event.orders:read"),
-            ("statements", base + "statements/", "event.orders:read"),
+            ("invoices by association", base + "invoices/", "event.orders:read"),
         ):
             team.limit_event_permissions = {permission: True}
             team.save(update_fields=["limit_event_permissions"])
@@ -203,16 +203,64 @@ with scopes_disabled():
                           for row in rows for column in ("till", "cashier", "reason", "drawer")),
                   "a text cell went out unguarded")
 
-        print("\n-- statements export ----------------------------------------")
-        response = client.get(base + "statements/?export=csv")
-        check("the statements export as CSV",
-              response.status_code == 200
-              and response["Content-Type"].startswith("text/csv"),
-              f"HTTP {response.status_code} {response.get('Content-Type')}")
-        if response.status_code == 200:
-            content = b"".join(response.streaming_content).decode("utf-8-sig")
-            check("with one line per figure under the header",
-                  content.startswith("association;parts;kind;"), content[:80])
+        print("\n-- invoices by association ----------------------------------")
+        # integration.sh has an association invoice the cards before any sale:
+        # the smoke test's card sale and the concurrency test's, the latter
+        # all at once, went into its series while the cash sales went into
+        # the event's. Each series must come out without a gap or a double.
+        from pretix.base.models import Invoice
+
+        from pretix_openpos.models import PosAssociation, PosInvoiceIssuer
+
+        portiers = PosAssociation.objects.filter(
+            organizer=event.organizer, invoice_prefix="PORT-"
+        ).first()
+        check("an association invoices the cards", portiers is not None,
+              "none: run dev/integration.sh, which sets one up before the sales")
+        if portiers is not None:
+            theirs = list(Invoice.objects.filter(event=event, prefix="PORT-"))
+            numbers = sorted(int(invoice.invoice_no) for invoice in theirs)
+            check("the card sales were invoiced in its own series",
+                  len(numbers) >= 2, f"{len(numbers)} invoice(s) under PORT-")
+            check("which runs from 1 without a gap or a double",
+                  numbers == list(range(1, len(numbers) + 1)), str(numbers))
+            check("each in its name, and recorded as its",
+                  all(invoice.invoice_from_name == portiers.name for invoice in theirs)
+                  and PosInvoiceIssuer.objects.filter(
+                      invoice__in=theirs, association=portiers, via="card"
+                  ).count() == len(theirs),
+                  str([invoice.invoice_from_name for invoice in theirs][:3]))
+            others = list(Invoice.objects.filter(event=event).exclude(prefix="PORT-"))
+            check("while the cash sales stayed in the event's name and series",
+                  bool(others) and not any(invoice.invoice_from_name == portiers.name for invoice in others),
+                  str([invoice.number for invoice in others][:10]))
+
+            response = client.get(base + f"invoices/?export=csv&association={portiers.pk}")
+            check("its invoices export as a list",
+                  response.status_code == 200
+                  and response["Content-Type"].startswith("text/csv"),
+                  f"HTTP {response.status_code} {response.get('Content-Type')}")
+            if response.status_code == 200:
+                lines = b"".join(response.streaming_content).decode("utf-8-sig").splitlines()
+                check("a line per invoice under the header",
+                      lines[0] == "number;date;kind;order;money;drawer;net;tax;gross"
+                      and len(lines) == len(theirs) + 1,
+                      f"{lines[:1]} and {len(lines) - 1} line(s) for {len(theirs)}")
+
+            response = client.get(base + f"invoices/?export=pdf&association={portiers.pk}")
+            check("and as their PDFs",
+                  response.status_code == 200 and response["Content-Type"] == "application/zip",
+                  f"HTTP {response.status_code} {response.get('Content-Type')}")
+            if response.status_code == 200:
+                import zipfile
+
+                archive = zipfile.ZipFile(io.BytesIO(b"".join(response.streaming_content)))
+                names = archive.namelist()
+                check("one PDF per invoice, each a PDF",
+                      len(names) == len(theirs)
+                      and all(name.startswith("PORT-") for name in names)
+                      and all(archive.read(name).startswith(b"%PDF") for name in names),
+                      str(names[:3]))
 
     print("\n-- organizer screens, per permission -------------------------")
     # The till devices screen and the cash drawers are the devices permission;

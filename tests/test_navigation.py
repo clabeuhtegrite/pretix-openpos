@@ -30,8 +30,8 @@ def sales_url(event):
     return event_url(event, "openpos/sales/")
 
 
-def statements_url(event):
-    return event_url(event, "openpos/statements/")
+def invoices_url(event):
+    return event_url(event, "openpos/invoices/")
 
 
 def links_to(page, url):
@@ -52,7 +52,29 @@ def test_an_admin_finds_both_screens_in_the_event_sidebar(backoffice, event):
     assert "Open POS" in page
     assert links_to(page, categories_url(event))
     assert links_to(page, sales_url(event))
-    assert links_to(page, statements_url(event))
+    assert links_to(page, invoices_url(event))
+
+
+@pytest.mark.django_db
+def test_every_link_on_the_plugin_s_card_leads_somewhere(backoffice, event):
+    """
+    The "Go to" menu of the plugin's card, under Settings → Plugins, is drawn
+    from ``navigation_links``. A link to a screen that is gone does not fail
+    the page: pretix logs it and leaves the card without any link at all. That
+    is how the statements, replaced by the invoices, nearly took the menu with
+    them.
+    """
+    from django.urls import reverse
+
+    from pretix_openpos.apps import PluginApp
+
+    meta = PluginApp.PretixPluginMeta
+    for _text, name, kwargs in meta.navigation_links + meta.settings_links:
+        reverse(name, kwargs={"organizer": event.organizer.slug, "event": event.slug, **kwargs})
+
+    page = sidebar(backoffice, event, "settings/plugins")
+    for url in (categories_url(event), sales_url(event), invoices_url(event)):
+        assert links_to(page, url)
 
 
 @pytest.mark.django_db
@@ -62,8 +84,8 @@ def test_someone_who_may_only_read_orders_is_offered_the_journal_alone(reader, e
     page = sidebar(reader, event)
 
     assert links_to(page, sales_url(event))
-    # Each association's share is read off the same orders.
-    assert links_to(page, statements_url(event))
+    # Each association's invoices are read off the same orders.
+    assert links_to(page, invoices_url(event))
     assert not links_to(page, categories_url(event))
 
 
@@ -77,7 +99,7 @@ def test_someone_who_may_only_change_products_is_offered_the_categories_alone(
 
     assert links_to(page, categories_url(event))
     assert not links_to(page, sales_url(event))
-    assert not links_to(page, statements_url(event))
+    assert not links_to(page, invoices_url(event))
 
 
 @pytest.mark.django_db
@@ -97,7 +119,7 @@ def test_every_link_it_offers_opens(reader, backoffice, event):
     """The permission the link is shown under is the one the page enforces."""
     for client in (reader, backoffice):
         page = sidebar(client, event)
-        for url in (categories_url(event), sales_url(event), statements_url(event)):
+        for url in (categories_url(event), sales_url(event), invoices_url(event)):
             if links_to(page, url):
                 assert client.get(url).status_code == 200, url
 
@@ -106,7 +128,7 @@ def test_every_link_it_offers_opens(reader, backoffice, event):
 @pytest.mark.parametrize("here, elsewhere", [
     ("openpos/categories/", "openpos/sales/"),
     ("openpos/sales/", "openpos/categories/"),
-    ("openpos/statements/", "openpos/sales/"),
+    ("openpos/invoices/", "openpos/sales/"),
 ])
 def test_the_page_open_is_the_one_marked(backoffice, event, here, elsewhere):
     page = sidebar(backoffice, event, here)
