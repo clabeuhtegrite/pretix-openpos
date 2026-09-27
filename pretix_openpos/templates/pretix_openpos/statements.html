@@ -234,7 +234,7 @@
                             {% for detail in line.details %}
                                 <li>
                                     {% blocktrans trimmed with holder=detail.holder.name owner=detail.owner.name amount=detail.amount|money:currency why=detail.why_text %}
-                                        {{ holder }} holds {{ amount }} of {{ owner }}'s: {{ why }}.
+                                        {{ holder }} holds {{ amount }} for {{ owner }}: {{ why }}.
                                     {% endblocktrans %}
                                 </li>
                             {% endfor %}

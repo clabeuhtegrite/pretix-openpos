@@ -917,8 +917,8 @@ def test_the_page_lists_the_transfers_and_why(
     page = backoffice.get(statements_url(event)).content.decode()
 
     assert "<strong>Le Comptoir</strong> pays <strong>€5.00</strong> to <strong>Les Portiers</strong>" in page
-    assert "Le Comptoir holds €20.00 of Les Portiers's: cash in the drawer “Caisse du bar”." in page
-    assert "Les Portiers holds €15.00 of Le Comptoir's: card payments on the SumUp account." in page
+    assert "Le Comptoir holds €20.00 for Les Portiers: cash in the drawer “Caisse du bar”." in page
+    assert "Les Portiers holds €15.00 for Le Comptoir: card payments on the SumUp account." in page
     assert "of the money is not in what was sold" in page
 
 

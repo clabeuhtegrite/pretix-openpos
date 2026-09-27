@@ -371,7 +371,7 @@ def test_the_statements_read_in_french(backoffice, organizer, event, till, devic
     assert "Parts de la soirée" in page
     assert "Personne ne compte encore ces parts : Ventes en ligne, Bar." in page
     assert "<strong>Le Comptoir</strong> verse <strong>10,00\xa0€</strong> à <strong>Les Portiers</strong>" in page
-    assert "Le Comptoir détient 10,00\xa0€ à Les Portiers : espèces de la caisse « Caisse du bar »." in page
+    assert "Le Comptoir détient 10,00\xa0€ pour Les Portiers : espèces de la caisse « Caisse du bar »." in page
 
 
 @pytest.mark.django_db

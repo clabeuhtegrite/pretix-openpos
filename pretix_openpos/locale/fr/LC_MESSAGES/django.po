@@ -1514,7 +1514,7 @@ msgstr "Le paiement carte a été remboursé dans SumUp."
 msgid "Card readers"
 msgstr "Lecteurs de carte"
 
-#: statements.py:93
+#: statements.py:96
 msgid "Not attributed"
 msgstr "Non attribué"
 
@@ -3199,8 +3199,8 @@ msgstr ""
 
 #: templates/pretix_openpos/statements.html:237
 #, python-format
-msgid "%(holder)s holds %(amount)s of %(owner)s's: %(why)s."
-msgstr "%(holder)s détient %(amount)s à %(owner)s : %(why)s."
+msgid "%(holder)s holds %(amount)s for %(owner)s: %(why)s."
+msgstr "%(holder)s détient %(amount)s pour %(owner)s : %(why)s."
 
 #: templates/pretix_openpos/statements.html:247
 msgid "Nobody owes anybody: each association holds its own money."
