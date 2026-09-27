@@ -197,13 +197,13 @@ laquelle son argent est entré, dans le champ `drawer_session`.
 | `/control/event/<org>/<ev>/openpos/` | Réglages (liste de contrôle d'accès) | `event.settings.general:write` |
 | `…/openpos/categories/` | Qui vend quoi : la catégorie réservée au bar ou à la porte | `event.items:write` |
 | `…/openpos/sales/` | Journal des ventes + recette par caisse et par produit | `event.orders:read` |
-| `…/openpos/statements/` | Relevés : la part de chaque association dans la soirée, et les virements entre elles (§5octies) | `event.orders:read` ; dire qui compte quoi, `event.settings.general:write` |
+| `…/openpos/invoices/` | Factures par association : qui facture quoi, la numérotation propre de l'événement, et les factures de chaque association avec leur liste et leurs PDF (§5octies) | `event.orders:read` ; dire qui facture la billetterie en ligne, `event.settings.invoicing:write` |
 | `…/openpos/arrivals/` | Arrivées de la soirée : entrés, pas venus, arrivées par quart d'heure, scans par appareil, refus par motif | `event.orders:read` |
 | `/control/organizer/<org>/openpos/arrivals/` | Arrivées : une ligne par soirée, et l'heure d'arrivée sur toutes les soirées passées | `event.orders:read` sur ≥ 1 événement |
 | `/control/organizer/<org>/openpos/devices/` | Appareils de caisse : rôle, lecteur et caisse espèces de chacun, dernier contact, ventes pas encore envoyées | `organizer.devices:write` |
 | `/control/organizer/<org>/openpos/sumup/` | Lecteurs de carte : le compte SumUp et ses lecteurs | `organizer.settings.general:write` |
 | `/control/organizer/<org>/openpos/drawers/` | Caisses espèces : les tiroirs, l'historique de chacun et le rapport de chaque soirée (§5septies) | `organizer.devices:write` ; en lecture, `event.orders:read` sur **tous** les événements |
-| `/control/organizer/<org>/openpos/associations/` | Associations : celles qui partagent les soirées, et qui détient l'argent du compte SumUp et de chaque tiroir (§5octies) | `organizer.settings.general:write` |
+| `/control/organizer/<org>/openpos/associations/` | Associations : celles qui partagent les soirées, la fiche de chacune (`…/associations/<n>/`, `…/associations/new/`) et qui facture les cartes et les espèces de chaque tiroir (§5octies) | `organizer.settings.general:write` |
 
 La page Ventes porte aussi une action, `…/openpos/sales/catch-up/` (POST,
 `event.orders:write`), qui écrit au journal les annulations que pretix a faites
@@ -225,7 +225,7 @@ il suffisait de pouvoir modifier les appareils. Le lien vers cet écran, depuis
 le menu comme depuis *Appareils de caisse*, n'apparaît qu'à qui peut l'ouvrir.
 
 Neuf d'entre eux ont leur entrée dans le menu latéral de pretix : *Qui vend
-quoi*, *Ventes*, *Relevés* et *Arrivées* sous **Open POS** dans celui de
+quoi*, *Ventes*, *Factures par association* et *Arrivées* sous **Open POS** dans celui de
 l'événement, les cinq écrans d'organisateur dans celui de l'organisateur. Un lien n'y apparaît
 qu'à qui a la permission de l'écran derrière lui, et le menu **Open POS**
 n'apparaît pas du tout à qui ne peut en ouvrir aucun. Le huitième, *Réglages*,
@@ -571,7 +571,8 @@ des réglages aux appareils de caisse, n'ajoute que des colonnes qui acceptent
 d'être vides : on revient par-dessus sans risque, et les réglages faits avec la
 version récente sont toujours là quand on y revient. La migration `0013`, celle
 des associations (§5octies), est du même genre : une table, et une colonne du
-tiroir qui accepte d'être vide.
+tiroir qui accepte d'être vide. La `0014`, celle de leurs factures, aussi : une
+table, et des colonnes de la fiche qui gardent leur valeur vide dans la base.
 
 ### 3.2 Configurer l'événement
 
@@ -2726,116 +2727,147 @@ appareil ou depuis le back-office, et une clé d'idempotence : une ouverture
 renvoyée après une coupure réseau revient comme l'originale, sans ouvrir deux
 fois.
 
-## 5octies. Les relevés par association
+## 5octies. Les factures par association
 
 Une soirée organisée à plusieurs : une association vend les billets en ligne,
 une autre tient la porte, une troisième le bar, et chacune tient sa propre
-comptabilité. pretix émet toutes les factures d'un événement au nom inscrit
-dans ses réglages de facturation, dans une seule numérotation, et aucun de ses
-rapports ne se découpe par canal de vente ou par catégorie. Le plugin ne touche
-donc pas aux factures : il découpe la recette de chaque soirée en une part par
-association, et dit qui doit quoi à qui
-([statements.py](../pretix_openpos/statements.py),
-[associations.py](../pretix_openpos/associations.py)).
+comptabilité, avec ses propres factures. pretix émet toutes les factures d'un
+événement sous un seul nom, celui de ses réglages de facturation, dans une
+seule numérotation. Le plugin fait émettre chaque facture par l'association qui
+a reçu l'argent, à son nom et dans sa propre numérotation
+([issuers.py](../pretix_openpos/issuers.py),
+[associations.py](../pretix_openpos/associations.py)). Ce sont les factures de
+pretix elles-mêmes : même PDF, mêmes avoirs, même place dans la commande et
+dans son back-office.
+
+Jusqu'à la 0.26.0, le plugin faisait à la place des *relevés* : une
+répartition de la recette entre associations, et les virements entre elles,
+sans toucher aux factures. La 0.27.0 les retire. L'association qui y comptait
+les ventes en ligne d'un événement devient celle qui les facture.
 
 ### Mise en route
 
-1. *Open POS → Associations*, dans le menu de l'organisateur : ajouter les
-   associations qui partagent les soirées. L'écran demande le droit de modifier
-   les réglages de l'organisateur, comme *Lecteurs de carte*.
-2. Sur la même page, **Qui détient l'argent** : l'association titulaire du
-   compte SumUp, et celle chez qui repartent les espèces de chaque tiroir,
-   archivés compris. « — » veut dire que cet argent compte comme détenu par
-   l'association à qui il revient.
-3. Dans chaque événement, *Open POS → Relevés*, **Qui compte quoi** :
-   l'association des ventes en ligne, celle de la porte, celle du bar, et, si les
-   paiements en ligne n'arrivent pas sur le compte de l'association des ventes
-   en ligne, celle chez qui ils arrivent. Le dire demande le droit de modifier
-   les réglages de l'événement ; lire la page, celui de lire les commandes. Un
-   événement copié garde ces réglages, sauf copié depuis un autre organisateur,
-   dont les associations ne sont pas celles-ci.
+1. *Open POS → Associations*, dans le menu de l'organisateur : ajouter chaque
+   association avec sa fiche — nom, adresse, code postal, ville, pays, SIRET,
+   numéro de TVA si elle en a un, **préfixe des numéros** de ses factures et
+   mentions de bas de page. L'écran demande le droit de modifier les réglages
+   de l'organisateur, comme *Lecteurs de carte*. Une fiche sans adresse, code
+   postal, ville, pays ou préfixe n'est pas prête : la liste dit ce qui manque,
+   et l'argent de cette association est facturé au nom de l'événement en
+   attendant.
+2. Sur la même page, **Qui facture ce qui est encaissé sur place** :
+   l'association titulaire du compte SumUp, et celle qui garde chaque tiroir.
+3. Dans chaque événement, *Open POS → Factures par association* : l'association
+   qui facture la **billetterie en ligne**, et, si l'événement doit repartir de
+   1, sa **numérotation propre**. Le dire demande le droit de modifier les
+   réglages de facturation de l'événement ; lire la page, celui de lire les
+   commandes.
+4. Pour que chaque billet pris en ligne ait sa facture, pretix doit la faire
+   de lui-même : *Paramètres → Facturation → Générer des factures*, « après
+   paiement », avec la boutique en ligne parmi les canaux. La page le rappelle
+   tant que ce n'est pas le cas. Les ventes des caisses sont facturées par le
+   plugin, comme avant (§5bis, *Les factures des ventes au guichet*).
 
 Chaque changement est écrit dans l'historique de l'organisateur ou de
 l'événement, avec l'avant et l'après.
 
-### Qui compte quoi
+### Qui facture quoi
 
-- **Ventes en ligne** : toutes les commandes de l'événement qui ne viennent pas
-  d'une caisse, hors mode test. Ce qui est *vendu* se lit sur les commandes
-  payées, comme l'aperçu des commandes de pretix ; l'*argent* est celui de
-  toutes les commandes, paiements confirmés moins remboursements, comme pretix
-  fait le solde d'une commande. L'écart entre les deux — une commande payée en
-  partie, un remboursement fait sans annuler — est dit sous le tableau.
-- **Porte et bar** : le journal des caisses, les mêmes lignes que la recette de
-  la page Ventes, réparties ligne par ligne. D'abord par la catégorie réservée à
-  la porte ou au bar dans *Qui vend quoi* (§2.7bis) : une bière vendue sur la
-  tablette de la porte reste au bar. Une ligne qu'aucune catégorie ne place —
-  un montant libre, des frais d'annulation — suit les autres lignes de sa vente
-  quand elles vont toutes au même comptoir, et sinon le rôle de l'appareil qui
-  l'a vendue. Une ligne que rien ne place — un montant libre sur une tablette
-  sans rôle — est montrée à part, *Non attribué*.
-- Une annulation ou une réactivation suit la vente qu'elle défait, faite depuis
-  le back-office de pretix comprise. Les consignes restent à part, comme sur la
-  page Ventes. Les ventes en mode test sont laissées de côté, et la page dit
-  combien.
-- Une part que personne ne compte reste sous son propre nom (*Porte*, *Bar*,
-  *Ventes en ligne*) plutôt que d'être versée dans une autre. Chaque euro est
-  sur une seule ligne, et les lignes font la recette des caisses et de la
-  billetterie.
+- **La billetterie en ligne** : toute commande de l'événement qui ne vient pas
+  d'une caisse — un billet payé par Stripe ou par tout autre moyen de paiement
+  de la boutique — est facturée par l'association choisie sur la page de
+  l'événement.
+- **La carte sur place** : une vente carte d'une caisse, par l'association
+  titulaire du compte SumUp, lecteur ou pas : c'est le seul compte sur lequel
+  les caisses prennent des cartes.
+- **Les espèces** : une vente en espèces, par l'association qui garde le tiroir
+  ouvert sur la caisse au moment de la vente. Une caisse sans tiroir, ou un
+  tiroir que personne ne garde, reste au nom de l'événement.
+- Un **avoir** suit la facture qu'il annule : même association, même
+  numérotation. Une nouvelle facture d'une commande déjà facturée par une
+  association — une facture refaite après une modification — va à la même :
+  c'est la même vente, et la refacturer ne change pas qui l'a encaissée.
+- Ce qu'aucune association n'est prête à facturer l'est comme pretix l'a
+  toujours fait : au nom de l'événement, dans sa numérotation. Rien n'est
+  jamais bloqué : une erreur du plugin à ce moment est écrite dans le log, et
+  la facture part au nom de l'événement.
 
-### Qui doit quoi à qui
+### Ce que dit la facture
 
-L'argent n'est pas toujours là où il appartient. Une carte passée sur un lecteur
-arrive sur le compte SumUp, à l'association qui en est titulaire ; les espèces
-d'un tiroir repartent avec l'association qui le garde ; les paiements en ligne
-arrivent sur le compte du moyen de paiement configuré dans pretix. Le relevé
-suit chaque euro jusqu'à l'association qui le détient, et ce qu'une association
-détient de l'argent d'une autre devient un **virement** en bas de la page : qui
-verse combien à qui, et pourquoi. Deux associations qui se doivent chacune
-quelque chose ne font qu'un virement, du solde ; le détail garde les deux sens.
+- En haut, le nom, l'adresse et le numéro de TVA de l'association, à la place
+  de ceux des réglages de facturation de l'événement.
+- En bas de chaque page, son SIRET puis ses mentions, à la place du bas de page
+  de l'événement, qui est celui de l'émetteur de l'événement. Le SIRET n'est
+  pas mis dans le champ « Tax ID » de pretix, que sa facture en français
+  imprime comme un identifiant de TVA.
+- Le logo, le texte d'introduction et le texte additionnel restent ceux des
+  réglages de l'événement : à écrire sans nom d'association.
+- Une facture régénérée depuis le back-office garde son association : pretix
+  repart des réglages de l'événement, et le plugin remet l'association
+  par-dessus.
 
-Une carte passée sur un téléphone, sans lecteur, et les espèces d'une caisse
-sans tiroir ou d'un tiroir dont personne n'a dit qui le garde, restent chez
-l'association à qui elles reviennent : personne ne doit rien pour elles. Tant
-que personne n'a dit à qui est le compte SumUp, ce qui est passé sur un lecteur
-reste hors des virements, et la page le dit, avec le montant.
+### La numérotation
 
-### Une série
+pretix numérote ses factures par préfixe, sur tout l'organisateur : deux
+événements qui partagent un préfixe partagent une suite. Chaque association a le
+sien, et ses factures se suivent donc d'un événement à l'autre — `PORT-00001` à
+une soirée, `PORT-00002` à la suivante — sans trou, puisque pretix ne supprime
+jamais une facture.
 
-Dans une série, la page montre une date — celle qu'on choisit, sinon celle de
-ce soir — ou toutes. Une ligne de caisse appartient à la date pour laquelle elle
-a été vendue, un billet en ligne à la date de sa position. L'argent d'une
-commande qui couvre plusieurs dates est réparti au prorata de ce qu'elle
-contient pour chacune, et ses frais vont avec sa première date.
+Un événement peut repartir de 1 : sa **numérotation propre**, par exemple
+`SOIREE-`, se place après le préfixe de chaque association — `PORT-SOIREE-00001`
+— et fait pour chacune une suite nouvelle. Mieux vaut la choisir avant la
+première facture : celles déjà émises gardent leur numéro. Elle n'est pas
+reprise quand on copie l'événement, qui continue alors la suite de chaque
+association à moins qu'on lui en donne une.
+
+Toujours des numéros, quel que soit le choix de l'événement entre numéros et
+codes de commande pour ses propres factures, sur la longueur de compteur de
+l'événement. Un préfixe peut contenir une date au format de pretix (`%Y`),
+comme celui de l'événement. Un avoir prend la suite de la facture qu'il annule,
+pas le préfixe des avoirs de l'événement. En mode test, `TEST-` est ajouté comme
+pretix le fait, et la page laisse ces factures de côté.
+
+Le préfixe d'une association est unique chez l'organisateur, et la fiche refuse
+un préfixe sous lequel pretix a déjà numéroté des factures au nom de quelqu'un
+d'autre : les numéros de l'association ne partiraient pas de 1. Changer le
+préfixe d'une association fait partir ses factures suivantes sur une nouvelle
+suite ; les précédentes gardent leur numéro.
+
+### La page de l'événement
+
+*Open POS → Factures par association* dit qui facture quoi, avec l'état de
+chaque fiche, et la numérotation propre de l'événement, avec l'exemple du
+numéro qu'elle donne. Puis toutes les factures de l'événement, par association
+et par encaissement — billetterie en ligne, carte, espèces de chaque tiroir —,
+avec le nombre de factures, d'avoirs et le total ; celles au nom de l'événement
+viennent en dernier. Pour chaque association, **Liste (CSV)** : numéro, date,
+facture ou avoir, commande, encaissement, tiroir, HT, TVA, TTC, en
+point-virgule, montants avec un point, cellules de texte protégées contre les
+formules comme l'export du journal (§7.2). Et **PDF (ZIP)** : tous ses PDF,
+fabriqués au passage s'il en manque.
 
 ### Ce que ça ne fait pas
 
-- **Les factures ne changent pas.** Elles restent émises au nom de l'événement,
-  dans une seule numérotation. Le relevé est une répartition entre associations,
-  pas une facture.
-- **Rien n'est figé.** Le relevé est recalculé à chaque affichage, avec les
-  réglages du moment : changer qui compte quoi change aussi les relevés des
-  dates passées de l'événement, et changer qui détient le compte SumUp ou un
-  tiroir change ceux de toutes les soirées. Le CSV d'une soirée close est ce qui
-  la fige, chez chaque trésorier.
-- Une association encore citée — compte SumUp, tiroir, événement — ne peut pas
-  être supprimée ; la page dit où elle l'est.
+- **Une commande n'est facturée que par une association.** Un panier en ligne
+  l'est en entier par celle de la billetterie en ligne, même s'il contient autre
+  chose que des billets ; une vente de caisse, par celle qui a reçu son argent,
+  billet ou bière. Partager une commande entre deux associations demanderait
+  deux factures pour une commande, ce que pretix ne fait pas.
+- **Plus de répartition ni de virements** : chaque association facture ce
+  qu'elle a encaissé.
+- Une association qui a émis une facture ne peut pas être supprimée, ni une
+  encore citée — compte SumUp, tiroir, événement ; la page dit où elle l'est.
 
-### L'export
-
-**Télécharger en tableur (CSV)** emporte le relevé affiché, une ligne par
-chiffre : pour chaque association, chaque produit avec sa catégorie, les frais,
-les consignes prises et rendues, ce qui n'est rattaché à aucun produit, les
-espèces, la carte et l'en ligne ; puis une ligne par virement, avec
-l'association qui le reçoit. Point-virgule, montants avec un point, cellules de
-texte protégées contre les formules, comme l'export du journal (§7.2).
-
-Côté données : trois réglages d'événement (`openpos_share_online`,
-`openpos_share_door`, `openpos_share_bar`) plus `openpos_online_holder`, un
-réglage d'organisateur (`openpos_sumup_holder`), et la colonne `held_by` du
-tiroir, ajoutée par la migration 0013 avec la table des associations. Aucune
-vente n'est réécrite, et rien n'est écrit sur une vente : revenir à la 0.25.x
-laisse la table et la colonne en place, sans les lire.
+Côté données : la fiche de l'association (migration 0014), une table
+`PosInvoiceIssuer` qui garde quelle association a émis quelle facture et pour
+quel encaissement, deux réglages d'événement (`openpos_online_holder`, repris
+de la 0.26.0, et `openpos_invoice_series`), un réglage d'organisateur
+(`openpos_sumup_holder`) et la colonne `held_by` du tiroir. La migration 0014
+retire les trois réglages de parts des relevés. Revenir à la 0.26.x laisse la
+table et les colonnes en place sans les lire : les factures déjà émises gardent
+leur numéro, les suivantes repartent au nom de l'événement, et les relevés
+n'ont plus de parts.
 
 ---
 
@@ -3896,9 +3928,8 @@ pas de **remboursement partiel** depuis la caisse — une vente s'annule en enti
 refait corrigée, rembourser deux bières sur trois reste un travail de back-office
 —, pas de **remboursement libre sur carte** : rendre une consigne se fait en
 espèces, et ce n'est pas un choix mais une contrainte de SumUp (§5quater), pas
-de **factures au nom de chaque association** — pretix émet celles d'un
-événement sous un seul nom, et les relevés (§5octies) répartissent la recette
-sans y toucher —, pas d'**impression** de reçu ni de billet, pas de **questions au contrôle**, pas
+de **facture partagée entre associations** — une commande est facturée en
+entier par celle qui a reçu son argent (§5octies) —, pas d'**impression** de reçu ni de billet, pas de **questions au contrôle**, pas
 de **Tap to Pay** (Stripe ne l'expose que par ses SDK natifs), et **aucune
 certification fiscale** — le journal est conçu pour qu'un travail de conformité
 reste possible, mais aucune revendication n'est faite sur les législations

@@ -1,70 +1,65 @@
 """
-Which association counts which part of an evening, and who holds its money.
+Which association invoices which money.
 
-An evening here has three parts, and they are the three an organiser names
-when several associations run it together: the tickets sold online, the
-tickets sold at the door, and the bar. Each may belong to a different
-association, which keeps its own books, and the question this module answers
-for the statements (:mod:`pretix_openpos.statements`) is the plain one: whose
-is this euro, and who is holding it?
+An evening run by several associations is several sellers, and the seller of a
+sale is whoever received its money: an invoice goes out in the name of the one
+whose account the payment landed in. So the settings here all answer the same
+question — whose is this account? — for the three places money arrives:
 
-What belongs to whom is said per event, one association per part, in the
-event's settings: it is a fact about the evening, and a copied event keeps it.
-A till's sale is sorted into the door or the bar by what *Who sells what*
-already says — a category reserved for the bar is the bar's — so a night that
-was set up for the two counters needs nothing more than the three names.
+- **The webshop**: the tickets bought online are paid through the event's
+  payment provider (Stripe, most of the time), into one association's account.
+  Said per event, since the payment provider is set up per event, and a copied
+  event keeps it.
+- **The SumUp account**: every card a reader takes lands in it, whatever the
+  event. Said on the organizer, like the account itself.
+- **A drawer**: the cash that goes into it goes home with whoever keeps it. Said
+  on the drawer (:attr:`~pretix_openpos.models.PosDrawer.held_by`).
 
-Who holds the money is said where the money is: the SumUp account's, on the
-organizer, since it is one account whatever the event; a drawer's cash, on the
-drawer. Money nobody has said anything about is counted as held by the
-association it belongs to, which is to say nobody owes anybody for it.
+How the invoice then gets that association's name and number is
+:mod:`pretix_openpos.issuers`.
 
 Every reference is an id stored as a setting, so each is read back through
 :func:`association_named`, which only ever returns an association of the same
-organizer. An event copied from another organizer's, or a setting naming a
-row that is gone, reads as "nobody has said" rather than as someone else's.
+organizer. An event copied from another organizer's, or a setting naming a row
+that is gone, reads as "nobody has said" rather than as someone else's.
 """
-from django.utils.translation import gettext_lazy as _
+from django.core.validators import RegexValidator
+from django.utils.functional import lazy
+from django.utils.translation import gettext_lazy as _, ngettext
 
-from .models import PosAssociation, PosDevice
+from .models import PosAssociation
 
-#: The tickets and whatever else the webshop sells: every order that did not
-#: come from a till.
-PART_ONLINE = "online"
-#: Sold at the door: the categories reserved for the door, and what a door
-#: device sold that nothing else claims.
-PART_DOOR = PosDevice.ROLE_DOOR
-#: Sold at the bar, the same way round.
-PART_BAR = PosDevice.ROLE_TILL
-
-#: In the order a statement lists them: the evening as the public meets it.
-PARTS = (PART_ONLINE, PART_DOOR, PART_BAR)
-
-PART_LABELS = {
-    PART_ONLINE: _("Online sales"),
-    PART_DOOR: _("Door"),
-    PART_BAR: _("Bar"),
-}
-
-#: The event setting holding, for each part, the id of the association it
-#: belongs to. Spelled out rather than built from the part: the bar's part is
-#: the till role's ``pos``, which is no name for a setting.
-SHARE_SETTINGS = {
-    PART_ONLINE: "openpos_share_online",
-    PART_DOOR: "openpos_share_door",
-    PART_BAR: "openpos_share_bar",
-}
-
-#: Event setting: the association whose account the webshop's payments land
-#: in, when it is not the one the online sales belong to.
-ONLINE_HOLDER_SETTING = "openpos_online_holder"
+#: Event setting: the association the webshop's payments are made to, and so
+#: the one that invoices every order that did not come from a till. Named for
+#: what 0.26.0 used it for — whose account the online payments land in — which
+#: is the same fact.
+ONLINE_SETTING = "openpos_online_holder"
 
 #: Organizer setting: the association the SumUp account belongs to, and so the
-#: one holding every card payment a reader took.
+#: one that invoices every card taken on site.
 SUMUP_HOLDER_SETTING = "openpos_sumup_holder"
 
+#: Event setting: what goes between an association's prefix and the number, on
+#: this event's invoices only — which starts the event on a series of its own,
+#: from 1, rather than following on from the one before. Empty is the usual
+#: case: an association's numbers run on from one evening to the next.
+SERIES_SETTING = "openpos_invoice_series"
+
 #: Every event setting that names an association.
-EVENT_SETTINGS = (*SHARE_SETTINGS.values(), ONLINE_HOLDER_SETTING)
+EVENT_SETTINGS = (ONLINE_SETTING,)
+
+#: pretix' own rule for an invoice number prefix, applied to ours: the prefix
+#: ends up in the same column, and in the name of every PDF. Not pretix' own
+#: message, whose French reads oddly and would win over ours.
+prefix_validator = RegexValidator(
+    regex="^[a-zA-Z0-9-_%./,&:# ]+$",
+    message=lazy(
+        lambda: _("Use only the characters {allowed} here.").format(
+            allowed="A-Z, a-z, 0-9, -./:#"
+        ),
+        str,
+    )(),
+)
 
 
 def association_named(organizer, value):
@@ -81,35 +76,19 @@ def association_named(organizer, value):
     return PosAssociation.objects.filter(organizer=organizer, pk=pk).first()
 
 
-def shares(event):
-    """
-    ``{part: association or None}`` for the three parts of ``event``.
-
-    One query whatever is set, since every screen that asks wants all three.
-    """
-    ids = {}
-    for part, key in SHARE_SETTINGS.items():
-        try:
-            ids[part] = int(event.settings.get(key) or "")
-        except ValueError:
-            ids[part] = None
-    known = {
-        association.pk: association
-        for association in PosAssociation.objects.filter(
-            organizer=event.organizer, pk__in=[pk for pk in ids.values() if pk]
-        )
-    }
-    return {part: known.get(pk) for part, pk in ids.items()}
-
-
-def online_holder(event):
-    """The association the webshop's money lands with, if it is not the online one."""
-    return association_named(event.organizer, event.settings.get(ONLINE_HOLDER_SETTING))
+def online_invoicer(event):
+    """The association that invoices the webshop's orders of ``event``, or ``None``."""
+    return association_named(event.organizer, event.settings.get(ONLINE_SETTING))
 
 
 def sumup_holder(organizer):
     """The association the SumUp account belongs to, or ``None`` when nobody said."""
     return association_named(organizer, organizer.settings.get(SUMUP_HOLDER_SETTING))
+
+
+def event_series(event):
+    """What this event puts between an association's prefix and its numbers."""
+    return (event.settings.get(SERIES_SETTING) or "").strip()
 
 
 def set_setting(settings, key, association):
@@ -125,19 +104,28 @@ def uses(association):
     Everything that still names ``association``, as sentences for a person.
 
     Empty when it can go. Asked before deleting one, and said back when the
-    answer is no: the statements of every evening that named it would
-    otherwise change hands without a word.
+    answer is no: an invoice cannot lose its seller, and a setting that named
+    a deleted association would quietly send its sales back to the event.
     """
     from pretix.base.models.event import Event_SettingsStore
 
     found = []
+    issued = association.invoices.count()
+    if issued:
+        found.append(
+            ngettext(
+                "It has issued {count} invoice, which names it.",
+                "It has issued {count} invoices, which name it.",
+                issued,
+            ).format(count=issued)
+        )
     organizer = association.organizer
     if organizer.settings.get(SUMUP_HOLDER_SETTING) == str(association.pk):
-        found.append(_("It holds the SumUp account's money."))
+        found.append(_("It invoices the cards taken on the SumUp account."))
     drawers = sorted(drawer.name for drawer in association.drawers.all())
     if drawers:
         found.append(
-            _("It holds the cash of: {drawers}.").format(drawers=", ".join(drawers))
+            _("It invoices the cash of: {drawers}.").format(drawers=", ".join(drawers))
         )
     events = sorted(
         {
@@ -151,6 +139,6 @@ def uses(association):
     )
     if events:
         found.append(
-            _("It counts a part of: {events}.").format(events=", ".join(events))
+            _("It invoices the online ticketing of: {events}.").format(events=", ".join(events))
         )
     return found

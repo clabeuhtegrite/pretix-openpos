@@ -27,7 +27,7 @@ class PluginApp(PluginConfig):
         navigation_links = [
             ((_("Open POS"), _("Who sells what")), "plugins:pretix_openpos:categories", {}),
             ((_("Open POS"), _("Sales")), "plugins:pretix_openpos:sales", {}),
-            ((_("Open POS"), _("Statements")), "plugins:pretix_openpos:statements", {}),
+            ((_("Open POS"), _("Invoices by association")), "plugins:pretix_openpos:invoices", {}),
             ((_("Open POS"), _("Arrivals")), "plugins:pretix_openpos:event_arrivals", {}),
         ]
 

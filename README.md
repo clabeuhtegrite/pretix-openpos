@@ -143,15 +143,16 @@ it was written for. Read the scope section before deciding it fits.
   card, per till and per cashier, product by product under each category,
   deposits apart and cancellations netted off. In a series, the takings of
   the date the till is selling.
-- **A statement per association**, for evenings several associations run
-  together, each with its own books. Say which one counts the online sales,
-  the door and the bar, and whose account holds the SumUp money and each
-  drawer's cash: every evening then shows each association's share — what it
-  sold, its deposits, its cash, card and online money — and the transfers that
-  settle what one holds of another's, with a CSV for each treasurer. Till lines
-  go to the door or the bar by the category reserved for it, so an evening set
-  up for the two counters needs nothing more. Invoices are not split: pretix
-  issues an event's invoices in one name.
+- **Invoices per association**, for evenings several associations run
+  together, each with its own books. Each association gets a profile — its
+  address, SIRET, VAT ID, footer — and its own invoice number prefix, and
+  issues pretix's own invoices for the money it receives: the tickets bought
+  online for the association named on each event, the cards taken on the SumUp
+  account for the association it belongs to, and each drawer's cash for the
+  association that keeps it. Its numbers run on from one event to the next,
+  unless an event starts its own series from 1. A credit note follows the
+  invoice it cancels. Each event lists its invoices by association and by how
+  the money came in, with a CSV and the PDFs for each treasurer.
 
 ## What it deliberately does not do
 
@@ -259,7 +260,7 @@ If you run pretix in Docker or Kubernetes, [`deploy/Dockerfile`](deploy/Dockerfi
 bakes the plugin into the official image:
 
 ```bash
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.26.0 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.27.0 .
 ```
 
 The PWA bundle is built inside the image, from the tree you are building, so the
@@ -333,11 +334,15 @@ with. The reasons, and what breaks where, are in
     asks for its drawer to be opened on a counted float before it takes cash,
     shows what the drawer should hold as the evening goes, and closes it on a
     count. A device with no drawer takes cash exactly as before.
-11. **Optionally, share the evening between associations.** Add them under the
-    organizer's *Open POS → Associations*, and say there whose account the
-    SumUp money and each drawer's cash end up in. Then, on each event's
-    *Open POS → Statements*, say which association counts the online sales,
-    the door and the bar.
+11. **Optionally, invoice in the name of several associations.** Add them under
+    the organizer's *Open POS → Associations* with their details and invoice
+    number prefix, and say there who invoices the cards taken on the SumUp
+    account and each drawer's cash. Then, on each event's *Open POS → Invoices
+    by association*, say who invoices the tickets bought online, and whether
+    the event numbers its invoices from 1. Till sales are invoiced by Open POS
+    itself; for the tickets bought online, pretix must be set to invoice them
+    automatically (*Settings → Invoicing → Generate invoices*, for the web
+    shop), which the page reminds you of.
 
 One device can sell for several events: every event it has access to and that
 has the plugin enabled can be picked in *Settings → Event*, whether or not its

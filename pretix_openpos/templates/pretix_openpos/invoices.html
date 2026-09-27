@@ -1,0 +1,190 @@
+{% extends "pretixcontrol/event/base.html" %}
+{% load i18n %}
+{% load money %}
+{% block title %}{% trans "Invoices by association" %}{% endblock %}
+{% block content %}
+    <h1>{% trans "Invoices by association" %}</h1>
+    <p class="text-muted">
+        {% blocktrans trimmed %}
+            Each invoice of this event is issued by the association that received its money, in its
+            name and in its own series of numbers. A credit note goes into the series of the
+            invoice it cancels.
+        {% endblocktrans %}
+    </p>
+
+    {% if webshop_invoices_off %}
+        <div class="alert alert-warning">
+            {% blocktrans trimmed with url=invoice_settings_url %}
+                pretix does not invoice this event's online orders automatically, so a ticket bought
+                online only gets an invoice when it is asked for. To invoice every one, choose
+                “Automatically after payment” under “Generate invoices” in the
+                <a href="{{ url }}">invoicing settings</a>, for the web shop.
+            {% endblocktrans %}
+        </div>
+    {% endif %}
+
+    <h3>{% trans "Who invoices what" %}</h3>
+    <form action="" method="post">
+        {% csrf_token %}
+        <div class="table-responsive">
+            <table class="table table-condensed">
+                <thead>
+                <tr>
+                    <th>{% trans "Money" %}</th>
+                    <th>{% trans "Invoiced by" %}</th>
+                    <th></th>
+                </tr>
+                </thead>
+                <tbody>
+                <tr>
+                    <td>
+                        <label for="op-online">{% trans "Online ticketing" %}</label>
+                        <br><small class="text-muted">{% trans "Every order that did not come from a till." %}</small>
+                    </td>
+                    <td>
+                        {% if can_configure and associations %}
+                            <select name="online" id="op-online" class="form-control">
+                                <option value="">—</option>
+                                {% for association in associations %}
+                                    <option value="{{ association.pk }}"
+                                            {% if association == online %}selected{% endif %}>
+                                        {{ association.name }}
+                                    </option>
+                                {% endfor %}
+                            </select>
+                        {% else %}
+                            {{ online.name|default:"—" }}
+                        {% endif %}
+                    </td>
+                    <td>{% include "pretix_openpos/fragment_invoicing_state.html" with state=online_state %}</td>
+                </tr>
+                <tr>
+                    <td>{% trans "Cards taken on site (SumUp account)" %}</td>
+                    <td>{{ sumup_state.association.name|default:"—" }}</td>
+                    <td>{% include "pretix_openpos/fragment_invoicing_state.html" with state=sumup_state %}</td>
+                </tr>
+                {% for row in drawers %}
+                    <tr>
+                        <td>
+                            {% blocktrans trimmed with name=row.drawer.name %}
+                                Cash in the drawer “{{ name }}”
+                            {% endblocktrans %}
+                        </td>
+                        <td>{{ row.state.association.name|default:"—" }}</td>
+                        <td>{% include "pretix_openpos/fragment_invoicing_state.html" with state=row.state %}</td>
+                    </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <p class="help-block">
+            {% if associations_url %}
+                {% blocktrans trimmed with url=associations_url %}
+                    The associations, what their invoices say about them, and who invoices the cards
+                    and each drawer's cash, are on the <a href="{{ url }}">Associations</a> page:
+                    they are the same for every event.
+                {% endblocktrans %}
+            {% else %}
+                {% blocktrans trimmed %}
+                    The associations, and who invoices the cards and each drawer's cash, are set on
+                    the organizer's Associations page, for every event at once.
+                {% endblocktrans %}
+            {% endif %}
+        </p>
+
+        <div class="form-group">
+            <label for="op-series">{% trans "This event's own numbering" %}</label>
+            {% if can_configure %}
+                <input type="text" name="series" id="op-series" value="{{ series }}" class="form-control"
+                       maxlength="{{ series_max_length }}" placeholder="SOIREE-">
+            {% else %}
+                <p class="form-control-static">{{ series|default:"—" }}</p>
+            {% endif %}
+            <p class="help-block">
+                {% blocktrans trimmed with continued=continued_example restarted=series_example %}
+                    Left empty, each association's invoices follow on from one event to the next:
+                    {{ continued }}, then the next number. Filled in, for example with SOIREE-, they
+                    start again from 1 for this event, in a series of its own: {{ restarted }}. Best
+                    set before the first invoice: invoices already issued keep their numbers.
+                {% endblocktrans %}
+            </p>
+        </div>
+        {% if can_configure %}
+            <div class="form-group submit-group">
+                <button type="submit" class="btn btn-primary btn-save">{% trans "Save" %}</button>
+            </div>
+        {% endif %}
+    </form>
+
+    <h3>{% trans "Invoices issued" %}</h3>
+    {% for group in groups %}
+        <div class="panel panel-default">
+            <div class="panel-heading">
+                <div class="pull-right">
+                    <a href="?export=csv&amp;association={{ group.key }}" class="btn btn-default btn-xs">
+                        <span class="fa fa-download"></span> {% trans "List (CSV)" %}
+                    </a>
+                    <a href="?export=pdf&amp;association={{ group.key }}" class="btn btn-default btn-xs">
+                        <span class="fa fa-file-pdf-o"></span> {% trans "PDFs (ZIP)" %}
+                    </a>
+                </div>
+                <h4 class="panel-title">
+                    {% if group.association %}
+                        {{ group.association.name }}
+                    {% else %}
+                        {% trans "In the event's name" %}
+                    {% endif %}
+                </h4>
+            </div>
+            {% if not group.association %}
+                <div class="panel-body text-muted">
+                    {% blocktrans trimmed %}
+                        Numbered in the event's own series, as pretix always did: money no association
+                        was ready to invoice when the invoice was made.
+                    {% endblocktrans %}
+                </div>
+            {% endif %}
+            <div class="table-responsive">
+                <table class="table table-condensed">
+                    <thead>
+                    <tr>
+                        <th>{% trans "Money" %}</th>
+                        <th class="text-right">{% trans "Invoices" %}</th>
+                        <th class="text-right">{% trans "Credit notes" %}</th>
+                        <th class="text-right">{% trans "Total" %}</th>
+                    </tr>
+                    </thead>
+                    <tbody>
+                    {% for line in group.lines %}
+                        <tr>
+                            <td>{{ line.label }}</td>
+                            <td class="text-right">{{ line.invoices }}</td>
+                            <td class="text-right">{{ line.credit_notes }}</td>
+                            <td class="text-right">{{ line.total|money:currency }}</td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                    <tfoot>
+                    <tr>
+                        <th>{% trans "Total" %}</th>
+                        <th class="text-right">{{ group.invoices }}</th>
+                        <th class="text-right">{{ group.credit_notes }}</th>
+                        <th class="text-right">{{ group.total|money:currency }}</th>
+                    </tr>
+                    </tfoot>
+                </table>
+            </div>
+        </div>
+    {% empty %}
+        <p class="text-muted">{% trans "No invoice for this event yet." %}</p>
+    {% endfor %}
+    {% if testmode_count %}
+        <p class="text-muted">
+            {% blocktrans trimmed count count=testmode_count %}
+                {{ count }} invoice of test mode is left out.
+            {% plural %}
+                {{ count }} invoices of test mode are left out.
+            {% endblocktrans %}
+        </p>
+    {% endif %}
+{% endblock %}

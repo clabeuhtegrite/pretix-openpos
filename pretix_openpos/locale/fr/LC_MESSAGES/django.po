@@ -18,7 +18,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: pretix-openpos\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-09-27 20:00+0000\n"
+"POT-Creation-Date: 2026-09-27 21:40+0000\n"
 "PO-Revision-Date: 2026-09-22 09:51+0000\n"
 "Last-Translator: clabeuhtegrite\n"
 "Language-Team: French\n"
@@ -272,7 +272,7 @@ msgid "Uncategorised"
 msgstr "Sans catégorie"
 
 #: apps.py:13 apps.py:25 apps.py:28 apps.py:29 apps.py:30 apps.py:31
-#: channels.py:12 security.py:46 signals.py:140
+#: channels.py:12 security.py:46 signals.py:176
 #: templates/pretix_openpos/settings.html:4
 #: templates/pretix_openpos/settings.html:6
 msgid "Open POS"
@@ -288,25 +288,24 @@ msgstr ""
 
 #: apps.py:25
 msgid "Settings"
-msgstr "Réglages"
+msgstr "Paramètres"
 
-#: apps.py:28 signals.py:127 templates/pretix_openpos/categories.html:3
+#: apps.py:28 signals.py:163 templates/pretix_openpos/categories.html:3
 #: templates/pretix_openpos/categories.html:5
-#: templates/pretix_openpos/statements.html:21
 msgid "Who sells what"
 msgstr "Qui vend quoi"
 
-#: apps.py:29 signals.py:128 templates/pretix_openpos/drawer_session.html:134
+#: apps.py:29 signals.py:164 templates/pretix_openpos/drawer_session.html:134
 #: templates/pretix_openpos/sales.html:25
 msgid "Sales"
 msgstr "Ventes"
 
-#: apps.py:30 signals.py:129 templates/pretix_openpos/statements.html:4
-#: templates/pretix_openpos/statements.html:7
-msgid "Statements"
-msgstr "Relevés"
+#: apps.py:30 signals.py:165 templates/pretix_openpos/invoices.html:4
+#: templates/pretix_openpos/invoices.html:6
+msgid "Invoices by association"
+msgstr "Factures par association"
 
-#: apps.py:31 signals.py:130 signals.py:165
+#: apps.py:31 signals.py:166 signals.py:201
 #: templates/pretix_openpos/arrivals.html:4
 #: templates/pretix_openpos/arrivals.html:12
 #: templates/pretix_openpos/event_arrivals.html:4
@@ -332,88 +331,129 @@ msgid_plural "%(count)s arrivals"
 msgstr[0] "%(count)s arrivée"
 msgstr[1] "%(count)s arrivées"
 
-#: association_views.py:44 drawer_views.py:143 models.py:920 models.py:956
-#: templates/pretix_openpos/sumup.html:214
-msgid "Name"
-msgstr "Nom"
+#: association_views.py:86
+msgid "As printed at the top of its invoices."
+msgstr "Tel qu’il figure en haut de ses factures."
 
-#: association_views.py:60
+#: association_views.py:87
+msgid "Printed at the foot of its invoices."
+msgstr "Imprimé en bas de ses factures."
+
+#: association_views.py:88
+msgid "Only if it is registered for VAT. Printed under its address."
+msgstr "Seulement si elle est assujettie à la TVA. Imprimé sous son adresse."
+
+#: association_views.py:90
+msgid ""
+"Its invoice numbers start with this, then follow on from one event to the "
+"next: PORT- gives PORT-00001, PORT-00002… An event can start its own series "
+"from its invoices page. Changing the prefix starts a new series; invoices "
+"already issued keep their numbers. %Y puts in the year."
+msgstr ""
+"Ses numéros de facture commencent par ceci, puis se suivent d’un événement à "
+"l’autre : PORT- donne PORT-00001, PORT-00002… Un événement peut repartir sur "
+"une série à lui depuis sa page Factures par association. Changer le préfixe "
+"commence une nouvelle série ; les factures déjà émises gardent leur numéro. "
+"%Y insère l’année."
+
+#: association_views.py:96
+msgid ""
+"Printed at the foot of every page, under the SIRET, instead of the event's "
+"footer — for example “Association loi 1901 · TVA non applicable, art. 293 B "
+"du CGI”. One short line per mention: pretix does not wrap these lines."
+msgstr ""
+"Imprimé en bas de chaque page, sous le SIRET, à la place du bas de page de "
+"l’événement — par exemple « Association loi 1901 · TVA non applicable, art. "
+"293 B du CGI ». Une ligne courte par mention : pretix ne coupe pas ces "
+"lignes."
+
+#: association_views.py:106 models.py:926
+msgid "Country"
+msgstr "Pays"
+
+#: association_views.py:119
 #, python-brace-format
 msgid "There is already an association called “{name}”."
 msgstr "Il existe déjà une association nommée « {name} »."
 
-#: association_views.py:131
+#: association_views.py:133
+#, python-brace-format
+msgid "“{name}” already numbers its invoices with this prefix."
+msgstr "« {name} » numérote déjà ses factures avec ce préfixe."
+
+#: association_views.py:146
+msgid ""
+"Invoices numbered with this prefix already exist in another name. Choose "
+"another one, so that this association's numbers start from 1."
+msgstr ""
+"Des factures numérotées avec ce préfixe existent déjà sous un autre nom. "
+"Choisissez-en un autre, pour que les numéros de cette association partent de "
+"1."
+
+#: association_views.py:233 association_views.py:456
+msgid "One of the associations chosen no longer exists."
+msgstr "Une des associations choisies n’existe plus."
+
+#: association_views.py:260
+msgid "Who invoices what is taken on site has been saved."
+msgstr "Qui facture ce qui est encaissé sur place a été enregistré."
+
+#: association_views.py:322
 #, python-brace-format
 msgid ""
-"“{name}” has been added. Say which parts of an evening it counts on the "
-"statements page of each event."
+"“{name}” has been added. Say below what it invoices on site, and on the "
+"invoices page of an event if it invoices the online ticketing."
 msgstr ""
-"« {name} » a été ajoutée. Dites quelles parts d’une soirée elle compte sur "
-"la page Relevés de chaque événement."
+"« {name} » a été ajoutée. Dites plus bas ce qu’elle facture sur place, et "
+"sur la page Factures par association d’un événement si elle en facture la "
+"billetterie en ligne."
 
-#: association_views.py:153
+#: association_views.py:339
+msgid "The association has been saved."
+msgstr "L’association a été enregistrée."
+
+#: association_views.py:348
 #, python-brace-format
 msgid "“{name}” is still in use, so it stays."
 msgstr "« {name} » est encore utilisée, elle reste donc."
 
-#: association_views.py:164
+#: association_views.py:359
 msgid "The association has been deleted."
 msgstr "L’association a été supprimée."
 
-#: association_views.py:183
-msgid "The association has been saved."
-msgstr "L’association a été enregistrée."
+#: association_views.py:460
+msgid "The event's part of the numbers is too long."
+msgstr "La partie propre à l’événement est trop longue."
 
-#: association_views.py:206 association_views.py:357 association_views.py:362
-msgid "One of the associations chosen no longer exists."
-msgstr "Une des associations choisies n’existe plus."
+#: association_views.py:485
+msgid "Who invoices what has been saved."
+msgstr "Qui facture quoi a été enregistré."
 
-#: association_views.py:233
-msgid "Who holds the money has been saved."
-msgstr "Qui détient l’argent a été enregistré."
-
-#: association_views.py:239
-msgid "card payments on the SumUp account"
-msgstr "paiements carte sur le compte SumUp"
-
-#: association_views.py:240
+#: associations.py:57
 #, python-brace-format
-msgid "cash in the drawer “{which}”"
-msgstr "espèces de la caisse « {which} »"
+msgid "Use only the characters {allowed} here."
+msgstr "N’utilisez que les caractères {allowed} ici."
 
-#: association_views.py:241
-msgid "online payments"
-msgstr "paiements en ligne"
-
-#: association_views.py:381
-msgid "Who counts what has been saved."
-msgstr "Qui compte quoi a été enregistré."
-
-#: associations.py:44
-msgid "Online sales"
-msgstr "Ventes en ligne"
-
-#: associations.py:45 models.py:543
-msgid "Door"
-msgstr "Porte"
-
-#: associations.py:46
-msgid "Bar"
-msgstr "Bar"
-
-#: associations.py:136
-msgid "It holds the SumUp account's money."
-msgstr "Elle détient l’argent du compte SumUp."
-
-#: associations.py:140
+#: associations.py:117
 #, python-brace-format
-msgid "It holds the cash of: {drawers}."
-msgstr "Elle détient les espèces de : {drawers}."
+msgid "It has issued {count} invoice, which names it."
+msgid_plural "It has issued {count} invoices, which name it."
+msgstr[0] "Elle a émis {count} facture, qui porte son nom."
+msgstr[1] "Elle a émis {count} factures, qui portent son nom."
 
-#: associations.py:154
+#: associations.py:124
+msgid "It invoices the cards taken on the SumUp account."
+msgstr "Elle facture les cartes prises sur le compte SumUp."
+
+#: associations.py:128
 #, python-brace-format
-msgid "It counts a part of: {events}."
-msgstr "Elle compte une part de : {events}."
+msgid "It invoices the cash of: {drawers}."
+msgstr "Elle facture les espèces de : {drawers}."
+
+#: associations.py:142
+#, python-brace-format
+msgid "It invoices the online ticketing of: {events}."
+msgstr "Elle facture la billetterie en ligne de : {events}."
 
 #: attendance.py:155
 msgctxt "refusal"
@@ -483,7 +523,12 @@ msgstr ""
 "Un lecteur ne peut être donné qu’à une caisse. Passez « {device} » en "
 "caisse, ou retirez-lui son lecteur."
 
-#: drawer_views.py:145 models.py:963
+#: drawer_views.py:143 models.py:918 models.py:997
+#: templates/pretix_openpos/sumup.html:214
+msgid "Name"
+msgstr "Nom"
+
+#: drawer_views.py:145 models.py:1004
 msgid "Usual opening float"
 msgstr "Fond de caisse habituel"
 
@@ -742,6 +787,31 @@ msgstr "Pas de bouton montant libre"
 #: forms.py:131
 msgid "No deposit button"
 msgstr "Pas de bouton consigne"
+
+#: issuers.py:170
+#, python-brace-format
+msgid "SIRET: {siret}"
+msgstr "SIRET : {siret}"
+
+#: issuers.py:242 models.py:1308 templates/pretix_openpos/invoices.html:41
+msgid "Online ticketing"
+msgstr "Billetterie en ligne"
+
+#: issuers.py:243
+msgid "Card on site (SumUp)"
+msgstr "Carte sur place (SumUp)"
+
+#: issuers.py:244 models.py:62 models.py:1310 payment.py:87
+#: templates/pretix_openpos/drawer_session.html:48
+#: templates/pretix_openpos/drawer_session.html:135
+#: templates/pretix_openpos/sales.html:26
+msgid "Cash"
+msgstr "Espèces"
+
+#: issuers.py:250
+#, python-brace-format
+msgid "Cash, drawer “{name}”"
+msgstr "Espèces, caisse « {name} »"
 
 #: logdisplay.py:54
 msgid "none"
@@ -1026,94 +1096,135 @@ msgstr "personne"
 msgid "An association was added: {name}."
 msgstr "Une association a été ajoutée : {name}."
 
-#: logdisplay.py:508
+#: logdisplay.py:519
 #, python-brace-format
 msgid "The association {before} was renamed {name}."
 msgstr "L’association {before} a été renommée {name}."
 
-#: logdisplay.py:518
+#: logdisplay.py:531
+#, python-brace-format
+msgid "The association {before}, now {name}, was changed: {fields}."
+msgstr "L’association {before}, désormais {name}, a été modifiée : {fields}."
+
+#: logdisplay.py:534
+#, python-brace-format
+msgid "The association {name} was changed: {fields}."
+msgstr "L’association {name} a été modifiée : {fields}."
+
+#: logdisplay.py:544
 #, python-brace-format
 msgid "The association {name} was deleted."
 msgstr "L’association {name} a été supprimée."
 
-#: logdisplay.py:530
-msgid "Who holds the money was saved with nothing changed."
-msgstr "Qui détient l’argent a été enregistré sans changement."
+#: logdisplay.py:559
+msgid "Who invoices what is taken on site was saved with nothing changed."
+msgstr ""
+"Qui facture ce qui est encaissé sur place a été enregistré sans changement."
 
-#: logdisplay.py:533
-msgid "Who holds the money was changed:"
-msgstr "Qui détient l’argent a été modifié :"
+#: logdisplay.py:562
+msgid "Who invoices what is taken on site was changed:"
+msgstr "Qui facture ce qui est encaissé sur place a été modifié :"
 
-#: logdisplay.py:540
+#: logdisplay.py:569
 #, python-brace-format
 msgid "cash drawer {drawer}: {before} → {after}"
 msgstr "caisse espèces {drawer} : {before} → {after}"
 
-#: logdisplay.py:546
+#: logdisplay.py:575
 #, python-brace-format
 msgid "SumUp account: {before} → {after}"
 msgstr "compte SumUp : {before} → {after}"
 
-#: logdisplay.py:563
-msgid "Who counts what was saved with nothing changed."
-msgstr "Qui compte quoi a été enregistré sans changement."
+#: logdisplay.py:593
+msgid "Online sales"
+msgstr "Ventes en ligne"
 
-#: logdisplay.py:564
+#: logdisplay.py:594 models.py:543
+msgid "Door"
+msgstr "Porte"
+
+#: logdisplay.py:595
+msgid "Bar"
+msgstr "Bar"
+
+#: logdisplay.py:596
 msgid "online payments held by"
 msgstr "paiements en ligne détenus par"
 
-#: logdisplay.py:567
+#: logdisplay.py:602
+msgid "Who counts what was saved with nothing changed."
+msgstr "Qui compte quoi a été enregistré sans changement."
+
+#: logdisplay.py:605
 msgid "Who counts what was changed:"
 msgstr "Qui compte quoi a été modifié :"
 
-#: logdisplay.py:574
+#: logdisplay.py:612
 #, python-brace-format
 msgid "{part}: {before} → {after}"
 msgstr "{part} : {before} → {after}"
 
-#: logdisplay.py:607
+#: logdisplay.py:633
+msgid "Who invoices what was saved with nothing changed."
+msgstr "Qui facture quoi a été enregistré sans changement."
+
+#: logdisplay.py:636
+msgid "Who invoices what was changed:"
+msgstr "Qui facture quoi a été modifié :"
+
+#: logdisplay.py:643
+#, python-brace-format
+msgid "the event's own numbering: {before} → {after}"
+msgstr "numérotation propre à l’événement : {before} → {after}"
+
+#: logdisplay.py:648
+#, python-brace-format
+msgid "online ticketing: {before} → {after}"
+msgstr "billetterie en ligne : {before} → {after}"
+
+#: logdisplay.py:675
 msgid "Rung up offline at a price that had changed since:"
 msgstr "Encaissé hors ligne à un prix qui avait changé depuis :"
 
-#: logdisplay.py:613
+#: logdisplay.py:681
 #, python-brace-format
 msgid "{item}: charged {charged}, the price list said {tariff}"
 msgstr "{item} : {charged} encaissé, le tarif disait {tariff}"
 
-#: logdisplay.py:649
+#: logdisplay.py:717
 #, python-brace-format
 msgid "Replayed by {device}, from outside what that till sells:"
 msgstr "Rejoué par {device}, hors de ce que cette caisse vend :"
 
-#: logdisplay.py:653
+#: logdisplay.py:721
 msgid "Replayed from outside what that till sells:"
 msgstr "Rejoué hors de ce que cette caisse vend :"
 
-#: logdisplay.py:663
+#: logdisplay.py:731
 #, python-brace-format
 msgid "{count}× {item}, in {category}"
 msgstr "{count}× {item}, dans {category}"
 
-#: logdisplay.py:667
+#: logdisplay.py:735
 msgid "no category"
 msgstr "aucune catégorie"
 
-#: logdisplay.py:681
+#: logdisplay.py:749
 #, python-brace-format
 msgid "{minutes} min {seconds} s"
 msgstr "{minutes} min {seconds} s"
 
-#: logdisplay.py:685
+#: logdisplay.py:753
 #, python-brace-format
 msgid "{hours} h {minutes} min"
 msgstr "{hours} h {minutes} min"
 
-#: logdisplay.py:688
+#: logdisplay.py:756
 #, python-brace-format
 msgid "{days} d {hours} h"
 msgstr "{days} j {hours} h"
 
-#: logdisplay.py:722
+#: logdisplay.py:790
 #, python-brace-format
 msgid ""
 "Rung up offline on {device}, whose clock was {offset} fast. Dated "
@@ -1122,7 +1233,7 @@ msgstr ""
 "Encaissée hors ligne sur {device}, dont l’horloge avançait de {offset}. "
 "Datée du {recorded_at}, et non du {claimed_at} comme le disait la caisse."
 
-#: logdisplay.py:725
+#: logdisplay.py:793
 #, python-brace-format
 msgid ""
 "Rung up offline on {device}, whose clock was {offset} slow. Dated "
@@ -1131,27 +1242,27 @@ msgstr ""
 "Encaissée hors ligne sur {device}, dont l’horloge retardait de {offset}. "
 "Datée du {recorded_at}, et non du {claimed_at} comme le disait la caisse."
 
-#: logdisplay.py:729
+#: logdisplay.py:797
 msgid "a till"
 msgstr "une caisse"
 
-#: logdisplay.py:743
+#: logdisplay.py:811
 #, python-brace-format
 msgid "#{seq}, reversing #{target}: {total}"
 msgstr "n°{seq}, qui annule le n°{target} : {total}"
 
-#: logdisplay.py:768
+#: logdisplay.py:836
 msgid "Cancelled earlier in pretix, and written to the till journal only now:"
 msgstr ""
 "Annulée plus tôt dans pretix, et écrite au journal de caisse seulement "
 "maintenant :"
 
-#: logdisplay.py:770
+#: logdisplay.py:838
 msgid "Written to the till journal, so the takings no longer count this sale:"
 msgstr ""
 "Écrit au journal de caisse, la recette ne compte donc plus cette vente :"
 
-#: logdisplay.py:793
+#: logdisplay.py:861
 msgid ""
 "Refunded to the card from pretix, and written to the till journal, so the "
 "takings no longer count this sale:"
@@ -1159,7 +1270,7 @@ msgstr ""
 "Remboursée sur la carte depuis pretix, et écrite au journal de caisse, la "
 "recette ne compte donc plus cette vente :"
 
-#: logdisplay.py:808
+#: logdisplay.py:876
 msgid ""
 "Back in the till journal: the order came back paid, so the cancellation is "
 "undone."
@@ -1167,7 +1278,7 @@ msgstr ""
 "De retour au journal de caisse : la commande est revenue payée, l’annulation "
 "est donc défaite."
 
-#: logdisplay.py:828
+#: logdisplay.py:896
 msgid ""
 "Reactivated after the money was paid back, so the till journal keeps this "
 "sale cancelled. If the customer pays again, that payment is not a till sale "
@@ -1177,7 +1288,7 @@ msgstr ""
 "cette vente annulée. Si le client paie à nouveau, ce paiement n’est pas une "
 "vente en caisse et ne compte pas dans la recette de caisse."
 
-#: logdisplay.py:841
+#: logdisplay.py:909
 msgid ""
 "The reactivation could not be written to the till journal. The server log "
 "has the details."
@@ -1185,7 +1296,7 @@ msgstr ""
 "La réactivation n’a pas pu être écrite au journal de caisse. Le journal du "
 "serveur donne le détail."
 
-#: logdisplay.py:844
+#: logdisplay.py:912
 msgid ""
 "The card refund could not be written to the till journal, which still counts "
 "this sale. The server log has the details."
@@ -1193,7 +1304,7 @@ msgstr ""
 "Le remboursement carte n’a pas pu être écrit au journal de caisse, qui "
 "compte encore cette vente. Le journal du serveur donne le détail."
 
-#: logdisplay.py:846
+#: logdisplay.py:914
 msgid ""
 "The cancellation could not be written to the till journal. The Open POS "
 "Sales page lists this sale until it is."
@@ -1201,7 +1312,7 @@ msgstr ""
 "L’annulation n’a pas pu être écrite au journal de caisse. La page Ventes "
 "d’Open POS liste cette vente tant qu’elle ne l’est pas."
 
-#: logdisplay.py:857
+#: logdisplay.py:925
 #, python-brace-format
 msgid ""
 "SumUp did not take the card refund yet, so Open POS asks again on its own "
@@ -1210,11 +1321,11 @@ msgstr ""
 "SumUp n’a pas encore accepté le remboursement carte : Open POS le redemande "
 "tout seul jusqu’à ce qu’il passe. Réponse de SumUp : {answer}"
 
-#: logdisplay.py:870
+#: logdisplay.py:938
 msgid "SumUp took the card refund on a later try."
 msgstr "SumUp a accepté le remboursement carte à un nouvel essai."
 
-#: logdisplay.py:880
+#: logdisplay.py:948
 #, python-brace-format
 msgid ""
 "SumUp still refused the card refund, so Open POS stopped asking. Refund it "
@@ -1224,17 +1335,17 @@ msgstr ""
 "demander. Remboursez-le depuis le tableau de bord SumUp ou avec « Créer un "
 "remboursement ». Réponse de SumUp : {answer}"
 
-#: logdisplay.py:901
+#: logdisplay.py:969
 #, python-brace-format
 msgid "Card payment {transaction} was cancelled in SumUp ({amount})."
 msgstr "Le paiement carte {transaction} a été annulé dans SumUp ({amount})."
 
-#: logdisplay.py:903
+#: logdisplay.py:971
 #, python-brace-format
 msgid "Card payment {transaction} was refunded in SumUp ({amount})."
 msgstr "Le paiement carte {transaction} a été remboursé dans SumUp ({amount})."
 
-#: logdisplay.py:905
+#: logdisplay.py:973
 msgid ""
 "Open POS recorded it as a refund made outside pretix: process it on this "
 "order to say what becomes of the order."
@@ -1242,11 +1353,11 @@ msgstr ""
 "Open POS l’a enregistré comme un remboursement fait hors de pretix : traitez-"
 "le sur cette commande pour dire ce que devient la commande."
 
-#: logdisplay.py:908
+#: logdisplay.py:976
 msgid "Open POS cancelled the order and recorded the refund."
 msgstr "Open POS a annulé la commande et enregistré le remboursement."
 
-#: logdisplay.py:910
+#: logdisplay.py:978
 msgid ""
 "Open POS recorded the refund but could not cancel the order: process the "
 "refund on this order."
@@ -1254,25 +1365,18 @@ msgstr ""
 "Open POS a enregistré le remboursement mais n’a pas pu annuler la commande : "
 "traitez le remboursement sur cette commande."
 
-#: logdisplay.py:913
+#: logdisplay.py:981
 msgid "The refund that was waiting for SumUp is done."
 msgstr "Le remboursement qui attendait SumUp est fait."
 
-#: logdisplay.py:915
+#: logdisplay.py:983
 msgid "pretix already had this refund recorded, so nothing was added."
 msgstr ""
 "Ce remboursement était déjà enregistré dans pretix : rien n’a été ajouté."
 
-#: logdisplay.py:917
+#: logdisplay.py:985
 msgid "Open POS recorded the refund."
 msgstr "Open POS a enregistré le remboursement."
-
-#: models.py:62 payment.py:87 templates/pretix_openpos/drawer_session.html:48
-#: templates/pretix_openpos/drawer_session.html:135
-#: templates/pretix_openpos/sales.html:26
-#: templates/pretix_openpos/statements.html:132
-msgid "Cash"
-msgstr "Espèces"
 
 #: models.py:63
 msgid "Card terminal"
@@ -1307,7 +1411,7 @@ msgstr "Ventes en caisse"
 msgid "Not assigned"
 msgstr "Non attribué"
 
-#: models.py:542 models.py:1085
+#: models.py:542 models.py:1122
 #: templates/pretix_openpos/drawer_session.html:133
 #: templates/pretix_openpos/payment_control.html:14
 #: templates/pretix_openpos/sales.html:24
@@ -1326,7 +1430,7 @@ msgstr "Rôle"
 msgid "SumUp reader"
 msgstr "Lecteur SumUp"
 
-#: models.py:582 models.py:984 templates/pretix_openpos/devices.html:57
+#: models.py:582 models.py:1021 templates/pretix_openpos/devices.html:57
 msgid "Cash drawer"
 msgstr "Caisse espèces"
 
@@ -1334,7 +1438,7 @@ msgstr "Caisse espèces"
 msgid "Till device"
 msgstr "Appareil de caisse"
 
-#: models.py:624 signals.py:184 templates/pretix_openpos/categories.html:18
+#: models.py:624 signals.py:220 templates/pretix_openpos/categories.html:18
 #: templates/pretix_openpos/devices.html:4
 #: templates/pretix_openpos/devices.html:6
 msgid "Till devices"
@@ -1384,66 +1488,106 @@ msgstr "Catégorie à la caisse"
 msgid "Categories at the till"
 msgstr "Catégories à la caisse"
 
-#: models.py:924 templates/pretix_openpos/associations.html:20
-#: templates/pretix_openpos/statements.html:129
+#: models.py:922
+msgid "Address"
+msgstr "Adresse"
+
+#: models.py:923
+msgid "ZIP code"
+msgstr "Code postal"
+
+#: models.py:924
+msgid "City"
+msgstr "Ville"
+
+#: models.py:929
+msgid "SIRET"
+msgstr "SIRET"
+
+#: models.py:931
+msgid "VAT ID"
+msgstr "Identifiant de TVA"
+
+#: models.py:935
+msgid "Invoice number prefix"
+msgstr "Préfixe du numéro de facture"
+
+#: models.py:938
+msgid "Invoice footer"
+msgstr "Mentions en bas de facture"
+
+#: models.py:947 templates/pretix_openpos/associations.html:20
 msgid "Association"
 msgstr "Association"
 
-#: models.py:925 signals.py:228 templates/pretix_openpos/associations.html:4
-#: templates/pretix_openpos/associations.html:6
+#: models.py:948 signals.py:264 templates/pretix_openpos/association.html:8
+#: templates/pretix_openpos/associations.html:3
+#: templates/pretix_openpos/associations.html:5
 msgid "Associations"
 msgstr "Associations"
 
-#: models.py:980 templates/pretix_openpos/associations.html:91
+#: models.py:1017
 msgid "Held by"
 msgstr "Détenu par"
 
-#: models.py:985 signals.py:212 templates/pretix_openpos/drawer.html:8
+#: models.py:1022 signals.py:248 templates/pretix_openpos/drawer.html:8
 #: templates/pretix_openpos/drawers.html:5
 #: templates/pretix_openpos/drawers.html:7
 msgid "Cash drawers"
 msgstr "Caisses espèces"
 
-#: models.py:1025
+#: models.py:1062
 msgid "Cash drawer opening"
 msgstr "Ouverture de caisse"
 
-#: models.py:1026
+#: models.py:1063
 msgid "Cash drawer openings"
 msgstr "Ouvertures de caisse"
 
-#: models.py:1071 templates/pretix_openpos/drawer_session.html:52
+#: models.py:1108 templates/pretix_openpos/drawer_session.html:52
 msgid "Opening float"
 msgstr "Fond de caisse"
 
-#: models.py:1072
+#: models.py:1109
 msgid "Cash in"
 msgstr "Entrée d’espèces"
 
-#: models.py:1073
+#: models.py:1110
 msgid "Cash out"
 msgstr "Sortie d’espèces"
 
-#: models.py:1076
+#: models.py:1113
 msgctxt "cash drawer entry"
 msgid "Count"
 msgstr "Comptage"
 
-#: models.py:1077
+#: models.py:1114
 msgid "Closing"
 msgstr "Fermeture"
 
-#: models.py:1086
+#: models.py:1123
 msgid "Back office"
 msgstr "Back office"
 
-#: models.py:1141
+#: models.py:1178
 msgid "Cash drawer entry"
 msgstr "Écriture de caisse"
 
-#: models.py:1142
+#: models.py:1179
 msgid "Cash drawer entries"
 msgstr "Écritures de caisse"
+
+#: models.py:1309
+msgid "Card on site"
+msgstr "Carte sur place"
+
+#: models.py:1326
+msgid "Invoice issuer"
+msgstr "Émetteur de facture"
+
+#: models.py:1327
+msgid "Invoice issuers"
+msgstr "Émetteurs de facture"
 
 #: payment.py:86
 msgid "Cash (Open POS)"
@@ -1455,7 +1599,6 @@ msgstr "Lecteur de carte (Open POS)"
 
 #: payment.py:93 templates/pretix_openpos/drawer_session.html:136
 #: templates/pretix_openpos/sales.html:27
-#: templates/pretix_openpos/statements.html:133
 msgid "Card"
 msgstr "Carte"
 
@@ -1509,14 +1652,10 @@ msgstr "Le paiement carte a été annulé dans SumUp."
 msgid "The card payment was refunded in SumUp."
 msgstr "Le paiement carte a été remboursé dans SumUp."
 
-#: signals.py:198 templates/pretix_openpos/sumup.html:4
+#: signals.py:234 templates/pretix_openpos/sumup.html:4
 #: templates/pretix_openpos/sumup.html:6
 msgid "Card readers"
 msgstr "Lecteurs de carte"
-
-#: statements.py:96
-msgid "Not attributed"
-msgstr "Non attribué"
 
 #: sumup.py:153
 msgid ""
@@ -1589,7 +1728,8 @@ msgstr "SumUp a accepté le paiement sans nommer de transaction."
 #: sumup_views.py:165
 msgid "We could not save your changes. See below for details."
 msgstr ""
-"Vos modifications n’ont pas pu être enregistrées. Voir le détail ci-dessous."
+"Nous n'avons pas pu enregistrer vos modifications. Voir ci-dessous pour plus "
+"de détails."
 
 #: sumup_views.py:174
 msgid "Your changes have been saved."
@@ -1648,7 +1788,6 @@ msgstr "Événement"
 
 #: templates/pretix_openpos/arrivals.html:23
 #: templates/pretix_openpos/event_arrivals.html:20
-#: templates/pretix_openpos/statements.html:31
 msgctxt "arrivals"
 msgid "Date"
 msgstr "Date"
@@ -1760,100 +1899,161 @@ msgstr "Entrées"
 msgid "Share"
 msgstr "Part"
 
-#: templates/pretix_openpos/associations.html:8
+#: templates/pretix_openpos/association.html:4
+#: templates/pretix_openpos/association.html:7
+#: templates/pretix_openpos/associations.html:76
+msgid "New association"
+msgstr "Nouvelle association"
+
+#: templates/pretix_openpos/association.html:11
 msgid ""
-"The associations that run the evenings together, each with its own books. "
-"Each event then says which of them counts its online sales, its door and its "
-"bar, on its statements page, and that page gives every association its share "
-"of the evening."
+"What its invoices say about it. Every invoice for money it received is "
+"issued in this name, with this address, and numbered in its own series. An "
+"invoice already issued keeps what it said; a rebuild of it from an order's "
+"page takes what is here."
 msgstr ""
-"Les associations qui organisent les soirées ensemble, chacune avec sa propre "
-"comptabilité. Chaque événement dit ensuite, sur sa page Relevés, laquelle "
-"compte ses ventes en ligne, sa porte et son bar, et cette page donne à "
-"chaque association sa part de la soirée."
+"Ce que ses factures disent d’elle. Toute facture de l’argent qu’elle a reçu "
+"est émise à ce nom, à cette adresse, et numérotée dans sa propre série. Une "
+"facture déjà émise garde ce qu’elle disait ; régénérée depuis la page d’une "
+"commande, elle reprend ce qui est ici."
 
-#: templates/pretix_openpos/associations.html:21
-msgid "Named in"
-msgstr "Citée dans"
+#: templates/pretix_openpos/association.html:20
+msgid ""
+"This association does not invoice yet: what it received is invoiced in the "
+"event's name until these are filled in:"
+msgstr ""
+"Cette association ne facture pas encore : ce qu’elle reçoit est facturé au "
+"nom de l’événement tant que ceci n’est pas rempli :"
 
-#: templates/pretix_openpos/associations.html:34
-#: templates/pretix_openpos/associations.html:146
+#: templates/pretix_openpos/association.html:33
+msgid "Seller"
+msgstr "Émetteur"
+
+#: templates/pretix_openpos/association.html:43
+#: templates/pretix_openpos/invoices.html:152
+msgid "Invoices"
+msgstr "Factures"
+
+#: templates/pretix_openpos/association.html:48
+#: templates/pretix_openpos/associations.html:153
 #: templates/pretix_openpos/categories.html:93
 #: templates/pretix_openpos/devices.html:168
 #: templates/pretix_openpos/drawers.html:102
+#: templates/pretix_openpos/invoices.html:114
 #: templates/pretix_openpos/settings.html:45
-#: templates/pretix_openpos/statements.html:110
 #: templates/pretix_openpos/sumup.html:26
 msgid "Save"
 msgstr "Enregistrer"
 
-#: templates/pretix_openpos/associations.html:38
+#: templates/pretix_openpos/association.html:54
+#: templates/pretix_openpos/association.html:66
 #: templates/pretix_openpos/drawers.html:106
 msgid "Delete"
 msgstr "Supprimer"
 
-#: templates/pretix_openpos/associations.html:48
-msgid "Nowhere yet."
-msgstr "Nulle part pour l’instant."
+#: templates/pretix_openpos/association.html:56
+msgid "This association cannot be deleted:"
+msgstr "Cette association ne peut pas être supprimée :"
 
-#: templates/pretix_openpos/associations.html:58
+#: templates/pretix_openpos/association.html:63
+msgid "Nothing names this association yet, so it can be deleted."
+msgstr "Rien ne cite encore cette association : elle peut être supprimée."
+
+#: templates/pretix_openpos/associations.html:7
+msgid ""
+"The associations that run the evenings together. Each one invoices the money "
+"it receives, in its own name and in its own series of numbers: the tickets "
+"bought online by the one named on each event's invoices page, the cards "
+"taken on site by the one the SumUp account belongs to, and the cash of each "
+"drawer by the one that keeps it."
+msgstr ""
+"Les associations qui organisent les soirées ensemble. Chacune facture "
+"l’argent qu’elle reçoit, à son nom et dans sa propre numérotation : les "
+"billets pris en ligne par celle choisie sur la page Factures par association "
+"de chaque événement, les cartes prises sur place par celle à qui appartient "
+"le compte SumUp, et les espèces de chaque caisse par celle qui la garde."
+
+#: templates/pretix_openpos/associations.html:21
+msgid "Numbering"
+msgstr "Numérotation"
+
+#: templates/pretix_openpos/associations.html:22
+msgid "Last invoice"
+msgstr "Dernière facture"
+
+#: templates/pretix_openpos/associations.html:39
+msgid "Not ready to invoice. Missing:"
+msgstr "Ne facture pas encore. Il manque :"
+
+#: templates/pretix_openpos/associations.html:44
+#, python-format
+msgid "Numbered %(prefix)s…"
+msgstr "Numérotée %(prefix)s…"
+
+#: templates/pretix_openpos/associations.html:53
+msgid "none yet"
+msgstr "aucune pour l’instant"
+
+#: templates/pretix_openpos/associations.html:59
+msgid "Edit"
+msgstr "Éditer"
+
+#: templates/pretix_openpos/associations.html:69
 msgid "No association yet. Add the ones that share your evenings."
 msgstr ""
 "Aucune association pour l’instant. Ajoutez celles qui partagent vos soirées."
 
-#: templates/pretix_openpos/associations.html:62
-msgid "New association"
-msgstr "Nouvelle association"
+#: templates/pretix_openpos/associations.html:81
+msgid "Who invoices what is taken on site"
+msgstr "Qui facture ce qui est encaissé sur place"
 
-#: templates/pretix_openpos/associations.html:69
-#: templates/pretix_openpos/drawers.html:189
-msgid "Create"
-msgstr "Créer"
-
-#: templates/pretix_openpos/associations.html:74
-msgid "Who holds the money"
-msgstr "Qui détient l’argent"
-
-#: templates/pretix_openpos/associations.html:76
+#: templates/pretix_openpos/associations.html:83
 msgid ""
-"A card taken by a reader lands in the SumUp account, and a drawer's cash "
-"goes home with whoever keeps it. Say whose each one is, and the statements "
-"say what it holds of the others' money, and who owes whom. Money left on “—” "
-"counts as held by the association it belongs to, and so do cards taken on a "
-"phone."
+"A card taken on site lands in the SumUp account, and a drawer's cash goes "
+"home with whoever keeps it: each is invoiced by the association whose it is. "
+"Left on “—”, or with an association whose profile is not complete, it is "
+"invoiced in the event's name, as before."
 msgstr ""
-"Une carte passée sur un lecteur arrive sur le compte SumUp, et les espèces "
-"d’une caisse repartent avec qui la garde. Dites à qui est chacun, et les "
-"relevés disent ce qu’il détient de l’argent des autres, et qui doit combien "
-"à qui. L’argent laissé sur « — » compte comme détenu par l’association à qui "
-"il revient, tout comme les cartes passées sur un téléphone."
+"Une carte prise sur place arrive sur le compte SumUp, et les espèces d’une "
+"caisse repartent avec qui la garde : chacun est facturé par l’association à "
+"qui il appartient. Laissé sur « — », ou avec une association dont la fiche "
+"n’est pas complète, il est facturé au nom de l’événement, comme avant."
 
-#: templates/pretix_openpos/associations.html:90
+#: templates/pretix_openpos/associations.html:97
+#: templates/pretix_openpos/invoices.html:33
+#: templates/pretix_openpos/invoices.html:151
 msgid "Money"
 msgstr "Argent"
 
-#: templates/pretix_openpos/associations.html:96
-msgid "Card payments on the SumUp account"
-msgstr "Paiements carte sur le compte SumUp"
+#: templates/pretix_openpos/associations.html:98
+#: templates/pretix_openpos/invoices.html:34
+msgid "Invoiced by"
+msgstr "Facturé par"
 
-#: templates/pretix_openpos/associations.html:113
+#: templates/pretix_openpos/associations.html:103
+msgid "Cards taken on the SumUp account"
+msgstr "Cartes prises sur le compte SumUp"
+
+#: templates/pretix_openpos/associations.html:120
+#: templates/pretix_openpos/invoices.html:69
 #, python-format
 msgid "Cash in the drawer “%(name)s”"
 msgstr "Espèces de la caisse « %(name)s »"
 
-#: templates/pretix_openpos/associations.html:118
+#: templates/pretix_openpos/associations.html:125
 #: templates/pretix_openpos/drawers.html:143
 msgid "Archived"
 msgstr "Archivée"
 
-#: templates/pretix_openpos/associations.html:139
+#: templates/pretix_openpos/associations.html:146
 #, python-format
 msgid ""
-"No <a href=\"%(url)s\">cash drawer</a> yet: the cash of every sale counts as "
-"held by the association it belongs to."
+"No <a href=\"%(url)s\">cash drawer</a> yet: cash sales are invoiced in the "
+"event's name until the till selling them is given a drawer."
 msgstr ""
-"Pas encore de <a href=\"%(url)s\">caisse espèces</a> : les espèces de chaque "
-"vente comptent comme détenues par l’association à qui elles reviennent."
+"Pas encore de <a href=\"%(url)s\">caisse espèces</a> : les ventes en espèces "
+"sont facturées au nom de l’événement tant que l’appareil qui les vend n’a "
+"pas de caisse espèces."
 
 #: templates/pretix_openpos/categories.html:8
 msgid ""
@@ -2305,7 +2505,6 @@ msgstr "Qui"
 #: templates/pretix_openpos/sales.html:211
 #: templates/pretix_openpos/sales.html:262
 #: templates/pretix_openpos/sales.html:444
-#: templates/pretix_openpos/statements.html:271
 msgid "Amount"
 msgstr "Montant"
 
@@ -2426,6 +2625,10 @@ msgstr ""
 msgid "New drawer"
 msgstr "Nouvelle caisse"
 
+#: templates/pretix_openpos/drawers.html:189
+msgid "Create"
+msgstr "Créer"
+
 #: templates/pretix_openpos/drawers.html:193
 #, python-format
 msgid ""
@@ -2442,7 +2645,6 @@ msgid "Check-in list"
 msgstr "Liste d’enregistrement"
 
 #: templates/pretix_openpos/event_arrivals.html:36
-#: templates/pretix_openpos/statements.html:38
 msgctxt "arrivals"
 msgid "Show"
 msgstr "Afficher"
@@ -2643,6 +2845,146 @@ msgstr[1] "%(count)s scans de produits sans entrée ne sont pas comptés."
 msgid "See the list in pretix"
 msgstr "Voir la liste dans pretix"
 
+#: templates/pretix_openpos/fragment_invoicing_state.html:1
+msgid "invoices in its own name"
+msgstr "facture à son nom"
+
+#: templates/pretix_openpos/fragment_invoicing_state.html:1
+msgid "its profile lacks:"
+msgstr "il manque à sa fiche :"
+
+#: templates/pretix_openpos/fragment_invoicing_state.html:1
+msgid "Invoiced in the event's name meanwhile."
+msgstr "Facturé au nom de l’événement en attendant."
+
+#: templates/pretix_openpos/fragment_invoicing_state.html:1
+msgid "Invoiced in the event's name."
+msgstr "Facturé au nom de l’événement."
+
+#: templates/pretix_openpos/invoices.html:8
+msgid ""
+"Each invoice of this event is issued by the association that received its "
+"money, in its name and in its own series of numbers. A credit note goes into "
+"the series of the invoice it cancels."
+msgstr ""
+"Chaque facture de cet événement est émise par l’association qui en a reçu "
+"l’argent, à son nom et dans sa propre numérotation. Un avoir va dans la "
+"série de la facture qu’il annule."
+
+#: templates/pretix_openpos/invoices.html:17
+#, python-format
+msgid ""
+"pretix does not invoice this event's online orders automatically, so a "
+"ticket bought online only gets an invoice when it is asked for. To invoice "
+"every one, choose “Automatically after payment” under “Generate invoices” in "
+"the <a href=\"%(url)s\">invoicing settings</a>, for the web shop."
+msgstr ""
+"pretix ne facture pas automatiquement les commandes en ligne de cet "
+"événement : un billet pris en ligne n’a de facture que si on la demande. "
+"Pour toutes les facturer, choisissez « Automatically after payment… » sous « "
+"Générer des factures » dans les <a href=\"%(url)s\">paramètres de "
+"facturation</a>, pour la boutique en ligne."
+
+#: templates/pretix_openpos/invoices.html:26
+msgid "Who invoices what"
+msgstr "Qui facture quoi"
+
+#: templates/pretix_openpos/invoices.html:42
+msgid "Every order that did not come from a till."
+msgstr "Toute commande qui ne vient pas d’une caisse."
+
+#: templates/pretix_openpos/invoices.html:62
+msgid "Cards taken on site (SumUp account)"
+msgstr "Cartes prises sur place (compte SumUp)"
+
+#: templates/pretix_openpos/invoices.html:82
+#, python-format
+msgid ""
+"The associations, what their invoices say about them, and who invoices the "
+"cards and each drawer's cash, are on the <a href=\"%(url)s\">Associations</"
+"a> page: they are the same for every event."
+msgstr ""
+"Les associations, ce que disent leurs factures, et qui facture les cartes et "
+"les espèces de chaque caisse sont sur la page <a "
+"href=\"%(url)s\">Associations</a> : c’est le même réglage pour tous les "
+"événements."
+
+#: templates/pretix_openpos/invoices.html:88
+msgid ""
+"The associations, and who invoices the cards and each drawer's cash, are set "
+"on the organizer's Associations page, for every event at once."
+msgstr ""
+"Les associations, et qui facture les cartes et les espèces de chaque caisse, "
+"se règlent sur la page Associations de l’organisateur, pour tous les "
+"événements à la fois."
+
+#: templates/pretix_openpos/invoices.html:96
+msgid "This event's own numbering"
+msgstr "Numérotation propre à cet événement"
+
+#: templates/pretix_openpos/invoices.html:104
+#, python-format
+msgid ""
+"Left empty, each association's invoices follow on from one event to the "
+"next: %(continued)s, then the next number. Filled in, for example with "
+"SOIREE-, they start again from 1 for this event, in a series of its own: "
+"%(restarted)s. Best set before the first invoice: invoices already issued "
+"keep their numbers."
+msgstr ""
+"Vide, les factures de chaque association se suivent d’un événement à "
+"l’autre : %(continued)s, puis le numéro suivant. Rempli, par exemple avec "
+"SOIREE-, elles repartent de 1 pour cet événement, dans une série à part : "
+"%(restarted)s. À régler avant la première facture : les factures déjà émises "
+"gardent leur numéro."
+
+#: templates/pretix_openpos/invoices.html:119
+msgid "Invoices issued"
+msgstr "Factures émises"
+
+#: templates/pretix_openpos/invoices.html:125
+msgid "List (CSV)"
+msgstr "Liste (CSV)"
+
+#: templates/pretix_openpos/invoices.html:128
+msgid "PDFs (ZIP)"
+msgstr "PDF (ZIP)"
+
+#: templates/pretix_openpos/invoices.html:135
+msgid "In the event's name"
+msgstr "Au nom de l’événement"
+
+#: templates/pretix_openpos/invoices.html:141
+msgid ""
+"Numbered in the event's own series, as pretix always did: money no "
+"association was ready to invoice when the invoice was made."
+msgstr ""
+"Numérotées dans la série de l’événement, comme pretix l’a toujours fait : de "
+"l’argent qu’aucune association n’était prête à facturer au moment de la "
+"facture."
+
+#: templates/pretix_openpos/invoices.html:153
+msgid "Credit notes"
+msgstr "Avoirs"
+
+#: templates/pretix_openpos/invoices.html:154
+#: templates/pretix_openpos/invoices.html:169
+#: templates/pretix_openpos/sales.html:28
+#: templates/pretix_openpos/sales.html:311
+#: templates/pretix_openpos/sales.html:569
+msgid "Total"
+msgstr "Total"
+
+#: templates/pretix_openpos/invoices.html:179
+msgid "No invoice for this event yet."
+msgstr "Pas encore de facture pour cet événement."
+
+#: templates/pretix_openpos/invoices.html:183
+#, python-format
+msgid "%(count)s invoice of test mode is left out."
+msgid_plural "%(count)s invoices of test mode are left out."
+msgstr[0] "%(count)s facture du mode test est laissée de côté."
+msgstr[1] "%(count)s factures du mode test sont laissées de côté."
+
 #: templates/pretix_openpos/payment_control.html:10
 #: templates/pretix_openpos/sales.html:567
 msgid "Cashier"
@@ -2705,13 +3047,6 @@ msgstr ""
 #: templates/pretix_openpos/sales.html:20
 msgid "Takings"
 msgstr "Recette"
-
-#: templates/pretix_openpos/sales.html:28
-#: templates/pretix_openpos/sales.html:311
-#: templates/pretix_openpos/sales.html:569
-#: templates/pretix_openpos/statements.html:135
-msgid "Total"
-msgstr "Total"
 
 #: templates/pretix_openpos/sales.html:46
 msgid "Nothing has been sold at a till yet."
@@ -2892,7 +3227,6 @@ msgstr ""
 
 #: templates/pretix_openpos/sales.html:372
 #: templates/pretix_openpos/sales.html:442
-#: templates/pretix_openpos/statements.html:269
 msgid "Product"
 msgstr "Produit"
 
@@ -2913,18 +3247,15 @@ msgid "By product"
 msgstr "Par produit"
 
 #: templates/pretix_openpos/sales.html:443
-#: templates/pretix_openpos/statements.html:270
 msgid "Quantity"
 msgstr "Quantité"
 
 #: templates/pretix_openpos/sales.html:451
-#: templates/pretix_openpos/statements.html:277
 msgctxt "takings"
 msgid "No category"
 msgstr "Sans catégorie"
 
 #: templates/pretix_openpos/sales.html:470
-#: templates/pretix_openpos/statements.html:310
 #, python-format
 msgid ""
 "%(amount)s of the takings comes from journal entries that name no product."
@@ -2933,31 +3264,25 @@ msgstr ""
 "aucun produit."
 
 #: templates/pretix_openpos/sales.html:478
-#: templates/pretix_openpos/statements.html:131
-#: templates/pretix_openpos/statements.html:318
 msgid "Deposits"
 msgstr "Consignes"
 
 #: templates/pretix_openpos/sales.html:482
-#: templates/pretix_openpos/statements.html:322
 msgctxt "deposits"
 msgid "Taken"
 msgstr "Prises"
 
 #: templates/pretix_openpos/sales.html:487
-#: templates/pretix_openpos/statements.html:327
 msgctxt "deposits"
 msgid "Handed back"
 msgstr "Rendues"
 
 #: templates/pretix_openpos/sales.html:494
-#: templates/pretix_openpos/statements.html:334
 msgctxt "deposits"
 msgid "Balance"
 msgstr "Solde"
 
 #: templates/pretix_openpos/sales.html:500
-#: templates/pretix_openpos/statements.html:340
 msgid ""
 "Kept apart from the products: a deposit is owed to whoever brings the cup "
 "back."
@@ -3047,177 +3372,6 @@ msgstr ""
 "le canal <strong>Open POS</strong> — comme n’importe quel autre produit "
 "vendu à l’entrée."
 
-#: templates/pretix_openpos/statements.html:11
-#: templates/pretix_openpos/statements.html:33
-msgid "All dates"
-msgstr "Toutes les dates"
-
-#: templates/pretix_openpos/statements.html:16
-msgid ""
-"Each association's share of the evening: what it sold, and the money it "
-"took. The online sales are every order that did not come from a till. What "
-"the tills sold goes to the door or to the bar by the category reserved for "
-"it on"
-msgstr ""
-"La part de chaque association dans la soirée : ce qu’elle a vendu, et "
-"l’argent qu’elle a encaissé. Les ventes en ligne sont toutes les commandes "
-"qui ne viennent pas d’une caisse. Ce que les caisses ont vendu va à la porte "
-"ou au bar selon la catégorie qui lui est réservée dans"
-
-#: templates/pretix_openpos/statements.html:21
-msgid ", and otherwise by the role of the device that sold it."
-msgstr ", et sinon selon le rôle de l’appareil qui l’a vendu."
-
-#: templates/pretix_openpos/statements.html:42
-msgid "Who counts what"
-msgstr "Qui compte quoi"
-
-#: templates/pretix_openpos/statements.html:45
-msgid "No association yet, so the evening is shown part by part."
-msgstr ""
-"Aucune association pour l’instant : la soirée est montrée part par part."
-
-#: templates/pretix_openpos/statements.html:47
-#, python-format
-msgid ""
-"Add the associations that share it on the <a href=\"%(url)s\">Associations</"
-"a> page, then say here which one counts what."
-msgstr ""
-"Ajoutez les associations qui la partagent sur la page <a "
-"href=\"%(url)s\">Associations</a>, puis dites ici laquelle compte quoi."
-
-#: templates/pretix_openpos/statements.html:77
-#: templates/pretix_openpos/statements.html:119
-msgid "Online payments land with"
-msgstr "Les paiements en ligne arrivent chez"
-
-#: templates/pretix_openpos/statements.html:79
-msgid ""
-"Leave it on “—” when they land with the association of the online sales."
-msgstr "Laissez « — » s’ils arrivent chez l’association des ventes en ligne."
-
-#: templates/pretix_openpos/statements.html:98
-msgid ""
-"Said once for the whole event, and read again every time this page is shown: "
-"change it, and the statements of its past dates change with it."
-msgstr ""
-"Dit une fois pour tout l’événement, et relu à chaque affichage de cette "
-"page : changez-le, et les relevés de ses dates passées changent avec."
-
-#: templates/pretix_openpos/statements.html:103
-#, python-format
-msgid ""
-"Whose account the SumUp payments and each drawer's cash go to is said on the "
-"<a href=\"%(url)s\">Associations</a> page."
-msgstr ""
-"Le compte où vont les paiements SumUp et les espèces de chaque caisse se dit "
-"sur la page <a href=\"%(url)s\">Associations</a>."
-
-#: templates/pretix_openpos/statements.html:124
-msgid "Shares of the evening"
-msgstr "Parts de la soirée"
-
-#: templates/pretix_openpos/statements.html:130
-msgctxt "statements"
-msgid "Sold"
-msgstr "Vendu"
-
-#: templates/pretix_openpos/statements.html:134
-msgctxt "statements"
-msgid "Online"
-msgstr "En ligne"
-
-#: templates/pretix_openpos/statements.html:157
-msgid "Nothing has been sold for this evening yet."
-msgstr "Rien n’a encore été vendu pour cette soirée."
-
-#: templates/pretix_openpos/statements.html:163
-msgid "All associations"
-msgstr "Toutes les associations"
-
-#: templates/pretix_openpos/statements.html:178
-#, python-format
-msgid ""
-"Nobody counts these parts yet: %(parts)s. They are shown under their own "
-"name, and no transfer is worked out for them."
-msgstr ""
-"Personne ne compte encore ces parts : %(parts)s. Elles sont montrées sous "
-"leur propre nom, et aucun virement n’est calculé pour elles."
-
-#: templates/pretix_openpos/statements.html:186
-#, python-format
-msgid ""
-"%(amount)s of card payments went into the SumUp account, and nobody has said "
-"which association it belongs to, so the transfers below leave it out."
-msgstr ""
-"%(amount)s de paiements carte sont arrivés sur le compte SumUp, et personne "
-"n’a dit à quelle association ce compte appartient : les virements ci-dessous "
-"les laissent de côté."
-
-#: templates/pretix_openpos/statements.html:191
-#, python-format
-msgid "Say it on the <a href=\"%(url)s\">Associations</a> page."
-msgstr "Dites-le sur la page <a href=\"%(url)s\">Associations</a>."
-
-#: templates/pretix_openpos/statements.html:199
-#, python-format
-msgid ""
-"%(amount)s is held by an association for a part nobody counts, and is left "
-"out of the transfers."
-msgstr ""
-"%(amount)s sont détenus par une association pour une part que personne ne "
-"compte, et restent en dehors des virements."
-
-#: templates/pretix_openpos/statements.html:208
-#, python-format
-msgid ""
-"%(name)s: a difference of %(amount)s between the money taken and what was "
-"sold. It comes from an online order paid in part, or refunded without being "
-"cancelled."
-msgstr ""
-"%(name)s : écart de %(amount)s entre l’argent encaissé et ce qui a été "
-"vendu. Il vient d’une commande en ligne payée en partie, ou remboursée sans "
-"être annulée."
-
-#: templates/pretix_openpos/statements.html:218
-#, python-format
-msgid "One sale made in test mode is left out."
-msgid_plural "%(n)s sales made in test mode are left out."
-msgstr[0] "Une vente faite en mode test est laissée de côté."
-msgstr[1] "%(n)s ventes faites en mode test sont laissées de côté."
-
-#: templates/pretix_openpos/statements.html:227
-msgid "Transfers between associations"
-msgstr "Virements entre associations"
-
-#: templates/pretix_openpos/statements.html:232
-#, python-format
-msgid ""
-"<strong>%(payer)s</strong> pays <strong>%(amount)s</strong> to "
-"<strong>%(payee)s</strong>"
-msgstr ""
-"<strong>%(payer)s</strong> verse <strong>%(amount)s</strong> à "
-"<strong>%(payee)s</strong>"
-
-#: templates/pretix_openpos/statements.html:238
-#, python-format
-msgid "%(holder)s holds %(amount)s for %(owner)s: %(why)s."
-msgstr "%(holder)s détient %(amount)s pour %(owner)s : %(why)s."
-
-#: templates/pretix_openpos/statements.html:248
-msgid "Nobody owes anybody: each association holds its own money."
-msgstr ""
-"Personne ne doit rien à personne : chaque association détient son propre "
-"argent."
-
-#: templates/pretix_openpos/statements.html:296
-msgid "Fees"
-msgstr "Frais"
-
-#: templates/pretix_openpos/statements.html:353
-msgid "Download as a spreadsheet (CSV)"
-msgstr "Télécharger en tableur (CSV)"
-
 #: templates/pretix_openpos/sumup.html:8
 msgid ""
 "A SumUp reader takes the card itself, so the till never has to be told that "
@@ -3281,7 +3435,7 @@ msgstr "Inconnu"
 
 #: templates/pretix_openpos/sumup.html:96
 msgid "Offline"
-msgstr "Hors ligne"
+msgstr "Hors-ligne"
 
 #: templates/pretix_openpos/sumup.html:98
 msgid "Updating itself"
@@ -3483,6 +3637,179 @@ msgstr[1] ""
 #: views.py:938
 msgid "Every sale pretix cancelled is already in the journal."
 msgstr "Toutes les ventes annulées dans pretix sont déjà au journal."
+
+#~ msgid "Statements"
+#~ msgstr "Relevés"
+
+#, python-brace-format
+#~ msgid "cash in the drawer “{which}”"
+#~ msgstr "espèces de la caisse « {which} »"
+
+#~ msgid "online payments"
+#~ msgstr "paiements en ligne"
+
+#~ msgid "Who counts what has been saved."
+#~ msgstr "Qui compte quoi a été enregistré."
+
+#~ msgid "It holds the SumUp account's money."
+#~ msgstr "Elle détient l’argent du compte SumUp."
+
+#, python-brace-format
+#~ msgid "It counts a part of: {events}."
+#~ msgstr "Elle compte une part de : {events}."
+
+#~ msgid "Not attributed"
+#~ msgstr "Non attribué"
+
+#~ msgid ""
+#~ "The associations that run the evenings together, each with its own books. "
+#~ "Each event then says which of them counts its online sales, its door and "
+#~ "its bar, on its statements page, and that page gives every association "
+#~ "its share of the evening."
+#~ msgstr ""
+#~ "Les associations qui organisent les soirées ensemble, chacune avec sa "
+#~ "propre comptabilité. Chaque événement dit ensuite, sur sa page Relevés, "
+#~ "laquelle compte ses ventes en ligne, sa porte et son bar, et cette page "
+#~ "donne à chaque association sa part de la soirée."
+
+#~ msgid "Named in"
+#~ msgstr "Citée dans"
+
+#~ msgid "Nowhere yet."
+#~ msgstr "Nulle part pour l’instant."
+
+#~ msgid "Who holds the money"
+#~ msgstr "Qui détient l’argent"
+
+#~ msgid "All dates"
+#~ msgstr "Toutes les dates"
+
+#~ msgid ""
+#~ "Each association's share of the evening: what it sold, and the money it "
+#~ "took. The online sales are every order that did not come from a till. "
+#~ "What the tills sold goes to the door or to the bar by the category "
+#~ "reserved for it on"
+#~ msgstr ""
+#~ "La part de chaque association dans la soirée : ce qu’elle a vendu, et "
+#~ "l’argent qu’elle a encaissé. Les ventes en ligne sont toutes les "
+#~ "commandes qui ne viennent pas d’une caisse. Ce que les caisses ont vendu "
+#~ "va à la porte ou au bar selon la catégorie qui lui est réservée dans"
+
+#~ msgid ", and otherwise by the role of the device that sold it."
+#~ msgstr ", et sinon selon le rôle de l’appareil qui l’a vendu."
+
+#~ msgid "Who counts what"
+#~ msgstr "Qui compte quoi"
+
+#~ msgid "No association yet, so the evening is shown part by part."
+#~ msgstr ""
+#~ "Aucune association pour l’instant : la soirée est montrée part par part."
+
+#, python-format
+#~ msgid ""
+#~ "Add the associations that share it on the <a "
+#~ "href=\"%(url)s\">Associations</a> page, then say here which one counts "
+#~ "what."
+#~ msgstr ""
+#~ "Ajoutez les associations qui la partagent sur la page <a "
+#~ "href=\"%(url)s\">Associations</a>, puis dites ici laquelle compte quoi."
+
+#~ msgid "Online payments land with"
+#~ msgstr "Les paiements en ligne arrivent chez"
+
+#~ msgid ""
+#~ "Leave it on “—” when they land with the association of the online sales."
+#~ msgstr ""
+#~ "Laissez « — » s’ils arrivent chez l’association des ventes en ligne."
+
+#~ msgid ""
+#~ "Said once for the whole event, and read again every time this page is "
+#~ "shown: change it, and the statements of its past dates change with it."
+#~ msgstr ""
+#~ "Dit une fois pour tout l’événement, et relu à chaque affichage de cette "
+#~ "page : changez-le, et les relevés de ses dates passées changent avec."
+
+#~ msgid "Shares of the evening"
+#~ msgstr "Parts de la soirée"
+
+#~ msgctxt "statements"
+#~ msgid "Sold"
+#~ msgstr "Vendu"
+
+#~ msgctxt "statements"
+#~ msgid "Online"
+#~ msgstr "En ligne"
+
+#~ msgid "Nothing has been sold for this evening yet."
+#~ msgstr "Rien n’a encore été vendu pour cette soirée."
+
+#~ msgid "All associations"
+#~ msgstr "Toutes les associations"
+
+#, python-format
+#~ msgid ""
+#~ "Nobody counts these parts yet: %(parts)s. They are shown under their own "
+#~ "name, and no transfer is worked out for them."
+#~ msgstr ""
+#~ "Personne ne compte encore ces parts : %(parts)s. Elles sont montrées sous "
+#~ "leur propre nom, et aucun virement n’est calculé pour elles."
+
+#, python-format
+#~ msgid ""
+#~ "%(amount)s of card payments went into the SumUp account, and nobody has "
+#~ "said which association it belongs to, so the transfers below leave it out."
+#~ msgstr ""
+#~ "%(amount)s de paiements carte sont arrivés sur le compte SumUp, et "
+#~ "personne n’a dit à quelle association ce compte appartient : les "
+#~ "virements ci-dessous les laissent de côté."
+
+#, python-format
+#~ msgid "Say it on the <a href=\"%(url)s\">Associations</a> page."
+#~ msgstr "Dites-le sur la page <a href=\"%(url)s\">Associations</a>."
+
+#, python-format
+#~ msgid ""
+#~ "%(amount)s is held by an association for a part nobody counts, and is "
+#~ "left out of the transfers."
+#~ msgstr ""
+#~ "%(amount)s sont détenus par une association pour une part que personne ne "
+#~ "compte, et restent en dehors des virements."
+
+#, python-format
+#~ msgid ""
+#~ "%(name)s: a difference of %(amount)s between the money taken and what was "
+#~ "sold. It comes from an online order paid in part, or refunded without "
+#~ "being cancelled."
+#~ msgstr ""
+#~ "%(name)s : écart de %(amount)s entre l’argent encaissé et ce qui a été "
+#~ "vendu. Il vient d’une commande en ligne payée en partie, ou remboursée "
+#~ "sans être annulée."
+
+#~ msgid "Transfers between associations"
+#~ msgstr "Virements entre associations"
+
+#, python-format
+#~ msgid ""
+#~ "<strong>%(payer)s</strong> pays <strong>%(amount)s</strong> to "
+#~ "<strong>%(payee)s</strong>"
+#~ msgstr ""
+#~ "<strong>%(payer)s</strong> verse <strong>%(amount)s</strong> à "
+#~ "<strong>%(payee)s</strong>"
+
+#, python-format
+#~ msgid "%(holder)s holds %(amount)s for %(owner)s: %(why)s."
+#~ msgstr "%(holder)s détient %(amount)s pour %(owner)s : %(why)s."
+
+#~ msgid "Nobody owes anybody: each association holds its own money."
+#~ msgstr ""
+#~ "Personne ne doit rien à personne : chaque association détient son propre "
+#~ "argent."
+
+#~ msgid "Fees"
+#~ msgstr "Frais"
+
+#~ msgid "Download as a spreadsheet (CSV)"
+#~ msgstr "Télécharger en tableur (CSV)"
 
 #, python-format
 #~ msgid "busiest hour · %(count)s scan (%(share)s %%)"

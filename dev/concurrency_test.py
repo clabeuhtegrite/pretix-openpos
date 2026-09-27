@@ -14,6 +14,12 @@ production.
 What must hold afterwards: every sale committed, sequence numbers gapless and
 unique, and no two sales sharing an order.
 
+Every other sale is paid by card. Each sale is invoiced as it is recorded, and
+integration.sh has an association invoice the cards: the cash sales race for
+the event's next invoice number while the card sales race for the
+association's, the way two counters of one evening do. The back-office script
+checks both series afterwards.
+
 Then the other race: one sale, sent several times at once under one idempotency
 key — a till whose retries overlap its first attempt. Exactly one of them may
 create the sale; every other one answers with it (200, ``replayed``), or is
@@ -82,16 +88,18 @@ def main():
 
     status, before = call("GET", f"/organizers/{ORG}/events/{EVENT}/openpos/summary/", token=token)
     print(f"before : {before['event']}")
-    print(f"firing {parallel} concurrent checkouts of 1x {item['name']}…")
+    print(f"firing {parallel} concurrent checkouts of 1x {item['name']}, cash and card…")
 
-    def sell(_index):
-        return call("POST", f"/organizers/{ORG}/events/{EVENT}/openpos/checkout/", {
+    def sell(index):
+        body = {
             "idempotency_key": str(uuid.uuid4()),
             "positions": [{"item": item["id"], "count": 1}],
-            "payment_type": "cash",
-            "cash_given": item["price"],
+            "payment_type": "card" if index % 2 else "cash",
             "cashier": "load",
-        }, token)
+        }
+        if body["payment_type"] == "cash":
+            body["cash_given"] = item["price"]
+        return call("POST", f"/organizers/{ORG}/events/{EVENT}/openpos/checkout/", body, token)
 
     with ThreadPoolExecutor(max_workers=parallel) as pool:
         results = list(pool.map(sell, range(parallel)))

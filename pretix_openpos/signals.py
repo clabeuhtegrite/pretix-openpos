@@ -1,16 +1,18 @@
+from django.db.models.signals import post_save, pre_save
 from django.dispatch import receiver
 from django.urls import resolve, reverse
 from django.utils.translation import gettext_lazy as _
 from pretix.api.signals import register_device_security_profile
+from pretix.base.models import Invoice
 from pretix.base.signals import (
-    event_copy_data, order_canceled, order_reactivated, periodic_task, register_payment_providers,
+    build_invoice_data, event_copy_data, order_canceled, order_reactivated, periodic_task, register_payment_providers,
     register_sales_channel_types,
 )
 from pretix.control.signals import nav_event, nav_organizer
 from pretix.helpers.periodic import minimum_interval
 
 from .arrivals import EventArrivalsView
-from .association_views import AssociationsView, StatementsView
+from .association_views import AssociationsView, InvoicesView
 from .channels import PosSalesChannelType
 from .devices import DevicesView
 from .drawer_views import can_read_drawers
@@ -70,6 +72,40 @@ def openpos_order_reactivated(sender, order, **kwargs):
     record_reactivation(order)
 
 
+@receiver(pre_save, sender=Invoice, dispatch_uid="openpos_invoice_numbering")
+def openpos_invoice_numbering(sender, instance, raw=False, **kwargs):
+    """
+    An invoice about to be numbered, put in the series of whoever took its money.
+
+    Django's signal rather than one of pretix': pretix numbers an invoice inside
+    ``Invoice.save`` and sends nothing before. See :mod:`.issuers`, which also
+    checks the event runs this plugin, since a model signal is sent for every
+    invoice of every event.
+    """
+    if raw:
+        return
+    from .issuers import on_numbering
+
+    on_numbering(instance)
+
+
+@receiver(post_save, sender=Invoice, dispatch_uid="openpos_invoice_issued")
+def openpos_invoice_issued(sender, instance, created=False, raw=False, **kwargs):
+    if raw:
+        return
+    from .issuers import on_saved
+
+    on_saved(instance, created)
+
+
+@receiver(build_invoice_data, dispatch_uid="openpos_build_invoice_data")
+def openpos_build_invoice_data(sender, invoice, **kwargs):
+    """An invoice built or rebuilt: its seller back where pretix put the event's."""
+    from .issuers import on_built
+
+    on_built(invoice)
+
+
 @receiver(periodic_task, dispatch_uid="openpos_sumup_reconcile")
 @minimum_interval(minutes_after_success=5, minutes_after_error=5)
 def openpos_sumup_reconcile(sender, **kwargs):
@@ -126,7 +162,7 @@ def openpos_nav_event(sender, request=None, **kwargs):
         for label, name, view in (
             (_("Who sells what"), "categories", CategoriesView),
             (_("Sales"), "sales", SalesView),
-            (_("Statements"), "statements", StatementsView),
+            (_("Invoices by association"), "invoices", InvoicesView),
             (_("Arrivals"), "event_arrivals", EventArrivalsView),
         )
         if request.user.has_event_permission(
@@ -219,7 +255,7 @@ def openpos_nav_organizer(sender, request=None, **kwargs):
             }
         )
     # Behind the organizer's settings, like the card readers: saying whose
-    # account holds whose money is a decision about the associations' money.
+    # account the money lands in decides in whose name it is invoiced.
     if request.user.has_organizer_permission(
         request.organizer, AssociationsView.permission, request=request
     ):
@@ -231,7 +267,7 @@ def openpos_nav_organizer(sender, request=None, **kwargs):
                     kwargs={"organizer": request.organizer.slug},
                 ),
                 "icon": "users",
-                "active": here and url.url_name == "associations",
+                "active": here and url.url_name in ("associations", "association", "association.new"),
             }
         )
     return nav

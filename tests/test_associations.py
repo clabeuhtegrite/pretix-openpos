@@ -91,86 +91,186 @@ def test_an_empty_page_says_what_it_is_for(backoffice, organizer):
     assert 'name="sumup_holder"' not in page
 
 
-# -- the list --------------------------------------------------------------------
+# -- the list and each association's page -----------------------------------
+
+
+def association_url(organizer, association=None):
+    return associations_url(organizer) + (f"{association.pk}/" if association else "new/")
+
+
+def profile(**changes):
+    """What the form posts for a complete association, with ``changes`` on top."""
+    data = {
+        "action": "save",
+        "name": "Les Portiers",
+        "address": "12 rue des Lilas",
+        "zipcode": "75011",
+        "city": "Paris",
+        "country": "FR",
+        "siret": "123 456 789 00012",
+        "vat_id": "",
+        "invoice_prefix": "PORT-",
+        "invoice_footer": "Association loi 1901",
+    }
+    data.update(changes)
+    return data
 
 
 @pytest.mark.django_db
-def test_an_association_is_added_renamed_and_deleted(backoffice, organizer):
-    response = backoffice.post(associations_url(organizer), {"action": "create", "new-name": "Les Portiers"})
+def test_an_association_is_added_changed_and_deleted(backoffice, organizer):
+    response = backoffice.post(association_url(organizer), profile())
     assert response.status_code == 302
     association = PosAssociation.objects.get()
-    assert association.organizer == organizer
+    assert (association.organizer, association.invoice_prefix, association.can_issue) == (organizer, "PORT-", True)
 
-    backoffice.post(associations_url(organizer), {
-        "action": "save", "association": association.pk, f"a{association.pk}-name": "Portiers",
-    })
+    listed = backoffice.get(associations_url(organizer)).content.decode()
+    assert "Numbered PORT-…" in listed
+    assert association_url(organizer, association) in listed
+
+    backoffice.post(association_url(organizer, association), profile(name="Portiers", city="Lyon"))
     association.refresh_from_db()
-    assert association.name == "Portiers"
+    assert (association.name, association.city) == ("Portiers", "Lyon")
 
-    backoffice.post(associations_url(organizer), {"action": "delete", "association": association.pk})
+    backoffice.post(association_url(organizer, association), {"action": "delete"})
     assert not PosAssociation.objects.exists()
 
     assert str(association) == "Portiers"
     assert history(organizer, "pretix_openpos.association.created") == ["An association was added: Les Portiers."]
     assert history(organizer, "pretix_openpos.association.changed") == [
-        "The association Les Portiers was renamed Portiers."
+        "The association Les Portiers, now Portiers, was changed: name, city."
     ]
     assert history(organizer, "pretix_openpos.association.deleted") == ["The association Portiers was deleted."]
 
 
 @pytest.mark.django_db
-def test_saving_a_name_unchanged_writes_no_history(backoffice, organizer, portiers):
-    backoffice.post(associations_url(organizer), {
-        "action": "save", "association": portiers.pk, f"a{portiers.pk}-name": "Les Portiers",
-    })
+def test_the_page_of_an_association_shows_what_it_says(backoffice, organizer, portiers):
+    page = backoffice.get(association_url(organizer, portiers)).content.decode()
 
-    assert history(organizer, "pretix_openpos.association.changed") == []
+    assert 'value="Les Portiers"' in page
+    assert "does not invoice yet" in page
+    assert "Nothing names this association yet, so it can be deleted." in page
+
+
+@pytest.mark.django_db
+def test_changing_one_field_says_which(backoffice, organizer):
+    backoffice.post(association_url(organizer), profile())
+    association = PosAssociation.objects.get()
+
+    backoffice.post(association_url(organizer, association), profile(invoice_prefix="LP-"))
+    backoffice.post(association_url(organizer, association), profile(invoice_prefix="LP-"))
+
+    assert history(organizer, "pretix_openpos.association.changed") == [
+        "The association Les Portiers was changed: invoice number prefix."
+    ]
+
+
+@pytest.mark.django_db
+def test_an_invoice_needs_an_address_and_a_prefix(backoffice, organizer):
+    response = backoffice.post(association_url(organizer), profile(address="", invoice_prefix=""))
+
+    assert response.status_code == 200
+    assert response.content.decode().count("This field is required.") == 2
+    assert not PosAssociation.objects.exists()
 
 
 @pytest.mark.django_db
 def test_two_associations_cannot_share_a_name(backoffice, organizer, portiers, comptoir):
-    """Whatever the case: two lines called the same are a statement nobody can read."""
-    created = backoffice.post(associations_url(organizer), {"action": "create", "new-name": "les portiers"})
-    renamed = backoffice.post(associations_url(organizer), {
-        "action": "save", "association": comptoir.pk, f"a{comptoir.pk}-name": "LES PORTIERS",
-    })
+    """Whatever the case: two sellers called the same are two nobody can tell apart."""
+    created = backoffice.post(association_url(organizer), profile(name="les portiers"))
+    renamed = backoffice.post(
+        association_url(organizer, comptoir), profile(name="LES PORTIERS", invoice_prefix="COMPT-")
+    )
 
-    assert created.status_code == 200
     assert "There is already an association called “les portiers”." in created.content.decode()
-    assert renamed.status_code == 200
     assert "There is already an association called “LES PORTIERS”." in renamed.content.decode()
     assert sorted(PosAssociation.objects.values_list("name", flat=True)) == ["Le Comptoir", "Les Portiers"]
 
 
 @pytest.mark.django_db
+def test_two_associations_cannot_share_a_prefix(backoffice, organizer, portiers):
+    portiers.invoice_prefix = "PORT-"
+    portiers.save()
+
+    response = backoffice.post(association_url(organizer), profile(name="Le Comptoir", invoice_prefix="port-"))
+
+    assert "“Les Portiers” already numbers its invoices with this prefix." in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_a_prefix_only_takes_what_an_invoice_number_can_hold(backoffice, organizer):
+    response = backoffice.post(association_url(organizer), profile(invoice_prefix="PORT!"))
+
+    assert "Use only the characters A-Z, a-z, 0-9, -./:# here." in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_a_prefix_the_event_s_invoices_use_would_not_start_from_1(backoffice, organizer, event, ticket):
+    from .test_invoice_issuers import bought_online, invoiced
+
+    invoiced(bought_online(event))
+
+    response = backoffice.post(association_url(organizer), profile(invoice_prefix="SOIREE-"))
+
+    assert "Invoices numbered with this prefix already exist in another name." in response.content.decode()
+
+
+@pytest.mark.django_db
+def test_an_association_keeps_its_own_prefix_once_it_has_invoiced(backoffice, organizer, event, ticket):
+    from .test_invoice_issuers import bought_online, invoiced
+
+    backoffice.post(association_url(organizer), profile(invoice_prefix="PORT-%Y-"))
+    association = PosAssociation.objects.get()
+    event.settings.set("openpos_online_holder", str(association.pk))
+    invoice = invoiced(bought_online(event))
+    assert invoice.number.endswith("-00001")
+
+    response = backoffice.post(
+        association_url(organizer, association), profile(invoice_prefix="PORT-%Y-", city="Lyon")
+    )
+
+    assert response.status_code == 302
+    listed = backoffice.get(associations_url(organizer)).content.decode()
+    assert invoice.number in listed
+    assert "It has issued 1 invoice, which names it." in listed
+
+
+@pytest.mark.django_db
 def test_the_same_name_is_fine_in_another_organizer(backoffice, organizer, portiers):
     other = Organizer.objects.create(name="Voisins", slug="voisins")
-    PosAssociation.objects.create(organizer=other, name="Le Comptoir")
+    PosAssociation.objects.create(organizer=other, name="Le Comptoir", invoice_prefix="COMPT-")
 
-    backoffice.post(associations_url(organizer), {"action": "create", "new-name": "Le Comptoir"})
+    backoffice.post(association_url(organizer), profile(name="Le Comptoir", invoice_prefix="COMPT-"))
 
     assert PosAssociation.objects.filter(organizer=organizer, name="Le Comptoir").exists()
 
 
 @pytest.mark.django_db
-def test_an_association_still_named_somewhere_stays(backoffice, organizer, event, portiers):
+def test_an_association_still_named_somewhere_stays(backoffice, organizer, event, ticket, portiers):
+    from .test_invoice_issuers import bought_online, invoiced
+
+    for field, value in profile().items():
+        if field not in ("action", "name"):
+            setattr(portiers, field, value)
+    portiers.save()
     organizer.settings.set("openpos_sumup_holder", str(portiers.pk))
     PosDrawer.objects.create(organizer=organizer, name="Caisse du bar", held_by=portiers)
-    event.settings.set("openpos_share_door", str(portiers.pk))
+    event.settings.set("openpos_online_holder", str(portiers.pk))
+    invoiced(bought_online(event))
+    invoiced(bought_online(event))
 
-    response = backoffice.post(
-        associations_url(organizer), {"action": "delete", "association": portiers.pk}, follow=True
-    )
+    response = backoffice.post(association_url(organizer, portiers), {"action": "delete"}, follow=True)
 
     assert PosAssociation.objects.filter(pk=portiers.pk).exists()
     page = response.content.decode()
     assert "“Les Portiers” is still in use, so it stays." in page
-    assert "It holds the SumUp account&#x27;s money." in page
-    assert "It holds the cash of: Caisse du bar." in page
-    assert "It counts a part of: Soirée." in page
-    # Said on the list too, where the delete button is not.
-    listed = backoffice.get(associations_url(organizer)).content.decode()
-    assert 'value="delete"' not in listed
+    assert "It has issued 2 invoices, which name it." in page
+    assert "It invoices the cards taken on the SumUp account." in page
+    assert "It invoices the cash of: Caisse du bar." in page
+    assert "It invoices the online ticketing of: Soirée." in page
+    # Said on its page too, where the delete button is not.
+    own = backoffice.get(association_url(organizer, portiers)).content.decode()
+    assert 'value="delete"' not in own
+    assert "This association cannot be deleted:" in own
 
 
 @pytest.mark.django_db
@@ -180,21 +280,16 @@ def test_what_names_an_association_is_read_in_its_own_organizer_only(organizer, 
     elsewhere = Event.objects.create(
         organizer=other, name="Ailleurs", slug="ailleurs", date_from=now() + timedelta(days=1),
     )
-    elsewhere.settings.set("openpos_share_bar", str(portiers.pk))
+    elsewhere.settings.set("openpos_online_holder", str(portiers.pk))
 
     assert uses(portiers) == []
 
 
 @pytest.mark.django_db
-@pytest.mark.parametrize("post", [
-    {"action": "save", "association": "999999"},
-    {"action": "delete", "association": "nope"},
-    {"action": "delete"},
-    {"action": "nonsense", "association": "{pk}"},
-])
-def test_what_names_no_association_of_this_organizer_is_not_found(backoffice, organizer, portiers, post):
-    post = {key: value.format(pk=portiers.pk) for key, value in post.items()}
-
+@pytest.mark.parametrize("post", [{"action": "nonsense"}, {}])
+def test_a_post_that_says_nothing_is_not_found(backoffice, organizer, portiers, post):
+    assert backoffice.post(association_url(organizer, portiers), post).status_code == 404
+    assert backoffice.post(association_url(organizer), {"action": "delete"}).status_code == 404
     assert backoffice.post(associations_url(organizer), post).status_code == 404
 
 
@@ -203,7 +298,8 @@ def test_another_organizer_s_association_is_not_found(backoffice, organizer):
     other = Organizer.objects.create(name="Voisins", slug="voisins")
     theirs = PosAssociation.objects.create(organizer=other, name="Voisins")
 
-    response = backoffice.post(associations_url(organizer), {"action": "delete", "association": theirs.pk})
+    assert backoffice.get(association_url(organizer, theirs)).status_code == 404
+    response = backoffice.post(association_url(organizer, theirs), {"action": "delete"})
 
     assert response.status_code == 404
     assert PosAssociation.objects.filter(pk=theirs.pk).exists()
@@ -219,7 +315,7 @@ def test_whose_account_holds_the_money_is_saved_and_written_down(backoffice, org
 
     page = backoffice.get(associations_url(organizer)).content.decode()
     assert f'name="drawer_{bar.pk}"' in page
-    # Put away, and still read by the statements of the evenings it was used on.
+    # Put away, and can be brought back: its cash is still somebody's to invoice.
     assert f'name="drawer_{old.pk}"' in page
 
     backoffice.post(associations_url(organizer), {
@@ -232,7 +328,7 @@ def test_whose_account_holds_the_money_is_saved_and_written_down(backoffice, org
     old.refresh_from_db()
     assert (bar.held_by, old.held_by) == (comptoir, None)
     (entry,) = history(organizer, "pretix_openpos.holders.changed")
-    assert "Who holds the money was changed:" in entry
+    assert "Who invoices what is taken on site was changed:" in entry
     assert "SumUp account: nobody → Les Portiers" in entry
     assert "cash drawer Caisse du bar: nobody → Le Comptoir" in entry
     assert "Ancienne caisse" not in entry
@@ -260,7 +356,7 @@ def test_an_entry_that_changed_nothing_still_reads(organizer, event):
     event.log_action("pretix_openpos.shares.changed", data={})
 
     assert history(organizer, "pretix_openpos.holders.changed") == [
-        "Who holds the money was saved with nothing changed."
+        "Who invoices what is taken on site was saved with nothing changed."
     ]
     (entry,) = event.all_logentries().filter(action_type="pretix_openpos.shares.changed")
     assert str(entry.display()) == "Who counts what was saved with nothing changed."
@@ -289,7 +385,7 @@ def test_a_holder_that_is_not_there_changes_nothing(backoffice, organizer, porti
 def test_without_a_drawer_the_page_says_where_the_cash_goes(backoffice, organizer, portiers):
     page = backoffice.get(associations_url(organizer)).content.decode()
 
-    assert "the cash of every sale counts as" in page
+    assert "cash sales are invoiced in the" in page
     assert f"/control/organizer/{organizer.slug}/openpos/drawers/" in page
 
 
@@ -307,29 +403,73 @@ def test_a_drawer_kept_by_an_association_keeps_it(organizer, portiers):
 # -- a copied event ------------------------------------------------------------
 
 
-@pytest.mark.django_db
-def test_a_copy_in_the_same_organizer_keeps_who_counts_what(event, portiers, comptoir):
-    event.settings.set("openpos_share_door", str(portiers.pk))
-    event.settings.set("openpos_share_bar", str(comptoir.pk))
+def a_copy(event, organizer=None):
     copy = Event.objects.create(
-        organizer=event.organizer, name="Soirée suivante", slug="soiree-2",
+        organizer=organizer or event.organizer, name="Soirée suivante", slug="soiree-2",
         date_from=now() + timedelta(days=8),
     )
-
     copy.copy_data_from(event)
+    return copy
 
-    assert copy.settings.get("openpos_share_door") == str(portiers.pk)
-    assert copy.settings.get("openpos_share_bar") == str(comptoir.pk)
+
+@pytest.mark.django_db
+def test_a_copy_in_the_same_organizer_keeps_who_invoices_online_but_not_its_numbering(event, portiers):
+    event.settings.set("openpos_online_holder", str(portiers.pk))
+    event.settings.set("openpos_invoice_series", "FEST-")
+
+    copy = a_copy(event)
+
+    assert copy.settings.get("openpos_online_holder") == str(portiers.pk)
+    # Kept, it would number on from the event it was copied from.
+    assert copy.settings.get("openpos_invoice_series") is None
 
 
 @pytest.mark.django_db
 def test_a_copy_into_another_organizer_forgets_it(event, portiers):
-    event.settings.set("openpos_share_door", str(portiers.pk))
+    event.settings.set("openpos_online_holder", str(portiers.pk))
     other = Organizer.objects.create(name="Voisins", slug="voisins")
-    copy = Event.objects.create(
-        organizer=other, name="Soirée", slug="soiree", date_from=now() + timedelta(days=8),
+
+    copy = a_copy(event, organizer=other)
+
+    assert copy.settings.get("openpos_online_holder") is None
+
+
+# -- the history ----------------------------------------------------------------
+
+
+@pytest.mark.django_db
+def test_a_renaming_written_by_0_26_still_reads(organizer):
+    organizer.log_action(
+        "pretix_openpos.association.changed",
+        data={"association": 1, "name": "Portiers", "name_before": "Les Portiers"},
     )
 
-    copy.copy_data_from(event)
+    assert history(organizer, "pretix_openpos.association.changed") == [
+        "The association Les Portiers was renamed Portiers."
+    ]
 
-    assert copy.settings.get("openpos_share_door") is None
+
+@pytest.mark.django_db
+def test_a_field_the_history_no_longer_knows_is_named_as_written(organizer):
+    organizer.log_action(
+        "pretix_openpos.association.changed",
+        data={"association": 1, "name": "Portiers", "name_before": "Portiers", "fields": ["logo"]},
+    )
+
+    assert history(organizer, "pretix_openpos.association.changed") == [
+        "The association Portiers was changed: logo."
+    ]
+
+
+@pytest.mark.django_db
+def test_who_counted_what_in_0_26_still_reads(event):
+    event.log_action("pretix_openpos.shares.changed", data={"changed": [
+        {"part": "door", "name": "Les Portiers", "name_before": None},
+        {"part": "online_holder", "name": None, "name_before": "Le Comptoir"},
+    ]})
+
+    (entry,) = event.all_logentries().filter(action_type="pretix_openpos.shares.changed")
+    text = str(entry.display())
+    assert "Who counts what was changed:" in text
+    assert "Door: nobody → Les Portiers" in text
+    assert "online payments held by: Le Comptoir → nobody" in text

@@ -7,7 +7,7 @@ from django.core.cache import cache
 from django.db import IntegrityError, models, transaction
 from django.utils.timezone import now
 from django.utils.translation import gettext_lazy as _, pgettext_lazy
-from pretix.base.models import Device, Event, ItemCategory, Order, Organizer, User
+from pretix.base.models import Device, Event, Invoice, ItemCategory, Order, Organizer, User
 
 #: previous_hash of the very first sale of an event.
 GENESIS_HASH = "0" * 64
@@ -892,47 +892,88 @@ class PosCategory(models.Model):
 
 class PosAssociation(models.Model):
     """
-    One of the associations that run an organizer's evenings together.
+    One of the associations that run an organizer's evenings together, as its
+    invoices name it.
 
-    An evening is often several associations' at once: one sells the tickets
-    online, another takes the money at the door, a third runs the bar — and
-    each keeps its own books. pretix knows one organizer and, per event, one
-    issuer of invoices; nothing in it says which of the three a euro belongs
-    to. This row is the name that answers, and the statements screen
-    (:mod:`pretix_openpos.statements`) is what reads it.
+    An evening is often several associations' at once, and each keeps its own
+    books: the one the webshop's payments are made to sells the tickets bought
+    online, the one the SumUp account belongs to sells what a card paid for on
+    site, the one keeping a drawer sells what went into it in cash. Each is a
+    seller in its own right, so each issues its own invoices — in its name,
+    with its address, in its own unbroken series of numbers. pretix knows one
+    issuer per event; :mod:`pretix_openpos.issuers` puts this one in its place.
 
-    Organizer-level, like the drawers and the SumUp account it may be said to
-    hold the money of: the bar's association is the bar's association whichever
-    evening is on. Which association counts which part of an evening is said
-    per event, in the event's settings (:mod:`pretix_openpos.associations`),
-    because it is a fact about that evening, and a copied event keeps it.
+    Organizer-level, like the drawers and the SumUp account it may hold: the
+    bar's association is the bar's association whichever evening is on, and
+    its numbering runs on from one evening to the next.
 
-    Nothing is written on a sale. A statement is computed from the journal and
-    the orders with the settings as they stand, so a category reserved the
-    morning after puts that evening right too. The other side of that is the
-    reason an association cannot be deleted while anything still names it:
-    the statements of past evenings would change hands without a word.
+    One that has issued an invoice is never deleted: the invoice names it, and
+    pretix never deletes an invoice either.
     """
 
     organizer = models.ForeignKey(
         Organizer, on_delete=models.CASCADE, related_name="openpos_associations"
     )
+    #: As it is printed at the top of its invoices.
     name = models.CharField(max_length=190, verbose_name=_("Name"))
+    # Everything below keeps its empty default in the database itself, not
+    # only in Python: 0.26.x, put back after 0.27.0, adds an association
+    # without these columns (see migration 0014).
+    address = models.TextField(blank=True, default="", db_default="", verbose_name=_("Address"))
+    zipcode = models.CharField(max_length=30, blank=True, default="", db_default="", verbose_name=_("ZIP code"))
+    city = models.CharField(max_length=190, blank=True, default="", db_default="", verbose_name=_("City"))
+    #: A country code, as pretix keeps the event's own issuer's.
+    country = models.CharField(max_length=2, blank=True, default="", db_default="", verbose_name=_("Country"))
+    #: Printed at the foot of its invoices. Not pretix' "tax ID", which its
+    #: French invoice calls a VAT number.
+    siret = models.CharField(max_length=32, blank=True, default="", db_default="", verbose_name=_("SIRET"))
+    #: Printed under its address, when it has one.
+    vat_id = models.CharField(max_length=190, blank=True, default="", db_default="", verbose_name=_("VAT ID"))
+    #: What its invoice numbers start with. Numbers follow on per prefix across
+    #: all of the organizer's events, which is what makes the series its own.
+    invoice_prefix = models.CharField(
+        max_length=100, blank=True, default="", db_default="", verbose_name=_("Invoice number prefix")
+    )
+    #: The legal wording at the foot of every page, under the SIRET.
+    invoice_footer = models.TextField(blank=True, default="", db_default="", verbose_name=_("Invoice footer"))
     created = models.DateTimeField(auto_now_add=True)
+
+    #: What no invoice goes out without. An association missing one of these
+    #: is not put on an invoice: its sales are invoiced in the event's name, as
+    #: they were before anybody named it.
+    REQUIRED = ("address", "zipcode", "city", "country", "invoice_prefix")
 
     class Meta:
         verbose_name = _("Association")
         verbose_name_plural = _("Associations")
         ordering = ("name", "pk")
         constraints = [
-            # Two associations of one name are two statements nobody can tell apart.
+            # Two associations of one name are two sellers nobody can tell apart.
             models.UniqueConstraint(
                 fields=["organizer", "name"], name="openpos_association_unique_name"
+            ),
+            # Two associations of one prefix would share one series of numbers.
+            models.UniqueConstraint(
+                fields=["organizer", "invoice_prefix"],
+                condition=~models.Q(invoice_prefix=""),
+                name="openpos_association_unique_prefix",
             ),
         ]
 
     def __str__(self):
         return self.name
+
+    def missing(self):
+        """What its invoices still need, as the form labels it."""
+        return [
+            self._meta.get_field(field).verbose_name
+            for field in self.REQUIRED
+            if not (getattr(self, field) or "").strip()
+        ]
+
+    @property
+    def can_issue(self):
+        return not self.missing()
 
 
 class PosDrawer(models.Model):
@@ -968,13 +1009,9 @@ class PosDrawer(models.Model):
     #: with it — so this is how one stops being offered: out of the list and
     #: out of the tills' choice, its evenings still there to read.
     archived_at = models.DateTimeField(null=True, blank=True)
-    #: The association whose bank account this drawer's cash ends up in, if
-    #: anybody has said.
-    #:
-    #: Only the statements read it, to say who owes whom when the bar's
-    #: association keeps a drawer the door also sold into. Empty is the usual
-    #: case and means no such thing: the cash of each sale is counted as held
-    #: by the association the sale belongs to.
+    #: The association whose cash this drawer holds, and so the one that
+    #: invoices every cash sale that went into it. Empty until somebody says,
+    #: and then those sales are invoiced in the event's name.
     held_by = models.ForeignKey(
         PosAssociation, null=True, blank=True, on_delete=models.PROTECT,
         related_name="drawers", verbose_name=_("Held by"),
@@ -1248,3 +1285,43 @@ class PosDrawerEntry(models.Model):
         entry.hash = entry.compute_hash()
         entry.save()
         return entry
+
+
+class PosInvoiceIssuer(models.Model):
+    """
+    The association an invoice was issued in the name of, and for which money.
+
+    Written as pretix numbers the invoice (:mod:`pretix_openpos.issuers`) and
+    never changed afterwards: the number already says which series the invoice
+    is in, and this says whose series that is. A rebuild of the invoice from the
+    back office reads it to put the same seller back on the page; a credit note,
+    or a second invoice of the same order, to follow the first one; the invoices
+    page, to give each association its own.
+
+    An invoice issued in the event's name has none.
+    """
+
+    VIA_ONLINE = "online"
+    VIA_CARD = "card"
+    VIA_CASH = "cash"
+    VIA_CHOICES = (
+        (VIA_ONLINE, _("Online ticketing")),
+        (VIA_CARD, _("Card on site")),
+        (VIA_CASH, _("Cash")),
+    )
+
+    invoice = models.OneToOneField(
+        Invoice, on_delete=models.CASCADE, related_name="openpos_issuer"
+    )
+    association = models.ForeignKey(
+        PosAssociation, on_delete=models.PROTECT, related_name="invoices"
+    )
+    via = models.CharField(max_length=16, choices=VIA_CHOICES)
+    #: For cash, the drawer the money went into, whose keeper issued it.
+    drawer = models.ForeignKey(
+        PosDrawer, null=True, blank=True, on_delete=models.PROTECT, related_name="+"
+    )
+
+    class Meta:
+        verbose_name = _("Invoice issuer")
+        verbose_name_plural = _("Invoice issuers")

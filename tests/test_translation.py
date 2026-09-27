@@ -88,6 +88,34 @@ def test_the_compiled_catalogue_matches_its_source():
     )
 
 
+def test_no_french_entry_is_hidden_by_pretix_s_own():
+    """
+    Django looks a message up in pretix' catalogue before this plugin's, since
+    pretix comes first in the installed apps. An English string both define is
+    shown in pretix' French whatever ours says, and our entry only misleads
+    whoever reads it: the labels of an association's profile came out that way.
+    So the two must agree, and a wording of our own needs a string of our own.
+    """
+    import gettext as gettext_module
+    from pathlib import Path
+
+    import pretix
+
+    def compiled(path):
+        with path.open("rb") as handle:
+            return gettext_module.GNUTranslations(handle)._catalog
+
+    ours = compiled(Path(__file__).resolve().parent.parent / "pretix_openpos/locale/fr/LC_MESSAGES/django.mo")
+    theirs = compiled(Path(pretix.__file__).resolve().parent / "locale/fr/LC_MESSAGES/django.mo")
+
+    hidden = {
+        msgid: {"ours": ours[msgid], "shown": theirs[msgid]}
+        for msgid in ours
+        if msgid and msgid in theirs and theirs[msgid] != ours[msgid]
+    }
+    assert hidden == {}
+
+
 @pytest.mark.django_db
 def test_a_refusal_the_till_reads_comes_back_in_french(till, ticket):
     """
@@ -341,37 +369,42 @@ def test_a_till_told_it_may_not_sell_something_is_told_in_french(
 
 
 @pytest.mark.django_db
-def test_the_statements_read_in_french(backoffice, organizer, event, till, device, ticket):
+def test_the_invoices_by_association_read_in_french(backoffice, organizer, event, till, device, ticket):
     """
-    Each association's share, and who owes whom, in the language it is read in.
+    Who invoices what, and what each one invoiced, in the language it is read in.
 
-    Most of the page is sentences with the figures inside them, which is where
-    a ``blocktrans`` drifting from its catalogue entry falls back to English.
+    Most of the page is sentences with names and numbers inside them, which is
+    where a ``blocktrans`` drifting from its catalogue entry falls back to
+    English.
     """
     from pretix.base.models import User
 
     from pretix_openpos.models import PosAssociation, PosDevice, PosDrawer
 
+    from .test_invoice_issuers import a_seller
+
     User.objects.filter(email="boss@example.org").update(locale="fr")
-    portiers = PosAssociation.objects.create(organizer=organizer, name="Les Portiers")
+    portiers = a_seller(organizer, "Les Portiers", "PORT-")
     comptoir = PosAssociation.objects.create(organizer=organizer, name="Le Comptoir")
-    event.settings.set("openpos_share_door", str(portiers.pk))
+    event.settings.set("openpos_online_holder", str(portiers.pk))
     drawer = PosDrawer.objects.create(organizer=organizer, name="Caisse du bar", held_by=comptoir)
     PosDevice.objects.create(device=device, role=PosDevice.ROLE_DOOR, drawer=drawer)
     till.post("drawer/open", {"idempotency_key": "open-00001", "amount": "50.00"})
     sell(till, [{"item": ticket.pk, "count": 1}])
 
     page = backoffice.get(
-        f"/control/event/{organizer.slug}/{event.slug}/openpos/statements/"
+        f"/control/event/{organizer.slug}/{event.slug}/openpos/invoices/"
     ).content.decode()
 
-    assert "Relevés" in page
-    assert "Statements" not in page
-    assert "Qui compte quoi" in page
-    assert "Parts de la soirée" in page
-    assert "Personne ne compte encore ces parts : Ventes en ligne, Bar." in page
-    assert "<strong>Le Comptoir</strong> verse <strong>10,00\xa0€</strong> à <strong>Les Portiers</strong>" in page
-    assert "Le Comptoir détient 10,00\xa0€ pour Les Portiers : espèces de la caisse « Caisse du bar »." in page
+    assert "Factures par association" in page
+    assert "Invoices by association" not in page
+    assert "Qui facture quoi" in page
+    assert "Billetterie en ligne" in page
+    assert "Espèces de la caisse « Caisse du bar »" in page
+    assert "il manque à sa fiche : adresse, code postal, ville, pays, préfixe du numéro de facture." in page
+    assert "Au nom de l’événement" in page
+    assert "Espèces, caisse « Caisse du bar »" in page
+    assert "Vide, les factures de chaque association se suivent d’un événement à l’autre : PORT-00001" in page
 
 
 @pytest.mark.django_db
@@ -380,11 +413,17 @@ def test_the_associations_page_and_its_history_read_in_french(backoffice, organi
 
     User.objects.filter(email="boss@example.org").update(locale="fr")
     url = f"/control/organizer/{organizer.slug}/openpos/associations/"
-    backoffice.post(url, {"action": "create", "new-name": "Les Portiers"})
+    backoffice.post(url + "new/", {
+        "action": "save", "name": "Les Portiers", "address": "12 rue des Lilas", "zipcode": "75011",
+        "city": "Paris", "country": "FR", "invoice_prefix": "PORT-",
+    })
+    created = backoffice.post(url + "new/", {"action": "save", "name": "Le Comptoir"}).content.decode()
 
     page = backoffice.get(url).content.decode()
     history = backoffice.get(f"/control/organizer/{organizer.slug}/logs").content.decode()
 
-    assert "Qui détient l’argent" in page
-    assert "Paiements carte sur le compte SumUp" in page
+    assert "Qui facture ce qui est encaissé sur place" in page
+    assert "Cartes prises sur le compte SumUp" in page
+    assert "Numérotée PORT-…" in page
+    assert "Préfixe du numéro de facture" in created
     assert "Une association a été ajoutée : Les Portiers." in history

@@ -1,14 +1,14 @@
 {% extends "pretixcontrol/organizers/base.html" %}
 {% load i18n %}
-{% load bootstrap3 %}
 {% block title %}{% trans "Associations" %}{% endblock %}
 {% block content %}
     <h1>{% trans "Associations" %}</h1>
     <p class="text-muted">
         {% blocktrans trimmed %}
-            The associations that run the evenings together, each with its own books. Each event
-            then says which of them counts its online sales, its door and its bar, on its
-            statements page, and that page gives every association its share of the evening.
+            The associations that run the evenings together. Each one invoices the money it
+            receives, in its own name and in its own series of numbers: the tickets bought online
+            by the one named on each event's invoices page, the cards taken on site by the one the
+            SumUp account belongs to, and the cash of each drawer by the one that keeps it.
         {% endblocktrans %}
     </p>
 
@@ -18,35 +18,46 @@
                 <thead>
                 <tr>
                     <th>{% trans "Association" %}</th>
-                    <th>{% trans "Named in" %}</th>
+                    <th>{% trans "Numbering" %}</th>
+                    <th>{% trans "Last invoice" %}</th>
+                    <th></th>
                 </tr>
                 </thead>
                 <tbody>
                 {% for row in rows %}
                     <tr>
                         <td>
-                            <form action="" method="post" class="form-inline">
-                                {% csrf_token %}
-                                <input type="hidden" name="association" value="{{ row.association.pk }}">
-                                {% bootstrap_form_errors row.form type="non_fields" %}
-                                {% bootstrap_field row.form.name layout="inline" size="small" %}
-                                <button type="submit" name="action" value="save" class="btn btn-default btn-sm">
-                                    {% trans "Save" %}
-                                </button>
-                                {% if not row.uses %}
-                                    <button type="submit" name="action" value="delete" class="btn btn-danger btn-sm"
-                                            title="{% trans "Delete" %}">
-                                        <span class="fa fa-trash"></span>
-                                    </button>
-                                {% endif %}
-                            </form>
+                            <strong>{{ row.association.name }}</strong>
+                            {% for line in row.uses %}
+                                <br><small class="text-muted">{{ line }}</small>
+                            {% endfor %}
                         </td>
                         <td>
-                            {% for line in row.uses %}
-                                {{ line }}{% if not forloop.last %}<br>{% endif %}
-                            {% empty %}
-                                <span class="text-muted">{% trans "Nowhere yet." %}</span>
-                            {% endfor %}
+                            {% if row.missing %}
+                                <span class="text-warning">
+                                    <span class="fa fa-exclamation-triangle"></span>
+                                    {% trans "Not ready to invoice. Missing:" %}
+                                    {% for field in row.missing %}{{ field|lower }}{% if not forloop.last %}, {% endif %}{% endfor %}
+                                </span>
+                            {% else %}
+                                <span class="text-success"><span class="fa fa-check"></span></span>
+                                {% blocktrans trimmed with prefix=row.association.invoice_prefix %}
+                                    Numbered {{ prefix }}…
+                                {% endblocktrans %}
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if row.last %}
+                                {{ row.last.number }}
+                            {% else %}
+                                <span class="text-muted">{% trans "none yet" %}</span>
+                            {% endif %}
+                        </td>
+                        <td class="text-right">
+                            <a href="{{ row.url }}" class="btn btn-default btn-sm">
+                                <span class="fa fa-edit"></span>
+                                {% trans "Edit" %}
+                            </a>
                         </td>
                     </tr>
                 {% endfor %}
@@ -59,25 +70,21 @@
         </div>
     {% endif %}
 
-    <h3>{% trans "New association" %}</h3>
-    <form action="" method="post" class="form-inline">
-        {% csrf_token %}
-        {% bootstrap_form_errors create_form type="non_fields" %}
-        {% bootstrap_field create_form.name layout="inline" %}
-        <button type="submit" name="action" value="create" class="btn btn-primary">
+    <p>
+        <a href="{{ new_url }}" class="btn btn-primary">
             <span class="fa fa-plus"></span>
-            {% trans "Create" %}
-        </button>
-    </form>
+            {% trans "New association" %}
+        </a>
+    </p>
 
     {% if associations %}
-        <h3>{% trans "Who holds the money" %}</h3>
+        <h3>{% trans "Who invoices what is taken on site" %}</h3>
         <p class="text-muted">
             {% blocktrans trimmed %}
-                A card taken by a reader lands in the SumUp account, and a drawer's cash goes home
-                with whoever keeps it. Say whose each one is, and the statements say what it holds
-                of the others' money, and who owes whom. Money left on “—” counts as held by the
-                association it belongs to, and so do cards taken on a phone.
+                A card taken on site lands in the SumUp account, and a drawer's cash goes home with
+                whoever keeps it: each is invoiced by the association whose it is. Left on “—”, or
+                with an association whose profile is not complete, it is invoiced in the event's
+                name, as before.
             {% endblocktrans %}
         </p>
         <form action="" method="post">
@@ -88,12 +95,12 @@
                     <thead>
                     <tr>
                         <th>{% trans "Money" %}</th>
-                        <th>{% trans "Held by" %}</th>
+                        <th>{% trans "Invoiced by" %}</th>
                     </tr>
                     </thead>
                     <tbody>
                     <tr>
-                        <td><label for="op-sumup-holder">{% trans "Card payments on the SumUp account" %}</label></td>
+                        <td><label for="op-sumup-holder">{% trans "Cards taken on the SumUp account" %}</label></td>
                         <td>
                             <select name="sumup_holder" id="op-sumup-holder" class="form-control">
                                 <option value="">—</option>
@@ -137,8 +144,8 @@
             {% if not drawers %}
                 <p class="help-block">
                     {% blocktrans trimmed with url=drawers_url %}
-                        No <a href="{{ url }}">cash drawer</a> yet: the cash of every sale counts as
-                        held by the association it belongs to.
+                        No <a href="{{ url }}">cash drawer</a> yet: cash sales are invoiced in the
+                        event's name until the till selling them is given a drawer.
                     {% endblocktrans %}
                 </p>
             {% endif %}

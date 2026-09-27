@@ -47,12 +47,12 @@ urlpatterns = [
         views.CompareWithSumUpView.as_view(),
         name="sales.compare",
     ),
-    # Each association's share of the evening: event-level, like the takings
-    # it shares out, since which association counts what is said per event.
+    # The event's invoices by the association that issued them: event-level,
+    # since who invoices the online ticketing is said per event.
     re_path(
-        r"^control/event/(?P<organizer>[^/]+)/(?P<event>[^/]+)/openpos/statements/$",
-        association_views.StatementsView.as_view(),
-        name="statements",
+        r"^control/event/(?P<organizer>[^/]+)/(?P<event>[^/]+)/openpos/invoices/$",
+        association_views.InvoicesView.as_view(),
+        name="invoices",
     ),
     # One evening's arrivals, next to its takings: who came in, and when.
     re_path(
@@ -99,12 +99,22 @@ urlpatterns = [
         name="drawer.session",
     ),
     # Organizer-level: the associations that share the evenings are the same
-    # ones from one event to the next, and so are the SumUp account and the
-    # drawers whose money they hold.
+    # ones from one event to the next, their numbering runs on across events,
+    # and so are the SumUp account and the drawers whose money they invoice.
     re_path(
         r"^control/organizer/(?P<organizer>[^/]+)/openpos/associations/$",
         association_views.AssociationsView.as_view(),
         name="associations",
+    ),
+    re_path(
+        r"^control/organizer/(?P<organizer>[^/]+)/openpos/associations/new/$",
+        association_views.AssociationView.as_view(),
+        name="association.new",
+    ),
+    re_path(
+        r"^control/organizer/(?P<organizer>[^/]+)/openpos/associations/(?P<association>\d+)/$",
+        association_views.AssociationView.as_view(),
+        name="association",
     ),
 ]
 

@@ -272,19 +272,18 @@ def test_the_organizer_history_opens_with_every_kind_of_entry_on_it(
     backoffice.post(drawers, {"action": "restore", "drawer": bar.pk})
     # And the associations: two added, one renamed, given the SumUp money and
     # the drawer's cash, and the other one deleted.
-    associations = f"/control/organizer/{organizer.slug}/openpos/associations/"
-    backoffice.post(associations, {"action": "create", "new-name": "Les Portiers"})
-    backoffice.post(associations, {"action": "create", "new-name": "Voisins"})
+    from .test_associations import association_url, associations_url, profile
+
+    backoffice.post(association_url(organizer), profile())
+    backoffice.post(association_url(organizer), profile(name="Voisins", invoice_prefix="VOIS-"))
     portiers = PosAssociation.objects.get(name="Les Portiers")
-    backoffice.post(associations, {
-        "action": "save", "association": portiers.pk, f"a{portiers.pk}-name": "Portiers",
-    })
-    backoffice.post(associations, {
+    backoffice.post(association_url(organizer, portiers), profile(name="Portiers"))
+    backoffice.post(associations_url(organizer), {
         "action": "holders", "sumup_holder": portiers.pk, f"drawer_{bar.pk}": portiers.pk,
     })
-    backoffice.post(associations, {
-        "action": "delete", "association": PosAssociation.objects.get(name="Voisins").pk,
-    })
+    backoffice.post(
+        association_url(organizer, PosAssociation.objects.get(name="Voisins")), {"action": "delete"}
+    )
     # One of every kind the plugin writes on the organizer, or this proves less
     # than its name says.
     written = set(
@@ -312,7 +311,7 @@ def test_the_organizer_history_opens_with_every_kind_of_entry_on_it(
     assert f"The cash drawer Bar du haut was archived, and taken away from {device.name}." in page
     assert "The cash drawer Bar du haut was brought back from the archive." in page
     assert "An association was added: Les Portiers." in page
-    assert "The association Les Portiers was renamed Portiers." in page
+    assert "The association Les Portiers, now Portiers, was changed: name." in page
     assert "SumUp account: nobody → Portiers" in page
     assert "cash drawer Bar du haut: nobody → Portiers" in page
     assert "The association Voisins was deleted." in page

@@ -1,0 +1,72 @@
+{% extends "pretixcontrol/organizers/base.html" %}
+{% load i18n %}
+{% load bootstrap3 %}
+{% block title %}{% if association %}{{ association.name }}{% else %}{% trans "New association" %}{% endif %}{% endblock %}
+{% block content %}
+    <h1>
+        {% if association %}{{ association.name }}{% else %}{% trans "New association" %}{% endif %}
+        <small><a href="{{ list_url }}">{% trans "Associations" %}</a></small>
+    </h1>
+    <p class="text-muted">
+        {% blocktrans trimmed %}
+            What its invoices say about it. Every invoice for money it received is issued in this
+            name, with this address, and numbered in its own series. An invoice already issued
+            keeps what it said; a rebuild of it from an order's page takes what is here.
+        {% endblocktrans %}
+    </p>
+
+    {% if missing %}
+        <div class="alert alert-warning">
+            {% blocktrans trimmed %}
+                This association does not invoice yet: what it received is invoiced in the event's
+                name until these are filled in:
+            {% endblocktrans %}
+            {% for field in missing %}{{ field|lower }}{% if not forloop.last %}, {% endif %}{% endfor %}.
+        </div>
+    {% endif %}
+
+    <form action="" method="post" class="form-horizontal">
+        {% csrf_token %}
+        <input type="hidden" name="action" value="save">
+        {% bootstrap_form_errors form type="non_fields" %}
+        <fieldset>
+            <legend>{% trans "Seller" %}</legend>
+            {% bootstrap_field form.name layout="horizontal" %}
+            {% bootstrap_field form.address layout="horizontal" %}
+            {% bootstrap_field form.zipcode layout="horizontal" %}
+            {% bootstrap_field form.city layout="horizontal" %}
+            {% bootstrap_field form.country layout="horizontal" %}
+            {% bootstrap_field form.siret layout="horizontal" %}
+            {% bootstrap_field form.vat_id layout="horizontal" %}
+        </fieldset>
+        <fieldset>
+            <legend>{% trans "Invoices" %}</legend>
+            {% bootstrap_field form.invoice_prefix layout="horizontal" %}
+            {% bootstrap_field form.invoice_footer layout="horizontal" %}
+        </fieldset>
+        <div class="form-group submit-group">
+            <button type="submit" class="btn btn-primary btn-save">{% trans "Save" %}</button>
+        </div>
+    </form>
+
+    {% if association %}
+        <fieldset>
+            <legend>{% trans "Delete" %}</legend>
+            {% if uses %}
+                <p>{% trans "This association cannot be deleted:" %}</p>
+                <ul>
+                    {% for line in uses %}<li>{{ line }}</li>{% endfor %}
+                </ul>
+            {% else %}
+                <form action="" method="post">
+                    {% csrf_token %}
+                    <p>{% trans "Nothing names this association yet, so it can be deleted." %}</p>
+                    <button type="submit" name="action" value="delete" class="btn btn-danger">
+                        <span class="fa fa-trash"></span>
+                        {% trans "Delete" %}
+                    </button>
+                </form>
+            {% endif %}
+        </fieldset>
+    {% endif %}
+{% endblock %}

@@ -89,6 +89,27 @@ if [ -z "$TOKEN" ] || [ "$TOKEN" = "None" ]; then
 fi
 
 echo
+echo "==> an association invoicing the cards taken on site"
+# Before any sale: the card sales of the two scripts below go into its own
+# series of invoice numbers, the concurrency test's all at once, and the
+# back-office script then checks that series for a gap or a double. PostgreSQL
+# is where tills selling at the same instant really race for the next number.
+$COMPOSE exec -T pretix python -m pretix shell -c "
+from django_scopes import scopes_disabled
+from pretix.base.models import Organizer
+from pretix_openpos.models import PosAssociation
+with scopes_disabled():
+    organizer = Organizer.objects.get(slug='demo')
+    association = PosAssociation.objects.create(
+        organizer=organizer, name='Les Portiers', address='1 rue des Exemples',
+        zipcode='75000', city='Paris', country='FR', siret='00000000000000',
+        invoice_prefix='PORT-',
+    )
+    organizer.settings.set('openpos_sumup_holder', str(association.pk))
+    print('invoices the cards:', association.name, association.can_issue)
+"
+
+echo
 echo "==> smoke test: pair, sell, replay, cancel, count the takings"
 OPENPOS_BASE="$BASE" python3 dev/smoke_test.py "$TOKEN"
 
