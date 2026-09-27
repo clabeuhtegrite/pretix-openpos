@@ -2305,7 +2305,7 @@ msgstr "Qui"
 #: templates/pretix_openpos/sales.html:211
 #: templates/pretix_openpos/sales.html:262
 #: templates/pretix_openpos/sales.html:444
-#: templates/pretix_openpos/statements.html:270
+#: templates/pretix_openpos/statements.html:271
 msgid "Amount"
 msgstr "Montant"
 
@@ -2892,7 +2892,7 @@ msgstr ""
 
 #: templates/pretix_openpos/sales.html:372
 #: templates/pretix_openpos/sales.html:442
-#: templates/pretix_openpos/statements.html:268
+#: templates/pretix_openpos/statements.html:269
 msgid "Product"
 msgstr "Produit"
 
@@ -2913,18 +2913,18 @@ msgid "By product"
 msgstr "Par produit"
 
 #: templates/pretix_openpos/sales.html:443
-#: templates/pretix_openpos/statements.html:269
+#: templates/pretix_openpos/statements.html:270
 msgid "Quantity"
 msgstr "Quantité"
 
 #: templates/pretix_openpos/sales.html:451
-#: templates/pretix_openpos/statements.html:276
+#: templates/pretix_openpos/statements.html:277
 msgctxt "takings"
 msgid "No category"
 msgstr "Sans catégorie"
 
 #: templates/pretix_openpos/sales.html:470
-#: templates/pretix_openpos/statements.html:309
+#: templates/pretix_openpos/statements.html:310
 #, python-format
 msgid ""
 "%(amount)s of the takings comes from journal entries that name no product."
@@ -2934,30 +2934,30 @@ msgstr ""
 
 #: templates/pretix_openpos/sales.html:478
 #: templates/pretix_openpos/statements.html:131
-#: templates/pretix_openpos/statements.html:317
+#: templates/pretix_openpos/statements.html:318
 msgid "Deposits"
 msgstr "Consignes"
 
 #: templates/pretix_openpos/sales.html:482
-#: templates/pretix_openpos/statements.html:321
+#: templates/pretix_openpos/statements.html:322
 msgctxt "deposits"
 msgid "Taken"
 msgstr "Prises"
 
 #: templates/pretix_openpos/sales.html:487
-#: templates/pretix_openpos/statements.html:326
+#: templates/pretix_openpos/statements.html:327
 msgctxt "deposits"
 msgid "Handed back"
 msgstr "Rendues"
 
 #: templates/pretix_openpos/sales.html:494
-#: templates/pretix_openpos/statements.html:333
+#: templates/pretix_openpos/statements.html:334
 msgctxt "deposits"
 msgid "Balance"
 msgstr "Solde"
 
 #: templates/pretix_openpos/sales.html:500
-#: templates/pretix_openpos/statements.html:339
+#: templates/pretix_openpos/statements.html:340
 msgid ""
 "Kept apart from the products: a deposit is owed to whoever brings the cup "
 "back."
@@ -3171,24 +3171,26 @@ msgstr ""
 #: templates/pretix_openpos/statements.html:208
 #, python-format
 msgid ""
-"%(name)s: %(amount)s of the money is not in what was sold. That is an order "
-"paid in part, or refunded without being cancelled."
+"%(name)s: a difference of %(amount)s between the money taken and what was "
+"sold. It comes from an online order paid in part, or refunded without being "
+"cancelled."
 msgstr ""
-"%(name)s : %(amount)s de l’argent ne sont pas dans ce qui a été vendu. C’est "
-"une commande payée en partie, ou remboursée sans être annulée."
+"%(name)s : écart de %(amount)s entre l’argent encaissé et ce qui a été "
+"vendu. Il vient d’une commande en ligne payée en partie, ou remboursée sans "
+"être annulée."
 
-#: templates/pretix_openpos/statements.html:217
+#: templates/pretix_openpos/statements.html:218
 #, python-format
 msgid "One sale made in test mode is left out."
 msgid_plural "%(n)s sales made in test mode are left out."
 msgstr[0] "Une vente faite en mode test est laissée de côté."
 msgstr[1] "%(n)s ventes faites en mode test sont laissées de côté."
 
-#: templates/pretix_openpos/statements.html:226
+#: templates/pretix_openpos/statements.html:227
 msgid "Transfers between associations"
 msgstr "Virements entre associations"
 
-#: templates/pretix_openpos/statements.html:231
+#: templates/pretix_openpos/statements.html:232
 #, python-format
 msgid ""
 "<strong>%(payer)s</strong> pays <strong>%(amount)s</strong> to "
@@ -3197,22 +3199,22 @@ msgstr ""
 "<strong>%(payer)s</strong> verse <strong>%(amount)s</strong> à "
 "<strong>%(payee)s</strong>"
 
-#: templates/pretix_openpos/statements.html:237
+#: templates/pretix_openpos/statements.html:238
 #, python-format
 msgid "%(holder)s holds %(amount)s for %(owner)s: %(why)s."
 msgstr "%(holder)s détient %(amount)s pour %(owner)s : %(why)s."
 
-#: templates/pretix_openpos/statements.html:247
+#: templates/pretix_openpos/statements.html:248
 msgid "Nobody owes anybody: each association holds its own money."
 msgstr ""
 "Personne ne doit rien à personne : chaque association détient son propre "
 "argent."
 
-#: templates/pretix_openpos/statements.html:295
+#: templates/pretix_openpos/statements.html:296
 msgid "Fees"
 msgstr "Frais"
 
-#: templates/pretix_openpos/statements.html:352
+#: templates/pretix_openpos/statements.html:353
 msgid "Download as a spreadsheet (CSV)"
 msgstr "Télécharger en tableur (CSV)"
 

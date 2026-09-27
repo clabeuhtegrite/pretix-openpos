@@ -205,8 +205,9 @@
         {% if share.gap %}
             <p class="text-muted">
                 {% blocktrans trimmed with name=share.label amount=share.gap|money:currency %}
-                    {{ name }}: {{ amount }} of the money is not in what was sold. That is an order
-                    paid in part, or refunded without being cancelled.
+                    {{ name }}: a difference of {{ amount }} between the money taken and what was
+                    sold. It comes from an online order paid in part, or refunded without being
+                    cancelled.
                 {% endblocktrans %}
             </p>
         {% endif %}
