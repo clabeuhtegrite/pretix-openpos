@@ -338,3 +338,53 @@ def test_a_till_told_it_may_not_sell_something_is_told_in_french(
 
     assert response.status_code == 400
     assert response.json()["positions"][0] == "Cette caisse ne vend pas Bar."
+
+
+@pytest.mark.django_db
+def test_the_statements_read_in_french(backoffice, organizer, event, till, device, ticket):
+    """
+    Each association's share, and who owes whom, in the language it is read in.
+
+    Most of the page is sentences with the figures inside them, which is where
+    a ``blocktrans`` drifting from its catalogue entry falls back to English.
+    """
+    from pretix.base.models import User
+
+    from pretix_openpos.models import PosAssociation, PosDevice, PosDrawer
+
+    User.objects.filter(email="boss@example.org").update(locale="fr")
+    portiers = PosAssociation.objects.create(organizer=organizer, name="Les Portiers")
+    comptoir = PosAssociation.objects.create(organizer=organizer, name="Le Comptoir")
+    event.settings.set("openpos_share_door", str(portiers.pk))
+    drawer = PosDrawer.objects.create(organizer=organizer, name="Caisse du bar", held_by=comptoir)
+    PosDevice.objects.create(device=device, role=PosDevice.ROLE_DOOR, drawer=drawer)
+    till.post("drawer/open", {"idempotency_key": "open-00001", "amount": "50.00"})
+    sell(till, [{"item": ticket.pk, "count": 1}])
+
+    page = backoffice.get(
+        f"/control/event/{organizer.slug}/{event.slug}/openpos/statements/"
+    ).content.decode()
+
+    assert "Relevés" in page
+    assert "Statements" not in page
+    assert "Qui compte quoi" in page
+    assert "Parts de la soirée" in page
+    assert "Personne ne compte encore ces parts : Ventes en ligne, Bar." in page
+    assert "<strong>Le Comptoir</strong> verse <strong>10,00\xa0€</strong> à <strong>Les Portiers</strong>" in page
+    assert "Le Comptoir détient 10,00\xa0€ à Les Portiers : espèces de la caisse « Caisse du bar »." in page
+
+
+@pytest.mark.django_db
+def test_the_associations_page_and_its_history_read_in_french(backoffice, organizer):
+    from pretix.base.models import User
+
+    User.objects.filter(email="boss@example.org").update(locale="fr")
+    url = f"/control/organizer/{organizer.slug}/openpos/associations/"
+    backoffice.post(url, {"action": "create", "new-name": "Les Portiers"})
+
+    page = backoffice.get(url).content.decode()
+    history = backoffice.get(f"/control/organizer/{organizer.slug}/logs").content.decode()
+
+    assert "Qui détient l’argent" in page
+    assert "Paiements carte sur le compte SumUp" in page
+    assert "Une association a été ajoutée : Les Portiers." in history

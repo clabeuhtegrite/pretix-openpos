@@ -230,7 +230,7 @@ def test_the_organizer_history_opens_with_every_kind_of_entry_on_it(
     backoffice, organizer, device, sumup, till
 ):
     from pretix_openpos.logdisplay import organizer_entry_types
-    from pretix_openpos.models import PosDrawer
+    from pretix_openpos.models import PosAssociation, PosDrawer
 
     # An evening of setting up, through the real screens: a new key for the
     # account, a reader paired, given to a till, cleared and then removed.
@@ -270,6 +270,21 @@ def test_the_organizer_history_opens_with_every_kind_of_entry_on_it(
     backoffice.post(f"{drawers}{bar.pk}/{bar.sessions.get().pk}/", {"amount": ""})
     backoffice.post(f"{drawers}{bar.pk}/", {"action": "archive"})
     backoffice.post(drawers, {"action": "restore", "drawer": bar.pk})
+    # And the associations: two added, one renamed, given the SumUp money and
+    # the drawer's cash, and the other one deleted.
+    associations = f"/control/organizer/{organizer.slug}/openpos/associations/"
+    backoffice.post(associations, {"action": "create", "new-name": "Les Portiers"})
+    backoffice.post(associations, {"action": "create", "new-name": "Voisins"})
+    portiers = PosAssociation.objects.get(name="Les Portiers")
+    backoffice.post(associations, {
+        "action": "save", "association": portiers.pk, f"a{portiers.pk}-name": "Portiers",
+    })
+    backoffice.post(associations, {
+        "action": "holders", "sumup_holder": portiers.pk, f"drawer_{bar.pk}": portiers.pk,
+    })
+    backoffice.post(associations, {
+        "action": "delete", "association": PosAssociation.objects.get(name="Voisins").pk,
+    })
     # One of every kind the plugin writes on the organizer, or this proves less
     # than its name says.
     written = set(
@@ -296,6 +311,11 @@ def test_the_organizer_history_opens_with_every_kind_of_entry_on_it(
     assert "The cash drawer Bar du haut was closed from the back office, without a count." in page
     assert f"The cash drawer Bar du haut was archived, and taken away from {device.name}." in page
     assert "The cash drawer Bar du haut was brought back from the archive." in page
+    assert "An association was added: Les Portiers." in page
+    assert "The association Les Portiers was renamed Portiers." in page
+    assert "SumUp account: nobody → Portiers" in page
+    assert "cash drawer Bar du haut: nobody → Portiers" in page
+    assert "The association Voisins was deleted." in page
     for action_type in organizer_entry_types:
         assert action_type not in page
     # The key itself, which is the other thing this page must never show.

@@ -17,12 +17,18 @@ cannot see — so every lookup comes back empty, and the till behaves exactly as
 if nobody had set anything. Tickets sold at the door stop being checked in, and
 the free-amount and deposit buttons are gone, with no screen anywhere saying so.
 
+Which association counts which part of the evening is carried across as it is
+within one organizer: next Saturday is run by the same associations. From
+another organizer's event it is dropped, since that organizer's associations
+are not this one's; left in place it would read as nobody anyway.
+
 Who sells what is the same failure in another shape. It hangs off the category
 on purpose (see :class:`~pretix_openpos.models.PosCategory`), and the copied
 categories are new rows that nobody has reserved. Hung off the category, the
 restriction was meant to lapse only where an organiser had said nothing — which
 is not true of a copy, where the organiser said it once and expects it kept.
 """
+from .associations import EVENT_SETTINGS
 from .models import PosCategory
 
 #: The event settings that hold the id of one of the event's own rows, and the
@@ -64,6 +70,12 @@ def copy_pos_setup(event, other, maps):
         else:
             # A string, as the settings form writes it.
             event.settings.set(key, str(copy.pk))
+
+    if event.organizer_id != other.organizer_id:
+        for key in EVENT_SETTINGS:
+            copied_value = event.settings.get(key)
+            if copied_value is not None and copied_value == other.settings.get(key):
+                event.settings.delete(key)
 
     category_map = maps.get("category_map") or {}
     reserved = PosCategory.objects.filter(category__event=other).exclude(

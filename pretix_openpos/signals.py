@@ -10,6 +10,7 @@ from pretix.control.signals import nav_event, nav_organizer
 from pretix.helpers.periodic import minimum_interval
 
 from .arrivals import EventArrivalsView
+from .association_views import AssociationsView, StatementsView
 from .channels import PosSalesChannelType
 from .devices import DevicesView
 from .drawer_views import can_read_drawers
@@ -125,6 +126,7 @@ def openpos_nav_event(sender, request=None, **kwargs):
         for label, name, view in (
             (_("Who sells what"), "categories", CategoriesView),
             (_("Sales"), "sales", SalesView),
+            (_("Statements"), "statements", StatementsView),
             (_("Arrivals"), "event_arrivals", EventArrivalsView),
         )
         if request.user.has_event_permission(
@@ -214,6 +216,22 @@ def openpos_nav_organizer(sender, request=None, **kwargs):
                 ),
                 "icon": "money",
                 "active": here and url.url_name in ("drawers", "drawer", "drawer.session"),
+            }
+        )
+    # Behind the organizer's settings, like the card readers: saying whose
+    # account holds whose money is a decision about the associations' money.
+    if request.user.has_organizer_permission(
+        request.organizer, AssociationsView.permission, request=request
+    ):
+        nav.append(
+            {
+                "label": _("Associations"),
+                "url": reverse(
+                    "plugins:pretix_openpos:associations",
+                    kwargs={"organizer": request.organizer.slug},
+                ),
+                "icon": "users",
+                "active": here and url.url_name == "associations",
             }
         )
     return nav

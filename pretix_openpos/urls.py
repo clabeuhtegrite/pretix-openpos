@@ -1,7 +1,7 @@
 from django.urls import re_path
 from pretix.api.urls import event_router, orga_router
 
-from . import arrivals, devices, drawer_views, pwa, sumup_views, views, webhook
+from . import arrivals, association_views, devices, drawer_views, pwa, sumup_views, views, webhook
 from .api.views import OpenPosOrganizerViewSet, OpenPosViewSet
 
 urlpatterns = [
@@ -47,6 +47,13 @@ urlpatterns = [
         views.CompareWithSumUpView.as_view(),
         name="sales.compare",
     ),
+    # Each association's share of the evening: event-level, like the takings
+    # it shares out, since which association counts what is said per event.
+    re_path(
+        r"^control/event/(?P<organizer>[^/]+)/(?P<event>[^/]+)/openpos/statements/$",
+        association_views.StatementsView.as_view(),
+        name="statements",
+    ),
     # One evening's arrivals, next to its takings: who came in, and when.
     re_path(
         r"^control/event/(?P<organizer>[^/]+)/(?P<event>[^/]+)/openpos/arrivals/$",
@@ -90,6 +97,14 @@ urlpatterns = [
         r"^control/organizer/(?P<organizer>[^/]+)/openpos/drawers/(?P<drawer>\d+)/(?P<session>\d+)/$",
         drawer_views.DrawerSessionView.as_view(),
         name="drawer.session",
+    ),
+    # Organizer-level: the associations that share the evenings are the same
+    # ones from one event to the next, and so are the SumUp account and the
+    # drawers whose money they hold.
+    re_path(
+        r"^control/organizer/(?P<organizer>[^/]+)/openpos/associations/$",
+        association_views.AssociationsView.as_view(),
+        name="associations",
     ),
 ]
 

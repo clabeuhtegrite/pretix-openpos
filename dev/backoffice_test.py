@@ -143,6 +143,7 @@ with scopes_disabled():
             ("settings", base, "event.settings.general:write"),
             ("categories", base + "categories/", "event.items:write"),
             ("sales", base + "sales/", "event.orders:read"),
+            ("statements", base + "statements/", "event.orders:read"),
         ):
             check(f"{label} renders for an admin", client.get(path).status_code == 200)
 
@@ -162,6 +163,7 @@ with scopes_disabled():
             ("settings", base, "event.settings.general:write"),
             ("categories", base + "categories/", "event.items:write"),
             ("sales", base + "sales/", "event.orders:read"),
+            ("statements", base + "statements/", "event.orders:read"),
         ):
             team.limit_event_permissions = {permission: True}
             team.save(update_fields=["limit_event_permissions"])
@@ -201,6 +203,17 @@ with scopes_disabled():
                           for row in rows for column in ("till", "cashier", "reason", "drawer")),
                   "a text cell went out unguarded")
 
+        print("\n-- statements export ----------------------------------------")
+        response = client.get(base + "statements/?export=csv")
+        check("the statements export as CSV",
+              response.status_code == 200
+              and response["Content-Type"].startswith("text/csv"),
+              f"HTTP {response.status_code} {response.get('Content-Type')}")
+        if response.status_code == 200:
+            content = b"".join(response.streaming_content).decode("utf-8-sig")
+            check("with one line per figure under the header",
+                  content.startswith("association;parts;kind;"), content[:80])
+
     print("\n-- organizer screens, per permission -------------------------")
     # The till devices screen and the cash drawers are the devices permission;
     # the card readers page is the organizer's settings, since it holds the
@@ -210,7 +223,8 @@ with scopes_disabled():
         organizer = event.organizer
         org_base = f"/control/organizer/{organizer.slug}/openpos/"
         for label, path in (("devices", org_base + "devices/"), ("card readers", org_base + "sumup/"),
-                            ("cash drawers", org_base + "drawers/")):
+                            ("cash drawers", org_base + "drawers/"),
+                            ("associations", org_base + "associations/")):
             check(f"{label} renders for an admin", client.get(path).status_code == 200)
 
         keeper, _ = User.objects.get_or_create(
@@ -241,6 +255,9 @@ with scopes_disabled():
               as_keeper(settings_only, org_base + "sumup/") == 200)
         check("and the devices permission alone does not open them",
               as_keeper(devices_only, org_base + "sumup/") != 200)
+        check("associations need organizer.settings.general:write",
+              as_keeper(settings_only, org_base + "associations/") == 200
+              and as_keeper(devices_only, org_base + "associations/") != 200)
         page = client_for(keeper).get(org_base + "devices/").content.decode(errors="replace")
         check("nor shows the link to them", org_base + "sumup/" not in page)
         org_team.limit_organizer_permissions = {}
