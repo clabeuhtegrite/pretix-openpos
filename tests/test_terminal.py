@@ -1297,6 +1297,26 @@ def test_a_callback_that_is_not_json_is_refused(client, organizer):
 
 
 @pytest.mark.django_db
+def test_a_callback_carrying_nan_is_refused_the_same_way(client, organizer, monkeypatch):
+    """
+    pretix 2026.7.1 takes ``NaN`` and ``Infinity`` out of the ``json`` module,
+    and the parse then fails with a KeyError instead of a ValueError. Taken out
+    here as well, so that the test says the same on any pretix it runs on.
+    """
+    import json.decoder
+
+    monkeypatch.delitem(json.decoder._CONSTANTS, "NaN", raising=False)
+
+    response = client.post(
+        callback_url(organizer),
+        data='{"payload": {"client_transaction_id": NaN}}',
+        content_type="application/json",
+    )
+
+    assert response.status_code == 400
+
+
+@pytest.mark.django_db
 def test_a_callback_naming_no_transaction_is_refused(client, organizer):
     response = client.post(
         callback_url(organizer), data={"payload": {}}, content_type="application/json"

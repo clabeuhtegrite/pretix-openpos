@@ -115,6 +115,17 @@ def sumup_callback(request, organizer, token):
 
 
 def _json(request):
+    """
+    The body, read as JSON; ``ValueError`` if it cannot be.
+
+    pretix 2026.7.1 takes ``NaN`` and ``Infinity`` out of the ``json`` module
+    for the whole process, so a body carrying one of those words fails with a
+    ``KeyError`` rather than a parse error. It is the same unreadable body, and
+    it gets the same 400 rather than a 500.
+    """
     import json
 
-    return json.loads(request.body.decode("utf-8") or "{}")
+    try:
+        return json.loads(request.body.decode("utf-8") or "{}")
+    except KeyError as exc:
+        raise ValueError(f"not JSON: {exc}") from exc

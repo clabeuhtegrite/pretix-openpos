@@ -123,6 +123,16 @@ ERR_RATE_LIMITED = "rate_limited"
 #: Nothing was sent: the request named something that cannot be a SumUp id.
 ERR_INVALID = "invalid"
 
+#: What reading an answer as JSON raises when the answer cannot be read.
+#:
+#: ``ValueError`` for anything that is not JSON, a proxy's HTML page in place
+#: of an answer. ``KeyError`` as well since pretix 2026.7.1, which takes
+#: ``NaN`` and ``Infinity`` out of the ``json`` module for the whole process
+#: (``monkeypatch_json_constants``): an answer carrying one of those words
+#: then fails as a lookup rather than as a parse, and without this it would
+#: leave the client as an error no caller expects instead of a SumUpError.
+UNREADABLE_JSON = (ValueError, KeyError)
+
 #: What SumUp's reader ids look like: ``rdr_`` and a run of letters and
 #: digits, ``rdr_3MSAFM23CK82VSTT4BN6RWSQ65``.
 #:
@@ -287,7 +297,7 @@ class SumUpAccount:
                 return {}
             try:
                 return response.json()
-            except ValueError as exc:
+            except UNREADABLE_JSON as exc:
                 raise SumUpError(
                     _("SumUp sent an answer this till could not read."),
                     code=ERR_UNREADABLE,
@@ -708,7 +718,7 @@ def _error_type(response):
     """
     try:
         body = response.json()
-    except ValueError:
+    except UNREADABLE_JSON:
         return None
     errors = body.get("errors") if isinstance(body, dict) else None
     kind = errors.get("type") if isinstance(errors, dict) else None
@@ -729,7 +739,7 @@ def _explanation(response):
     """
     try:
         body = response.json()
-    except ValueError:
+    except UNREADABLE_JSON:
         body = None
     if isinstance(body, list):
         body = body[0] if body and isinstance(body[0], dict) else None
