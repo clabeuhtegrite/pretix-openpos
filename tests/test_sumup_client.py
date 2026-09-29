@@ -12,8 +12,8 @@ import pytest
 import requests
 
 from pretix_openpos.sumup import (
-    ERR_BUSY, ERR_CONFLICT, ERR_NOT_FOUND, ERR_OFFLINE, ERR_RATE_LIMITED, ERR_REFUSED, ERR_UNAVAILABLE, SumUpAccount,
-    SumUpError, given_back, minor_units, still_running, succeeded,
+    ERR_BUSY, ERR_CONFLICT, ERR_NOT_FOUND, ERR_OFFLINE, ERR_RATE_LIMITED, ERR_REFUSED, ERR_UNAVAILABLE,
+    ERR_UNREADABLE, SumUpAccount, SumUpError, given_back, minor_units, still_running, succeeded,
 )
 
 from .sumup_stub import NOT_REFUNDABLE, FakeResponse, reader_busy, reader_offline
@@ -581,6 +581,40 @@ def test_an_answer_that_is_not_json_is_said_so(account, sumup):
         account.readers()
 
     assert "could not read" in str(caught.value.message)
+
+
+@pytest.fixture
+def no_nan(monkeypatch):
+    """
+    ``NaN`` taken out of the ``json`` module, as pretix 2026.7.1 does for the
+    whole process: reading it then fails with a KeyError, not a ValueError.
+    Taken out here as well, so that the tests say the same on any pretix.
+    """
+    import json.decoder
+
+    monkeypatch.delitem(json.decoder._CONSTANTS, "NaN", raising=False)
+
+
+@pytest.mark.django_db
+def test_an_answer_carrying_nan_is_said_so_too(account, sumup, no_nan):
+    sumup.next_response = FakeResponse(200, text='{"items": [{"id": NaN}]}')
+
+    with pytest.raises(SumUpError) as caught:
+        account.readers()
+
+    assert caught.value.code == ERR_UNREADABLE
+    assert "could not read" in str(caught.value.message)
+
+
+@pytest.mark.django_db
+def test_a_refusal_carrying_nan_keeps_its_status(account, sumup, no_nan):
+    sumup.next_response = FakeResponse(409, text='{"detail": NaN}')
+
+    with pytest.raises(SumUpError) as caught:
+        account.refund("tx_7")
+
+    assert caught.value.code == ERR_CONFLICT
+    assert caught.value.reason == "409"
 
 
 @pytest.mark.django_db

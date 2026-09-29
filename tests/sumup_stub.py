@@ -46,8 +46,10 @@ class FakeResponse:
         self.content = self.text.encode()
 
     def json(self):
+        # What requests does with a body: the text, through the json module,
+        # so that a page that is not JSON fails here the way it fails there.
         if self._payload is None:
-            raise ValueError("not json")
+            return json.loads(self.text)
         return self._payload
 
 

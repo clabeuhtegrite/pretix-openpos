@@ -540,6 +540,13 @@ récentes qui l'interdit :
   donc pas avec une image, mais en restaurant la base d'avant elle — ventes
   faites depuis comprises. C'est une raison de ne pas en faire une la veille
   d'une soirée.
+- **Un correctif de pretix sur la même base : oui, s'il n'a pas de
+  migration.** Le canal `pretix2026.7` suit les correctifs de pretix 2026.7 :
+  0.27.1 est construite sur la 2026.7.1, les versions d'avant sur la 2026.7.0.
+  Revenir à une image d'avant un correctif ramène donc pretix au correctif
+  précédent. La 2026.7.1 n'ajoute aucune migration, ce retour-là est sans
+  risque ; un correctif qui en ajouterait une se traite comme un changement de
+  base.
 - **Sous 0.21.0, le journal a l'air falsifié.** Depuis 0.21.0, chaque ligne du
   journal est hachée en version 5, qui ajoute l'ouverture de caisse à la charge
   hachée (§6.4). Une version plus ancienne ne connaît pas cette forme : elle
