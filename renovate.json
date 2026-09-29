@@ -1,0 +1,44 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Read by the self-hosted Renovate of the cluster this project runs on, once a day. Nothing here merges on its own: every update is a pull request, and CI (ci.yml) says whether it holds. What reaches the till is still decided by a person, since publish-image.yml only ships what main carries once someone dispatches it.",
+  "extends": [
+    "config:recommended",
+    ":semanticCommitsDisabled"
+  ],
+  "timezone": "Europe/Paris",
+  "dependencyDashboard": true,
+  "platformAutomerge": false,
+  "automerge": false,
+  "minimumReleaseAge": "3 days",
+  "internalChecksFilter": "strict",
+  "osvVulnerabilityAlerts": true,
+  "major": {
+    "dependencyDashboardApproval": true
+  },
+  "packageRules": [
+    {
+      "description": "The pretix base names the published channel (pretix2026.7), which a cluster mirrors and pins by digest (deploy/Dockerfile, publish-image.yml). Its patches already arrive through the rolling minor tag on each rebuild; a new minor is a new channel, so it waits on the dependency dashboard until someone asks for it.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["pretix/standalone"],
+      "dependencyDashboardApproval": true
+    },
+    {
+      "description": "The Python of the images in dev/ follows the one pretix/standalone runs in production, and CI tests that one (ci.yml, backend matrix), not upstream's newest. Patches and digests only.",
+      "matchDatasources": ["docker"],
+      "matchPackageNames": ["python"],
+      "matchUpdateTypes": ["major", "minor"],
+      "enabled": false
+    },
+    {
+      "description": "One pull request for the workflows' actions rather than one per action. Tags are kept, not digests: publish-image.yml explains why it trusts actions/checkout alone.",
+      "matchManagers": ["github-actions"],
+      "groupName": "GitHub Actions"
+    },
+    {
+      "description": "One pull request for the till's minor and patch updates; each major stays on its own, on the dashboard.",
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "frontend non-major"
+    }
+  ]
+}
