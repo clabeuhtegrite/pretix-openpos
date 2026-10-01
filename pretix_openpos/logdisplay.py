@@ -1003,7 +1003,7 @@ def describe_organizer_entry(sender, logentry, **kwargs):
     which this plugin does not answer, and pretix leaves that column empty
     rather than failing.
 
-    Deprecated is not gone. pretix 2026.7 still sends it, from
+    Deprecated is not gone. pretix 2026.8 still sends it, from
     ``LogEntry.display``, for exactly this case. Should it ever stop, these
     entries would read as their raw action type again — ugly rather than
     broken — and the classes above could move to ``log_entry_types`` as soon as

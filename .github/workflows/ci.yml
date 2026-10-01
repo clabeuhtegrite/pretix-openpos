@@ -110,8 +110,8 @@ jobs:
       # wheel from the pip cache above.
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential gettext
       # The pretix production runs, read out of the production Dockerfile so
-      # the two cannot drift apart (see the top of this file). `2026.7.*`
-      # rather than `2026.7`: pip reads the latter as 2026.7.0 exactly, while
+      # the two cannot drift apart (see the top of this file). `2026.8.*`
+      # rather than `2026.8`: pip reads the latter as 2026.8.0 exactly, while
       # the image's tag follows that release's patches.
       - name: Install pretix, the version the production image is built on
         run: |

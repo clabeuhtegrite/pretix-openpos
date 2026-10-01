@@ -17,7 +17,7 @@
   },
   "packageRules": [
     {
-      "description": "The pretix base names the published channel (pretix2026.7), which a cluster mirrors and pins by digest (deploy/Dockerfile, publish-image.yml). Its patches already arrive through the rolling minor tag on each rebuild; a new minor is a new channel, so it waits on the dependency dashboard until someone asks for it.",
+      "description": "The pretix base names the published channel (pretix2026.8), which a cluster mirrors and pins by digest (deploy/Dockerfile, publish-image.yml). Its patches already arrive through the rolling minor tag on each rebuild; a new minor is a new channel, so it waits on the dependency dashboard until someone asks for it.",
       "matchDatasources": ["docker"],
       "matchPackageNames": ["pretix/standalone"],
       "dependencyDashboardApproval": true
