@@ -539,7 +539,11 @@ récentes qui l'interdit :
   laissent enjamber à rebours. Une mise à jour qui a changé de base ne se défait
   donc pas avec une image, mais en restaurant la base d'avant elle — ventes
   faites depuis comprises. C'est une raison de ne pas en faire une la veille
-  d'une soirée.
+  d'une soirée. La dernière en date est 0.28.0, la première construite sur
+  pretix 2026.8 (canal `pretix2026.8`) : pretix y applique au démarrage cinq
+  migrations à lui (`0307` à `0311`), dont une colonne obligatoire sur les
+  questions que la 2026.7 ne sait pas remplir. Revenir de 0.28.0 à 0.27.x,
+  c'est donc restaurer la base.
 - **Un correctif de pretix sur la même base : oui, s'il n'a pas de
   migration.** Le canal `pretix2026.7` suit les correctifs de pretix 2026.7 :
   0.27.1 est construite sur la 2026.7.1, les versions d'avant sur la 2026.7.0.
@@ -3816,7 +3820,7 @@ pretix et ses migrations désactivées — le schéma est construit depuis les
 modèles, ce qui la rend rapide (une dizaine de secondes).
 
 ```bash
-pip install "pretix==2026.7.*" && pip install --no-deps -e . && pip install pytest pytest-django
+pip install "pretix==2026.8.*" && pip install --no-deps -e . && pip install pytest pytest-django
 pytest
 
 # ou, sans rien installer sur la machine :

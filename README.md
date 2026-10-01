@@ -260,7 +260,7 @@ If you run pretix in Docker or Kubernetes, [`deploy/Dockerfile`](deploy/Dockerfi
 bakes the plugin into the official image:
 
 ```bash
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.27.1 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.28.0 .
 ```
 
 The PWA bundle is built inside the image, from the tree you are building, so the
@@ -415,7 +415,7 @@ SQLite with pretix' own test settings. It has its own coverage floor, in
 `pyproject.toml`. It needs pretix installed:
 
 ```bash
-pip install "pretix==2026.7.*" && pip install --no-deps -e . && pip install pytest pytest-django pytest-cov
+pip install "pretix==2026.8.*" && pip install --no-deps -e . && pip install pytest pytest-django pytest-cov
 pytest --cov
 ```
 
