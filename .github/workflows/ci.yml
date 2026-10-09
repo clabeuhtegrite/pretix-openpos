@@ -71,6 +71,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
+          # The production image's, like the backend matrix below: Renovate
+          # leaves it alone (renovate.json), a base on a newer Python moves it.
           python-version: "3.13"
       # Neither tool imports the code, so neither needs pretix installed.
       - run: pip install flake8 flake8-pyproject isort

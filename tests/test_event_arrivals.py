@@ -18,6 +18,7 @@ from pretix.base.models import Checkin, Event, Order, OrderPosition, Team
 from pretix_openpos.arrivals import by_half_hour, span_label, timeline_geometry
 from pretix_openpos.attendance import arrivals, attendance, is_over
 
+from .conftest import earlier_tonight
 from .test_series import a_date, an_item, series_event
 
 PARIS = zoneinfo.ZoneInfo("Europe/Paris")
@@ -371,9 +372,11 @@ def test_the_event_menu_leads_to_it(evening, backoffice):
 def test_the_evening_is_over_once_it_has_ended(organizer):
     event = Event.objects.create(
         organizer=organizer, name="Ce soir", slug="ce-soir",
-        date_from=now() - timedelta(hours=2), plugins="pretix_openpos", currency="EUR",
+        date_from=now(), plugins="pretix_openpos", currency="EUR",
     )
     event.settings.set("timezone", "Europe/Paris")
+    # Two hours ago, or since six if the night began less than two hours back.
+    event.date_from = earlier_tonight(event, 2)
     assert not is_over(event)
 
     event.date_to = now() - timedelta(minutes=1)
