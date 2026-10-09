@@ -19,6 +19,8 @@ from django_scopes import scopes_disabled
 from pretix.base.models import Device, Event, Item, ItemVariation, Order, Organizer, Quota, Team, User
 from pretix.base.models.devices import generate_api_token
 
+from pretix_openpos.api.evenings import start_of_business_day
+
 
 @pytest.fixture(autouse=True)
 def _scopes_off():
@@ -346,3 +348,27 @@ def sell(till, positions, **kwargs):
 
 def order_of(event, code):
     return Order.objects.get(event=event, code=code)
+
+
+def earlier_tonight(event, hours, at=None):
+    """
+    ``hours`` before ``at`` (this moment by default), but not before the six
+    o'clock that opened the night ``at`` belongs to.
+
+    The till's night runs from six in the morning to six the next
+    (api/evenings.py). Taken off the wall clock, "an hour ago" is last night
+    between six and seven, and a test that meant tonight failed then: every
+    morning, at the hour Renovate opens its pull requests.
+    """
+    at = at or now()
+    return max(at - timedelta(hours=hours), start_of_business_day(event, at))
+
+
+def later_tonight(event, hours, at=None):
+    """
+    ``hours`` after ``at``, or halfway to the six o'clock that closes the night
+    when that comes sooner: still tonight, and still to come.
+    """
+    at = at or now()
+    closes = start_of_business_day(event, at) + timedelta(days=1)
+    return at + min(timedelta(hours=hours), (closes - at) / 2)

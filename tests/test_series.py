@@ -19,7 +19,7 @@ import pytest
 from django.utils.timezone import now
 from pretix.base.models import Event, Item, Order, Quota, SubEvent
 
-from .conftest import Till, sell
+from .conftest import Till, earlier_tonight, later_tonight, sell
 
 
 def series_event(organizer):
@@ -60,7 +60,7 @@ def an_item(event, channel, subevent, *, price=10, size=100):
 def tonight(organizer, channel, device):
     """A series with one date on right now, and a till paired to it."""
     event = series_event(organizer)
-    date = a_date(event, "Ce soir", now() - timedelta(hours=1))
+    date = a_date(event, "Ce soir", earlier_tonight(event, 1))
     item = an_item(event, channel, date)
     return event, date, item, Till(device, event)
 
@@ -80,7 +80,7 @@ def test_a_sale_on_a_series_goes_through(tonight):
 @pytest.mark.django_db
 def test_the_catalogue_counts_only_the_date_being_sold(organizer, channel, device):
     event = series_event(organizer)
-    tonight = a_date(event, "Ce soir", now() - timedelta(hours=1))
+    tonight = a_date(event, "Ce soir", earlier_tonight(event, 1))
     item = an_item(event, channel, tonight, size=40)
     # Another evening, with its own quota. Counting both would tell the door
     # it has a hundred and forty places when it has forty.
@@ -98,7 +98,7 @@ def test_a_price_set_for_one_date_is_the_one_charged(organizer, channel, device)
     from pretix.base.models.items import SubEventItem
 
     event = series_event(organizer)
-    tonight = a_date(event, "Ce soir", now() - timedelta(hours=1))
+    tonight = a_date(event, "Ce soir", earlier_tonight(event, 1))
     item = an_item(event, channel, tonight, price=10)
     SubEventItem.objects.create(subevent=tonight, item=item, price=Decimal("14.00"))
     till = Till(device, event)
@@ -112,8 +112,9 @@ def test_a_price_set_for_one_date_is_the_one_charged(organizer, channel, device)
 @pytest.mark.django_db
 def test_a_door_sells_before_it_opens(organizer, channel, device):
     event = series_event(organizer)
-    # Doors in two hours, and the till is already ringing up a pre-sale.
-    tonight = a_date(event, "Ce soir", now() + timedelta(hours=2))
+    # Doors in two hours, or before six when the night ends sooner, and the
+    # till is already ringing up a pre-sale.
+    tonight = a_date(event, "Ce soir", later_tonight(event, 2))
     item = an_item(event, channel, tonight)
 
     body = sell(Till(device, event), [{"item": item.pk, "count": 1}]).json()
@@ -159,7 +160,7 @@ def test_a_series_with_nothing_on_says_so_at_the_catalogue(organizer, channel, d
 @pytest.mark.django_db
 def test_a_date_switched_off_does_not_count_as_on(organizer, channel, device):
     event = series_event(organizer)
-    off = a_date(event, "Annulée", now() - timedelta(hours=1), active=False)
+    off = a_date(event, "Annulée", earlier_tonight(event, 1), active=False)
     an_item(event, channel, off)
 
     assert Till(device, event).get("catalog").status_code == 400

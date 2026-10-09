@@ -21,7 +21,7 @@ from pretix.base.models import ItemCategory
 from pretix_openpos.api.evenings import BUSINESS_DAY_STARTS_AT, evening_subevent, start_of_business_day
 from pretix_openpos.models import PosSale
 
-from .conftest import Till, sell
+from .conftest import Till, earlier_tonight, sell
 from .test_series import a_date, an_item, series_event
 
 PARIS = zoneinfo.ZoneInfo("Europe/Paris")
@@ -495,8 +495,10 @@ def test_a_device_renamed_since_is_listed_under_its_name_now(till, device, ticke
 def season(organizer, channel, device):
     """A series with a date on tonight and one a week ago, and a till on it."""
     event = series_event(organizer)
-    last_week = a_date(event, "Samedi dernier", now() - timedelta(days=7, hours=1))
-    tonight = a_date(event, "Ce soir", now() - timedelta(hours=1))
+    last_week = a_date(
+        event, "Samedi dernier", earlier_tonight(event, 1, at=now() - timedelta(days=7))
+    )
+    tonight = a_date(event, "Ce soir", earlier_tonight(event, 1))
     item = an_item(event, channel, tonight)
     quota = item.quotas.create(event=event, name="Entrées", size=100, subevent=last_week)
     quota.items.add(item)

@@ -23,9 +23,8 @@
       "dependencyDashboardApproval": true
     },
     {
-      "description": "The Python of the images in dev/ follows the one pretix/standalone runs in production, and CI tests that one (ci.yml, backend matrix), not upstream's newest. Patches and digests only.",
-      "matchDatasources": ["docker"],
-      "matchPackageNames": ["python"],
+      "description": "Python follows the one pretix/standalone runs in production (3.13 on the 2026.8 base), not upstream's newest: the images in dev/, the version CI tests (ci.yml, backend matrix) and the one its lint job sets up. That last one is the dependency python of actions/setup-python, on GitHub releases rather than Docker Hub, hence a rule on the name alone. Patches and digests only; a base on a newer Python moves them all in the same edit.",
+      "matchDepNames": ["python"],
       "matchUpdateTypes": ["major", "minor"],
       "enabled": false
     },
