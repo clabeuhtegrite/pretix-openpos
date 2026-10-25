@@ -1,0 +1,8 @@
+# What the production image (deploy/Dockerfile) installs beside the plugin,
+# pinned here so that Renovate follows it. The Dockerfile installs it under the
+# base image's own packages as constraints: it can add packages, never move one
+# that pretix was released with.
+
+# Back-office logins through an OpenID Connect provider (README, "Logging in
+# through OpenID Connect"). It stays inert until pretix.cfg names its backend.
+pretix-oidc==2.3.1

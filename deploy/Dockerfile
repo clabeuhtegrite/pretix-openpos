@@ -60,8 +60,15 @@ COPY --from=bundle --chown=pretixuser:pretixuser \
      /src/pretix_openpos/static/pretix_openpos/pwa \
      /plugin/pretix_openpos/static/pretix_openpos/pwa
 
-RUN pip3 install --no-cache-dir /plugin \
-    && rm -rf /plugin
+# deploy/requirements.txt comes along: what the image carries beside the plugin,
+# pretix-oidc today. The base's own packages, frozen at the versions it ships,
+# are the constraints, so that an extra can add packages but never move one
+# pretix was released with: one that would have to fails the build here, rather
+# than changing pretix underneath it.
+RUN pip3 freeze --exclude-editable > /tmp/base-constraints.txt \
+    && pip3 install --no-cache-dir -c /tmp/base-constraints.txt \
+        /plugin -r /plugin/deploy/requirements.txt \
+    && rm -rf /plugin /tmp/base-constraints.txt
 
 USER pretixuser
 

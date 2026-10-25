@@ -486,6 +486,17 @@ l'arbre qu'on lui donne, puis `pretix rebuild` le collecte. Rien à compiler à 
 main avant. La CI et la publication vérifient qu'il est bien dans l'image
 (`app.js`) et qu'il porte la même version que le plugin.
 
+Depuis 0.29.0, l'image porte aussi le greffon
+[pretix-oidc](https://github.com/thegcat/pretix-oidc), épinglé dans
+[`deploy/requirements.txt`](../deploy/requirements.txt) : il permet de se
+connecter au back-office par un fournisseur OpenID Connect. Il reste inerte tant
+que `pretix.cfg` ne nomme pas son backend ; le README dit comment l'allumer et ce
+qu'il faut savoir avant (« Logging in through OpenID Connect »). Ses paquets
+s'installent sous contrainte de ceux de l'image de base : ils en ajoutent, n'en
+déplacent aucun. La CI l'allume dans l'image construite, face à un fournisseur
+qui n'existe pas, et vérifie l'adresse où mènerait le bouton de connexion
+([`deploy/check_oidc.py`](../deploy/check_oidc.py)).
+
 Un piège :
 
 - **`--platform linux/amd64` sur un Mac Apple Silicon.** Une image arm64 se
@@ -570,6 +581,15 @@ récentes qui l'interdit :
   ligne, et chaque paiement carte sur le lecteur échoue.
 - **0.21.0 plutôt que 0.21.1** ne coûte que l'archivage des caisses espèces
   (migration `0011`) : une caisse archivée redevient proposée comme les autres.
+- **Sous 0.29.0, plus de connexion par OpenID Connect.** 0.29.0 ajoute à
+  l'image le greffon pretix-oidc (§3.1), et avec lui deux migrations à lui : une
+  table de règles d'attribution d'équipe, que la version d'avant ignore. Revenir
+  en dessous est sûr à deux conditions. Remettre en même temps un `pretix.cfg`
+  qui ne nomme plus son backend : sinon la page de connexion tombe pour tout le
+  monde, comptes à mot de passe compris. Et ne pas supprimer d'ici là une équipe
+  visée par l'une de ces règles : sans le greffon, Django ne sait plus effacer la
+  règle avec l'équipe, et la base refuse la suppression. Les comptes créés par le
+  fournisseur restent, sans pouvoir se connecter jusqu'au retour de 0.29.0.
 
 **Ce qui rend une migration franchissable à rebours.** Qu'elle ne fasse
 qu'ajouter, et que ce qu'elle ajoute puisse rester vide. La version d'avant
