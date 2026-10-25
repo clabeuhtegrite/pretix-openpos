@@ -75,6 +75,10 @@ docker build --platform linux/amd64 -f deploy/Dockerfile -t pretix-openpos:prefl
 docker run --rm --platform linux/amd64 --entrypoint sh pretix-openpos:preflight -c \
     'ls /pretix/src/pretix/static.dist/pretix_openpos/pwa/app.js' >/dev/null
 
+step "the production image logs in through OpenID Connect once pretix.cfg says so"
+docker run --rm -i --platform linux/amd64 --network none --entrypoint python3 \
+    -w /pretix/src -e DATA_DIR=/data pretix-openpos:preflight - < deploy/check_oidc.py
+
 echo
 echo "✓ everything passed. The image tagged pretix-openpos:preflight is the one"
 echo "  this run checked — retag and push that, rather than building again."

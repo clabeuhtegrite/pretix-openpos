@@ -167,3 +167,10 @@ jobs:
         run: |
           docker run --rm --entrypoint sh pretix-openpos:ci -c \
             'ls /pretix/src/pretix/static.dist/pretix_openpos/pwa/app.js'
+      # pretix-oidc does nothing until pretix.cfg names it, so nothing above
+      # would notice it missing or broken. This switches it on, against a
+      # provider that does not exist, and asks for the login URL.
+      - name: The OIDC login plugin is in the image, and pretix uses it
+        run: |
+          docker run --rm -i --network none --entrypoint python3 -w /pretix/src \
+            -e DATA_DIR=/data pretix-openpos:ci - < deploy/check_oidc.py

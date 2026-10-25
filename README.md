@@ -260,7 +260,7 @@ If you run pretix in Docker or Kubernetes, [`deploy/Dockerfile`](deploy/Dockerfi
 bakes the plugin into the official image:
 
 ```bash
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.28.0 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.29.0 .
 ```
 
 The PWA bundle is built inside the image, from the tree you are building, so the
@@ -281,6 +281,56 @@ do. It is safe down to 0.21.1 on the same pretix base, and never across a
 change of base — below 0.21.0 an older plugin reads the journal as tampered
 with. The reasons, and what breaks where, are in
 [`docs/fonctionnement.md`](docs/fonctionnement.md), §3.1bis (in French).
+
+### Logging in through OpenID Connect
+
+The image also carries [pretix-oidc](https://github.com/thegcat/pretix-oidc)
+(Apache-2.0), so that the back office can be logged into through the OpenID
+Connect provider your other tools already use, beside pretix passwords. It is
+pinned in [`deploy/requirements.txt`](deploy/requirements.txt) and does nothing
+until `pretix.cfg` names its backend:
+
+```ini
+[pretix]
+auth_backends=pretix.base.auth.NativeAuthBackend,pretix_oidc.auth.OIDCAuthBackend
+
+[oidc]
+title=Log in with Example ID
+issuer=https://id.example.org
+authorization_endpoint=https://id.example.org/authorize
+token_endpoint=https://id.example.org/token
+userinfo_endpoint=https://id.example.org/userinfo
+end_session_endpoint=https://id.example.org/logout
+jwks_uri=https://id.example.org/jwks.json
+client_id=pretix
+scopes=openid,email,profile
+```
+
+The endpoints are in the provider's `/.well-known/openid-configuration`. The
+client secret is better handed in as the environment variable
+`PRETIX_OIDC_CLIENT_SECRET` than written in the file. On the provider's side the
+client is confidential, authenticates with `client_secret_basic`, sends no PKCE,
+and returns to `https://<your pretix>/oidc/callback/`. The plugin's README has the
+other options, such as making the members of a group pretix staff.
+
+Three things to know before switching it on:
+
+- **A login through the provider is a separate pretix account.** pretix ties an
+  account to the backend that created it: the first login creates a new one, in
+  no team, and it is refused outright while a password account holds the same
+  email address. Change one of the two addresses, then add the new account to
+  teams, or let *Organizer → Team assignment rules* do it from a claim at each
+  login.
+- **The image and the configuration go back together.** An image without the
+  plugin, under a `pretix.cfg` that still names its backend, fails the login page
+  for everyone, password accounts included.
+- **It shows in the organizer menu** as *Team assignment rules*, whether or not
+  anyone logs in through it. `plugins_exclude=pretix_oidc` under `[pretix]` leaves
+  it out entirely.
+
+CI switches it on in the built image, against a provider that does not exist,
+and checks the URL the login button would send a browser to
+([`deploy/check_oidc.py`](deploy/check_oidc.py)).
 
 ## Setting it up
 
