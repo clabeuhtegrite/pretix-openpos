@@ -2,8 +2,8 @@ import { noteServerTime } from "./clock";
 import { markReachable, markUnreachable } from "./connectivity";
 import type {
   Attendance, AttendeeMatch, CancelResult, Catalog, DeviceDescription, DeviceStatus,
-  DrawerAnswer, DrawerState, History, InitializeResponse, OfflineSnapshot, Pairing, PosConfig,
-  PosEventList, RedeemResult, SaleResult, SummaryResponse, TerminalPayment,
+  DrawerAnswer, DrawerState, History, InitializeResponse, Pairing, PosConfig, PosEventList,
+  RedeemResult, SaleResult, SummaryResponse, TerminalPayment,
 } from "./types";
 
 const BASE = "/api/v1";
@@ -433,21 +433,6 @@ export const api = {
       method: "POST",
       body: payload,
       token: p.token,
-    });
-  },
-
-  /**
-   * The guest list for one check-in list, to be carried while offline.
-   *
-   * Fetched while the connection is good so a dropout is survivable: without it
-   * a door with no network can only guess, and guessing at a door means either
-   * turning away valid tickets or admitting anything presented.
-   */
-  offlineSnapshot(p: Pairing, listId: number, signal?: AbortSignal): Promise<OfflineSnapshot> {
-    const params = new URLSearchParams({ list: String(listId) });
-    return request(`/organizers/${p.organizer}/events/${p.event}/openpos/offline/?${params}`, {
-      token: p.token,
-      signal,
     });
   },
 

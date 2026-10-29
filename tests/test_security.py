@@ -8,10 +8,11 @@ which is a list nothing else in the codebase checks.
 """
 import pathlib
 import re
+from decimal import Decimal
 
 import pytest
 from django.utils.timezone import now
-from pretix.base.models import Device
+from pretix.base.models import Device, Order, OrderPosition
 from pretix.base.models.devices import generate_api_token
 
 import pretix_openpos
@@ -26,6 +27,27 @@ def as_device(client, device, method, path, **kwargs):
 
 def api(event, path):
     return f"/api/v1/organizers/{event.organizer.slug}/events/{event.slug}/{path}"
+
+
+def admit(event, item, names):
+    """One paid order holding a ticket per name, as sold online."""
+    order = Order.objects.create(
+        event=event,
+        status=Order.STATUS_PAID,
+        datetime=now(),
+        expires=now(),
+        total=Decimal("10.00") * len(names),
+        sales_channel=event.organizer.sales_channels.get(identifier="web"),
+    )
+    for index, name in enumerate(names, start=1):
+        OrderPosition.objects.create(
+            order=order,
+            item=item,
+            positionid=index,
+            price=Decimal("10.00"),
+            attendee_name_parts={"_scheme": "full", "full_name": name},
+        )
+    return order
 
 
 @pytest.mark.django_db
@@ -148,13 +170,31 @@ def test_a_short_search_used_to_hand_over_the_guest_list(till, event, ticket, ch
     device's search with no term listed every ticket of the list. A term the
     door would actually type still finds the one holder it is looking for.
     """
-    from .test_offline_snapshot import admit
-
     admit(event, ticket, ["Alice Martin", "Bob Durand"])
 
     assert search(till, event, checkin_list, "search=").status_code == 403
     found = search(till, event, checkin_list, "search=alice").json()["results"]
     assert [row["attendee_name"] for row in found] == ["Alice Martin"]
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize("role", ["door", "pos", ""])
+def test_no_device_is_handed_the_guest_list_any_more(till, device, event, ticket, checkin_list, role):
+    """
+    Up to 0.29 a door downloaded every ticket of its list — secret, name,
+    whether it was used — to scan against with the network gone. Since 0.30
+    the door answers no ticket without pretix, and the list is not given to
+    any device, whatever its role: a secret is a ticket.
+    """
+    from pretix_openpos.models import PosDevice
+
+    admit(event, ticket, ["Alice Martin"])
+    PosDevice.objects.update_or_create(device=device, defaults={"role": role})
+
+    response = till.get("offline", list=checkin_list.pk)
+
+    assert response.status_code == 404
+    assert "Alice" not in response.content.decode()
 
 
 @pytest.mark.django_db

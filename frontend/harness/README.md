@@ -33,8 +33,8 @@ Paramètres d'URL, cumulables :
 | `theme=light` / `theme=dark` | force la palette |
 | `offline=1` | le serveur ne répond plus |
 | `queue=3` | trois ventes en attente dans la file (envoyées à l’ouverture ; avec `sync=wait` elles y restent, et la caisse espèces les annonce) |
-| `scans=3` | trois scans faits hors ligne en attente, dont un refus |
-| `redeem=fail` | le réseau lâche sous le scan : la porte répond avec sa liste embarquée, et les scans en attente ne partent pas |
+| `scans=3` | trois scans faits hors ligne par une version d’avant la 0.30 en attente, dont un refus |
+| `redeem=fail` | le réseau lâche sous le scan : la porte dit « Pas de réponse », et les scans en attente ne partent pas |
 | `photos=1` | une photo sur un produit sur deux |
 | `checkout=fail` | le serveur refuse d’enregistrer la vente |
 | `testmode=1` | événement en mode test |
@@ -47,8 +47,7 @@ Paramètres d'URL, cumulables :
 | `update=fail` | comme `update=1`, et la nouvelle version ne se télécharge pas : la barre le dit, l’app reste sur la sienne |
 | `cancel=already` / `backoffice` / `lost` | ce que le serveur répond à une annulation (Historique) : la vente l’était déjà, sous une autre clé ; elle l’a été depuis le back-office ; la première réponse se perd en route, et la vente relue « annulée » propose *Afficher l’annulation* |
 | `camera=busy` | une autre app tient la caméra à l’ouverture du scanner : le cadre rouge et *Réessayer la caméra*, qui la trouve libre |
-| `cached=1` | configuration, catalogue et liste embarquée déjà sur l’appareil : avec `offline=1`, une caisse rouverte pendant une coupure plutôt qu’un premier lancement sans réseau |
-| `snapshot=21:14` / `yesterday` | l’heure à laquelle la liste embarquée a été tirée, que la porte affiche hors ligne (défaut : celle du jeu d’essai) |
+| `cached=1` | configuration et catalogue déjà sur l’appareil : avec `offline=1`, une caisse rouverte pendant une coupure plutôt qu’un premier lancement sans réseau |
 
 `browser=1` est nécessaire : sans lui l'app affiche l'écran d'installation.
 

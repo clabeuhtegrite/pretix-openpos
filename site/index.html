@@ -128,11 +128,12 @@
       </div>
 
       <div class="card">
-        <h3>It keeps working offline</h3>
+        <h3>It keeps selling offline</h3>
         <p>A dropout does not stop the till. It keeps selling from the catalogue it
-        cached and keeps scanning against a guest list it carries, then replays the
-        queue in order under the same idempotency keys — a replay never sells twice
-        — and reports what needs a human.</p>
+        cached, then replays the queue in order under the same idempotency keys — a
+        replay never sells twice — and reports what needs a human. The door only
+        lets a ticket in on pretix' own answer: with no network it says so, rather
+        than guess.</p>
       </div>
 
       <div class="card">
@@ -200,7 +201,9 @@
       transaction of its own, so a returned cup deposit is paid out of the drawer.
       Cancelling a card sale is a different matter and is fully automatic.</li>
       <li><strong>No offline cancellations.</strong> A credit note needs the server,
-      so corrections wait for the network. Selling and scanning do not.</li>
+      so corrections wait for the network. Selling does not.</li>
+      <li><strong>No offline scanning.</strong> A ticket gets in on pretix' answer
+      and nothing else; with no network the door says so and waits for it.</li>
       <li><strong>No check-in questions.</strong> A product that requires answers at
       the door is refused with a clear reason rather than half-checked-in. Use
       pretixSCAN for those.</li>

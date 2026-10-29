@@ -2,19 +2,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   BASKET_KEEPS_FOR_MS, DOOR_RESUME_KEEPS_FOR_MS, ORPHAN_KEEPS_FOR_MS, PAYMENT_RESUMES_WITHIN_MS,
-  addFailure, addOrphan, clearAdmissions, clearBasket, clearDoorLists, clearDoorResume,
-  clearPairing, clearPendingMovement, clearPendingPayment, clearSnapshot, dropOrphan, enqueue,
-  isResumable, loadAdmissions, loadBasket, loadCached, loadCashier, loadDoorList, loadDoorResume,
-  loadDoorScans, loadFailures, loadLastSync, loadOrphans, loadPairing, loadPendingMovement,
-  loadPendingPayment, loadQueue, loadSnapshot, loadSnapshotPull, loadUpdateAttempt,
-  requestPersistence, saveAdmissions, saveBasket, saveCached, saveCashier, saveDoorList,
+  addFailure, addOrphan, clearBasket, clearDoorLists, clearDoorResume, clearPairing,
+  clearPendingMovement, clearPendingPayment, dropOrphan, enqueue, forgetGuestList, isResumable,
+  loadBasket, loadCached, loadCashier, loadDoorList, loadDoorResume, loadDoorScans, loadFailures,
+  loadLastSync, loadOrphans, loadPairing, loadPendingMovement, loadPendingPayment, loadQueue,
+  loadUpdateAttempt, requestPersistence, saveBasket, saveCached, saveCashier, saveDoorList,
   saveDoorResume, saveDoorScans, saveFailures, saveLastSync, savePairing, savePendingMovement,
-  savePendingPayment, saveQueue, saveSnapshot, saveSnapshotPull, saveUpdateAttempt, updateOrphan,
+  savePendingPayment, saveQueue, saveUpdateAttempt, updateOrphan,
 } from "./storage";
 import { fillStorage } from "./test/setup";
 import type {
-  CartLine, DoorScans, OfflineSnapshot, OrphanPayment, Pairing, PendingMovement, PendingPayment,
-  QueuedSale, SyncFailure,
+  CartLine, DoorScans, OrphanPayment, Pairing, PendingMovement, PendingPayment, QueuedSale,
+  SyncFailure,
 } from "./types";
 
 /**
@@ -48,13 +47,6 @@ function sale(id: string): QueuedSale {
     label: "1× Bière",
   };
 }
-
-const snapshot: OfflineSnapshot = {
-  list: { id: 7, name: "Porte" },
-  generated: "2026-08-16T20:00:00.000Z",
-  tickets: [{ secret: "abc", item: 10, name: "Alice", used: false }],
-  truncated: false,
-};
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -521,111 +513,41 @@ describe("going back to the door after an update", () => {
   });
 });
 
-describe("the offline guest list", () => {
-  it("survives a reload", () => {
-    saveSnapshot(snapshot);
+describe("what an earlier build kept for scanning offline", () => {
+  it("is all dropped: the guest list, when it was pulled, and who the door let in", () => {
+    localStorage.setItem("openpos.snapshot.v1", JSON.stringify({ tickets: [{ secret: "abc" }] }));
+    localStorage.setItem("openpos.snapshotPull.v1", JSON.stringify({ event: "festival", list: 7, at: 1 }));
+    localStorage.setItem("openpos.admitted.v1.festival", JSON.stringify({ 7: { abc: 1 } }));
+    localStorage.setItem("openpos.admitted.v1.gala", JSON.stringify({ 21: { def: 1 } }));
 
-    expect(loadSnapshot()).toEqual(snapshot);
+    forgetGuestList();
+
+    expect(localStorage.getItem("openpos.snapshot.v1")).toBeNull();
+    expect(localStorage.getItem("openpos.snapshotPull.v1")).toBeNull();
+    expect(localStorage.getItem("openpos.admitted.v1.festival")).toBeNull();
+    expect(localStorage.getItem("openpos.admitted.v1.gala")).toBeNull();
   });
 
-  it("is dropped whole rather than half-held when it will not fit", () => {
-    // Scanning offline then says it carries no list, which a door can act on.
-    // Half a guest list would turn valid tickets away with a straight face.
-    fillStorage();
+  it("leaves everything else where it is", () => {
+    saveQueue([sale("s1")]);
+    saveDoorList("festival", 8);
+    savePairing(pairing);
 
-    expect(() => saveSnapshot(snapshot)).not.toThrow();
-    expect(loadSnapshot()).toBeNull();
-  });
+    forgetGuestList();
 
-  it("goes away when the till is told to forget it, with the time it was pulled", () => {
-    saveSnapshot(snapshot);
-    saveSnapshotPull({ event: "festival", list: 7, at: 1 });
-
-    clearSnapshot();
-
-    expect(loadSnapshot()).toBeNull();
-    expect(loadSnapshotPull()).toBeNull();
+    expect(loadQueue()).toEqual([sale("s1")]);
+    expect(loadDoorList("festival")).toBe(8);
+    expect(loadPairing()).toEqual(pairing);
   });
 
   it("does not let a storage that refuses even that stop the till", () => {
-    const removeItem = vi.spyOn(localStorage, "removeItem").mockImplementation(() => {
-      throw new Error("SecurityError");
-    });
-
-    expect(() => clearSnapshot()).not.toThrow();
-    removeItem.mockRestore();
-  });
-});
-
-describe("who the door let in", () => {
-  it("survives a reload, per event", () => {
-    saveAdmissions("festival", { 7: { alice: 1 } });
-
-    expect(loadAdmissions("festival")).toEqual({ 7: { alice: 1 } });
-    expect(loadAdmissions("gala")).toEqual({});
-  });
-
-  it("leaves nothing on disk once there is nothing to remember", () => {
-    saveAdmissions("festival", { 7: { alice: 1 } });
-
-    saveAdmissions("festival", {});
-
-    expect(localStorage.getItem("openpos.admitted.v1.festival")).toBeNull();
-  });
-
-  it("reads as nothing when what is on disk is not a record", () => {
-    localStorage.setItem("openpos.admitted.v1.festival", JSON.stringify(["alice"]));
-
-    expect(loadAdmissions("festival")).toEqual({});
-  });
-
-  it("is forgotten for every event at once, and nothing else with it", () => {
-    saveAdmissions("festival", { 7: { alice: 1 } });
-    saveAdmissions("gala", { 21: { bob: 1 } });
-    saveSnapshot(snapshot);
-
-    clearAdmissions();
-
-    expect(loadAdmissions("festival")).toEqual({});
-    expect(loadAdmissions("gala")).toEqual({});
-    expect(loadSnapshot()).toEqual(snapshot);
-  });
-
-  it("does not stop the door when storage will not take it", () => {
-    fillStorage();
-
-    expect(() => saveAdmissions("festival", { 7: { alice: 1 } })).not.toThrow();
-  });
-
-  it("does not stop the till when storage cannot even be listed", () => {
     const key = vi.spyOn(localStorage, "key").mockImplementation(() => {
       throw new Error("SecurityError");
     });
-    saveAdmissions("festival", { 7: { alice: 1 } });
+    localStorage.setItem("openpos.admitted.v1.festival", JSON.stringify({ 7: { abc: 1 } }));
 
-    expect(() => clearAdmissions()).not.toThrow();
+    expect(() => forgetGuestList()).not.toThrow();
     key.mockRestore();
-  });
-});
-
-describe("when the guest list was last pulled", () => {
-  it("survives a reload", () => {
-    saveSnapshotPull({ event: "festival", list: 7, at: 1234 });
-
-    expect(loadSnapshotPull()).toEqual({ event: "festival", list: 7, at: 1234 });
-  });
-
-  it("is nothing rather than garbage when what is on disk is not one", () => {
-    localStorage.setItem("openpos.snapshotPull.v1", JSON.stringify({ event: "festival" }));
-
-    expect(loadSnapshotPull()).toBeNull();
-  });
-
-  it("is simply not kept when storage is full", () => {
-    fillStorage();
-
-    expect(() => saveSnapshotPull({ event: "festival", list: 7, at: 1 })).not.toThrow();
-    expect(loadSnapshotPull()).toBeNull();
   });
 });
 

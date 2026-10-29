@@ -532,14 +532,6 @@ describe("the endpoints", () => {
     expect(JSON.parse(String(options.body))).toEqual(payload);
   });
 
-  it("asks for the guest list of one check-in list", async () => {
-    await api.offlineSnapshot(pairing, 7);
-
-    expect(callArgs()[0]).toBe(
-      "/api/v1/organizers/demo/events/festival/openpos/offline/?list=7",
-    );
-  });
-
   it("reads this till's own history", async () => {
     await api.history(pairing);
 

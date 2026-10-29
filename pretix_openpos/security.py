@@ -76,8 +76,6 @@ class OpenPosSecurityProfile(AllowListSecurityProfile):
         # anything that is not this device's own, so the token cannot be used to
         # unpick another till's takings.
         ("GET", "api-v1:openpos-history"),
-        # The snapshot a till carries so a network dropout does not close the door.
-        ("GET", "api-v1:openpos-offline"),
         ("POST", "api-v1:openpos-cancel"),
         # The cash drawer this till is assigned: opening it on a counted float,
         # money put in or taken out, the count and the closing. Each one
@@ -94,7 +92,9 @@ class OpenPosSecurityProfile(AllowListSecurityProfile):
         # A refusal given with no network, sent once there is one — pretix'
         # own way of hearing about it, and the one pretixSCAN uses. Online,
         # pretix writes every refused scan down itself; without this, a door
-        # that was offline left no trace of the tickets it turned away.
+        # that was offline left no trace of the tickets it turned away. Since
+        # 0.30 the door gives no verdict offline, but a phone updated with
+        # refusals still waiting from an earlier build sends them this way.
         ("POST", "api-v1:checkinlist-failed_checkins"),
         # Finding a ticket by name. Tickets carry a QR and nothing a human could
         # retype, so when the code will not scan the only way through is to look

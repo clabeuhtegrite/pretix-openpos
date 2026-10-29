@@ -17,13 +17,13 @@
   },
   "packageRules": [
     {
-      "description": "The pretix base names the published channel (pretix2026.8), which a cluster mirrors and pins by digest (deploy/Dockerfile, publish-image.yml). Its patches already arrive through the rolling minor tag on each rebuild; a new minor is a new channel, so it waits on the dependency dashboard until someone asks for it.",
+      "description": "The pretix base names the published channel (pretix2026.9), which a cluster mirrors and pins by digest (deploy/Dockerfile, publish-image.yml). Its patches already arrive through the rolling minor tag on each rebuild; a new minor is a new channel, so it waits on the dependency dashboard until someone asks for it.",
       "matchDatasources": ["docker"],
       "matchPackageNames": ["pretix/standalone"],
       "dependencyDashboardApproval": true
     },
     {
-      "description": "Python follows the one pretix/standalone runs in production (3.13 on the 2026.8 base), not upstream's newest: the images in dev/, the version CI tests (ci.yml, backend matrix) and the one its lint job sets up. That last one is the dependency python of actions/setup-python, on GitHub releases rather than Docker Hub, hence a rule on the name alone. Patches and digests only; a base on a newer Python moves them all in the same edit.",
+      "description": "Python follows the one pretix/standalone runs in production (3.13 on the 2026.9 base), not upstream's newest: the images in dev/, the version CI tests (ci.yml, backend matrix) and the one its lint job sets up. That last one is the dependency python of actions/setup-python, on GitHub releases rather than Docker Hub, hence a rule on the name alone. Patches and digests only; a base on a newer Python moves them all in the same edit.",
       "matchDepNames": ["python"],
       "matchUpdateTypes": ["major", "minor"],
       "enabled": false

@@ -147,14 +147,3 @@ def test_a_list_that_is_not_a_number_is_refused_rather_than_crashing(
     response = till.get("attendance", list="porte")
 
     assert response.status_code == 400
-
-
-@pytest.mark.django_db
-def test_the_guest_list_for_a_dropout_is_refused_for_an_unknown_door(
-    till, event, ticket, checkin_list
-):
-    # Carrying the wrong door's guest list is how a door admits the wrong
-    # people for the whole length of an outage.
-    response = till.get("offline", list=checkin_list.pk + 999)
-
-    assert response.status_code == 400

@@ -230,19 +230,11 @@ def main():
           status == 201 and float(card_sale["order"]["total"]) == float(full["price"]),
           f"HTTP {status}: total {card_sale.get('order', {}).get('total')} vs {full['price']}")
 
-    print("\n-- hors ligne : liste embarquée -----------------------------")
-    # The seeded device has no role, so it keeps the door as well as the till
-    # and is given the list. A device set up as a till is refused it, with
-    # door_role_required, which tests/test_offline_snapshot.py covers.
-    status, snapshot = call("GET", f"/organizers/{ORG}/events/{EVENT}/openpos/offline/", token=token)
-    check("offline snapshot reachable", status == 200, f"HTTP {status}: {str(snapshot)[:200]}")
-    if status == 200:
-        print(f"        {len(snapshot['tickets'])} billets embarqués, liste « {snapshot['list']['name']} »")
-        check("the snapshot carries what a scan needs",
-              all({"secret", "item", "used"} <= set(t) for t in snapshot["tickets"][:5]),
-              str(snapshot["tickets"][:1]))
-        check("and says whether it is complete", snapshot.get("truncated") is False,
-              str(snapshot.get("truncated")))
+    print("\n-- la porte ne reçoit plus la liste des billets ------------")
+    # Up to 0.29 a door downloaded every ticket of its list to scan against
+    # with the network gone. Since 0.30 it answers no ticket without pretix.
+    status, gone = call("GET", f"/organizers/{ORG}/events/{EVENT}/openpos/offline/", token=token)
+    check("the guest list is not handed out", status == 404, f"HTTP {status}: {str(gone)[:200]}")
 
     print("\n-- recherche par nom à la porte -----------------------------")
     # pretix's own search. The Open POS profile only lets it through with a
