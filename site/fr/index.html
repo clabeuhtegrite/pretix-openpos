@@ -129,11 +129,12 @@
       </div>
 
       <div class="card">
-        <h3>Elle continue sans réseau</h3>
+        <h3>Elle continue de vendre sans réseau</h3>
         <p>Une coupure n'arrête pas la caisse : elle vend depuis le catalogue qu'elle
-        a mis en cache, scanne contre une liste embarquée, puis rejoue la file dans
-        l'ordre sous les mêmes clés d'idempotence — un rejeu ne vend jamais deux fois
-        — et signale ce qui demande un humain.</p>
+        a mis en cache, puis rejoue la file dans l'ordre sous les mêmes clés
+        d'idempotence — un rejeu ne vend jamais deux fois — et signale ce qui demande
+        un humain. La porte, elle, ne fait entrer un billet que sur la réponse de
+        pretix : sans réseau, elle le dit plutôt que de deviner.</p>
       </div>
 
       <div class="card">
@@ -203,7 +204,9 @@
       Annuler une vente par carte est autre chose, et c'est entièrement
       automatique.</li>
       <li><strong>Pas d'annulation hors ligne.</strong> Un avoir demande le serveur,
-      donc les corrections attendent le réseau. Vendre et scanner, non.</li>
+      donc les corrections attendent le réseau. Vendre, non.</li>
+      <li><strong>Pas de scan hors ligne.</strong> Un billet n'entre que sur la
+      réponse de pretix ; sans réseau, la porte le dit et l'attend.</li>
       <li><strong>Pas de questions au contrôle d'accès.</strong> Un produit qui
       exige des réponses à la porte est refusé avec un motif clair plutôt que pointé
       à moitié. Utilisez pretixSCAN pour ceux-là.</li>

@@ -1,6 +1,6 @@
 import type {
-  CartLine, Credit, DeviceDescription, DoorScans, OfflineSnapshot, OrphanPayment, Pairing,
-  PendingMovement, PendingPayment, QueueEntry, SyncFailure,
+  CartLine, Credit, DeviceDescription, DoorScans, OrphanPayment, Pairing, PendingMovement,
+  PendingPayment, QueueEntry, SyncFailure,
 } from "./types";
 
 const PAIRING_KEY = "openpos.pairing.v1";
@@ -8,7 +8,6 @@ const DEVICE_REPORT_KEY = "openpos.deviceReport.v1";
 const CASHIER_KEY = "openpos.cashier.v1";
 const QUEUE_KEY = "openpos.queue.v1";
 const FAILURES_KEY = "openpos.failures.v1";
-const SNAPSHOT_KEY = "openpos.snapshot.v1";
 const UPDATE_KEY = "openpos.updateTried.v1";
 const BASKET_KEY = "openpos.basket.v1";
 const REVOKE_KEY = "openpos.revoke.v1";
@@ -199,104 +198,29 @@ export function clearDoorLists(): void {
   }
 }
 
+/**
+ * Where builds up to 0.29 kept what the door scanned against with no network:
+ * the guest list — every name and every ticket secret of an event — when it
+ * was last pulled, and the tickets let in that it did not know of yet.
+ *
+ * Nothing writes there any more: since 0.30 the door answers no ticket
+ * without pretix. Read by forgetGuestList only, so that a device updated from
+ * an earlier build does not go on carrying an event's guest list for ever.
+ */
+const GUEST_LIST_KEYS = ["openpos.snapshot.v1", "openpos.snapshotPull.v1"];
 const ADMISSIONS_PREFIX = "openpos.admitted.v1.";
 
-/** List id → ticket secret → when: `Admissions` in offline.ts, which says why. */
-type AdmissionRecord = Record<string, Record<string, number>>;
-
-/**
- * The tickets let in at this device, per event — see Admissions in offline.ts.
- *
- * Kept per event, and dropped with the guest list: a device that leaves the
- * event, or the door, has no use for either.
- */
-export function loadAdmissions(event: string): AdmissionRecord {
-  const saved = readJson<AdmissionRecord | null>(`${ADMISSIONS_PREFIX}${event}`, null);
-  return saved && typeof saved === "object" && !Array.isArray(saved) ? saved : {};
-}
-
-export function saveAdmissions(event: string, admissions: AdmissionRecord): void {
+/** Drop what an earlier build kept for scanning offline; run once at start. */
+export function forgetGuestList(): void {
   try {
-    if (Object.keys(admissions).length) {
-      localStorage.setItem(`${ADMISSIONS_PREFIX}${event}`, JSON.stringify(admissions));
-    } else {
-      localStorage.removeItem(`${ADMISSIONS_PREFIX}${event}`);
-    }
-  } catch {
-    // Storage full: the record holds for as long as the door screen is open,
-    // and the queue still covers what was admitted offline.
-  }
-}
-
-export function clearAdmissions(): void {
-  try {
-    const keys: string[] = [];
+    const keys = [...GUEST_LIST_KEYS];
     for (let i = 0; i < localStorage.length; i++) {
       const key = localStorage.key(i);
       if (key?.startsWith(ADMISSIONS_PREFIX)) keys.push(key);
     }
     keys.forEach((key) => localStorage.removeItem(key));
   } catch {
-    // Nothing more to do about a storage that refuses to be read.
-  }
-}
-
-export function loadSnapshot(): OfflineSnapshot | null {
-  return readJson<OfflineSnapshot | null>(SNAPSHOT_KEY, null);
-}
-
-export function saveSnapshot(snapshot: OfflineSnapshot): void {
-  try {
-    localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(snapshot));
-  } catch {
-    // A guest list too big for storage: scanning offline will say it has none
-    // rather than pretend to hold half of it.
-  }
-}
-
-const SNAPSHOT_PULL_KEY = "openpos.snapshotPull.v1";
-
-/**
- * Forget the guest list, and when it was last asked for.
- *
- * Every name and every ticket secret of an event is not something a device
- * keeps once it has no business with that event's door: unpaired, moved to
- * another event, made a bar till, or told by the server that it is not a door.
- */
-export function clearSnapshot(): void {
-  try {
-    localStorage.removeItem(SNAPSHOT_KEY);
-    localStorage.removeItem(SNAPSHOT_PULL_KEY);
-  } catch {
     // Storage refused even this; nothing more can be done about it here.
-  }
-}
-
-/** When a pull of the guest list last set off, for which event and list. */
-export interface SnapshotPull {
-  event: string;
-  list: number;
-  at: number;
-}
-
-/**
- * The last pull of the guest list, whoever made it.
- *
- * On disk rather than in the hook that pulls, because two screens pull —
- * the app while the door is closed, the door while it is open — and a reload
- * starts both from nothing: kept in each, a door stepping out to the grid and
- * back pulled the whole list at every round trip.
- */
-export function loadSnapshotPull(): SnapshotPull | null {
-  const saved = readJson<SnapshotPull | null>(SNAPSHOT_PULL_KEY, null);
-  return typeof saved?.at === "number" && typeof saved.list === "number" ? saved : null;
-}
-
-export function saveSnapshotPull(pull: SnapshotPull): void {
-  try {
-    localStorage.setItem(SNAPSHOT_PULL_KEY, JSON.stringify(pull));
-  } catch {
-    // The next screen pulls a little early; the list itself is unaffected.
   }
 }
 

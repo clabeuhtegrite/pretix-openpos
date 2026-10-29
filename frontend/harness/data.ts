@@ -240,28 +240,6 @@ export const history = {
   ],
 };
 
-/**
- * The guest list a door carries when the network goes.
- *
- * Shaped exactly like `/openpos/offline/` answers, which is the point: the
- * harness used to invent `{ list: 7, positions: [] }` here, and `indexSnapshot`
- * read `snapshot.tickets.length` off `undefined`, so choosing the door role
- * showed a white screen and the scanner could not be looked at at all.
- */
-export const offlineSnapshot = {
-  list: { id: 7, name: "Porte" },
-  generated: "2026-09-22T20:30:00Z",
-  truncated: false,
-  tickets: [
-    // The first name the search offers, so a pick answered offline (?redeem=fail)
-    // lands on a ticket the guest list knows.
-    { secret: "aaaa1111bbbb2222", item: 20, name: "Camille Berthier", used: false },
-    { secret: "cccc3333dddd4444", item: 20, name: "Dominique Ferrand", used: true },
-    { secret: "eeee5555ffff6666", item: 21, name: "Sacha Lemoine", used: false },
-    { secret: "gggg7777hhhh8888", item: 21, name: "", used: false },
-  ],
-};
-
 export const attendance = {
   list: { id: 7, name: "Porte" },
   computed_at: "2026-09-22T21:15:00Z",

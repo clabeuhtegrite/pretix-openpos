@@ -63,6 +63,11 @@ async function replaySale(pairing: Pairing, entry: QueueEntry & { kind: "sale" }
   }
 }
 
+/**
+ * Send a scan an earlier build kept: up to 0.29 the door answered tickets
+ * itself with no network and queued the scan. None is queued since, but a
+ * phone updated with scans still waiting sends them here rather than lose them.
+ */
 async function replayCheckin(
   pairing: Pairing,
   entry: QueueEntry & { kind: "checkin" },

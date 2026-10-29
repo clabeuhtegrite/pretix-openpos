@@ -18,7 +18,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: pretix-openpos\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2026-09-27 21:40+0000\n"
+"POT-Creation-Date: 2026-10-29 20:30+0000\n"
 "PO-Revision-Date: 2026-09-22 09:51+0000\n"
 "Last-Translator: clabeuhtegrite\n"
 "Language-Team: French\n"
@@ -108,15 +108,7 @@ msgstr ""
 "Une vente ne peut pas compter plus de {max} articles. Répartissez-la en "
 "plusieurs ventes."
 
-#: api/door.py:89
-msgid ""
-"This device is set up as a till, not for the door: it is not given the guest "
-"list."
-msgstr ""
-"Cet appareil est réglé en caisse, pas pour la porte : la liste des billets "
-"ne lui est pas donnée."
-
-#: api/door.py:97 api/door.py:164
+#: api/door.py:49
 msgid "Unknown check-in list."
 msgstr "Liste de contrôle inconnue."
 
@@ -367,7 +359,7 @@ msgstr ""
 "293 B du CGI ». Une ligne courte par mention : pretix ne coupe pas ces "
 "lignes."
 
-#: association_views.py:106 models.py:926
+#: association_views.py:106 models.py:916
 msgid "Country"
 msgstr "Pays"
 
@@ -523,12 +515,12 @@ msgstr ""
 "Un lecteur ne peut être donné qu’à une caisse. Passez « {device} » en "
 "caisse, ou retirez-lui son lecteur."
 
-#: drawer_views.py:143 models.py:918 models.py:997
+#: drawer_views.py:143 models.py:908 models.py:987
 #: templates/pretix_openpos/sumup.html:214
 msgid "Name"
 msgstr "Nom"
 
-#: drawer_views.py:145 models.py:1004
+#: drawer_views.py:145 models.py:994
 msgid "Usual opening float"
 msgstr "Fond de caisse habituel"
 
@@ -793,7 +785,7 @@ msgstr "Pas de bouton consigne"
 msgid "SIRET: {siret}"
 msgstr "SIRET : {siret}"
 
-#: issuers.py:242 models.py:1308 templates/pretix_openpos/invoices.html:41
+#: issuers.py:242 models.py:1298 templates/pretix_openpos/invoices.html:41
 msgid "Online ticketing"
 msgstr "Billetterie en ligne"
 
@@ -801,7 +793,7 @@ msgstr "Billetterie en ligne"
 msgid "Card on site (SumUp)"
 msgstr "Carte sur place (SumUp)"
 
-#: issuers.py:244 models.py:62 models.py:1310 payment.py:87
+#: issuers.py:244 models.py:62 models.py:1300 payment.py:87
 #: templates/pretix_openpos/drawer_session.html:48
 #: templates/pretix_openpos/drawer_session.html:135
 #: templates/pretix_openpos/sales.html:26
@@ -1411,7 +1403,7 @@ msgstr "Ventes en caisse"
 msgid "Not assigned"
 msgstr "Non attribué"
 
-#: models.py:542 models.py:1122
+#: models.py:542 models.py:1112
 #: templates/pretix_openpos/drawer_session.html:133
 #: templates/pretix_openpos/payment_control.html:14
 #: templates/pretix_openpos/sales.html:24
@@ -1430,7 +1422,7 @@ msgstr "Rôle"
 msgid "SumUp reader"
 msgstr "Lecteur SumUp"
 
-#: models.py:582 models.py:1021 templates/pretix_openpos/devices.html:57
+#: models.py:582 models.py:1011 templates/pretix_openpos/devices.html:57
 msgid "Cash drawer"
 msgstr "Caisse espèces"
 
@@ -1444,148 +1436,148 @@ msgstr "Appareil de caisse"
 msgid "Till devices"
 msgstr "Appareils de caisse"
 
-#: models.py:690
+#: models.py:680
 msgid "Waiting for the cardholder"
 msgstr "En attente du porteur de carte"
 
-#: models.py:691
+#: models.py:681
 msgid "Paid"
 msgstr "Payé"
 
-#: models.py:692
+#: models.py:682
 msgid "Not paid"
 msgstr "Non payé"
 
-#: models.py:746
+#: models.py:736
 msgid "Terminal payment"
 msgstr "Paiement sur lecteur"
 
-#: models.py:747
+#: models.py:737
 msgid "Terminal payments"
 msgstr "Paiements sur lecteur"
 
-#: models.py:836
+#: models.py:826
 msgid "Every till"
 msgstr "Toutes les caisses"
 
-#: models.py:837
+#: models.py:827
 msgid "The bar till only"
 msgstr "La caisse du bar seulement"
 
-#: models.py:838
+#: models.py:828
 msgid "The door only"
 msgstr "La porte seulement"
 
-#: models.py:846 templates/pretix_openpos/categories.html:32
+#: models.py:836 templates/pretix_openpos/categories.html:32
 msgid "Sold by"
 msgstr "Vendu par"
 
-#: models.py:850
+#: models.py:840
 msgid "Category at the till"
 msgstr "Catégorie à la caisse"
 
-#: models.py:851
+#: models.py:841
 msgid "Categories at the till"
 msgstr "Catégories à la caisse"
 
-#: models.py:922
+#: models.py:912
 msgid "Address"
 msgstr "Adresse"
 
-#: models.py:923
+#: models.py:913
 msgid "ZIP code"
 msgstr "Code postal"
 
-#: models.py:924
+#: models.py:914
 msgid "City"
 msgstr "Ville"
 
-#: models.py:929
+#: models.py:919
 msgid "SIRET"
 msgstr "SIRET"
 
-#: models.py:931
+#: models.py:921
 msgid "VAT ID"
-msgstr "Identifiant de TVA"
+msgstr "Numéro de TVA"
 
-#: models.py:935
+#: models.py:925
 msgid "Invoice number prefix"
 msgstr "Préfixe du numéro de facture"
 
-#: models.py:938
+#: models.py:928
 msgid "Invoice footer"
 msgstr "Mentions en bas de facture"
 
-#: models.py:947 templates/pretix_openpos/associations.html:20
+#: models.py:937 templates/pretix_openpos/associations.html:20
 msgid "Association"
 msgstr "Association"
 
-#: models.py:948 signals.py:264 templates/pretix_openpos/association.html:8
+#: models.py:938 signals.py:264 templates/pretix_openpos/association.html:8
 #: templates/pretix_openpos/associations.html:3
 #: templates/pretix_openpos/associations.html:5
 msgid "Associations"
 msgstr "Associations"
 
-#: models.py:1017
+#: models.py:1007
 msgid "Held by"
 msgstr "Détenu par"
 
-#: models.py:1022 signals.py:248 templates/pretix_openpos/drawer.html:8
+#: models.py:1012 signals.py:248 templates/pretix_openpos/drawer.html:8
 #: templates/pretix_openpos/drawers.html:5
 #: templates/pretix_openpos/drawers.html:7
 msgid "Cash drawers"
 msgstr "Caisses espèces"
 
-#: models.py:1062
+#: models.py:1052
 msgid "Cash drawer opening"
 msgstr "Ouverture de caisse"
 
-#: models.py:1063
+#: models.py:1053
 msgid "Cash drawer openings"
 msgstr "Ouvertures de caisse"
 
-#: models.py:1108 templates/pretix_openpos/drawer_session.html:52
+#: models.py:1098 templates/pretix_openpos/drawer_session.html:52
 msgid "Opening float"
 msgstr "Fond de caisse"
 
-#: models.py:1109
+#: models.py:1099
 msgid "Cash in"
 msgstr "Entrée d’espèces"
 
-#: models.py:1110
+#: models.py:1100
 msgid "Cash out"
 msgstr "Sortie d’espèces"
 
-#: models.py:1113
+#: models.py:1103
 msgctxt "cash drawer entry"
 msgid "Count"
 msgstr "Comptage"
 
-#: models.py:1114
+#: models.py:1104
 msgid "Closing"
 msgstr "Fermeture"
 
-#: models.py:1123
+#: models.py:1113
 msgid "Back office"
 msgstr "Back office"
 
-#: models.py:1178
+#: models.py:1168
 msgid "Cash drawer entry"
 msgstr "Écriture de caisse"
 
-#: models.py:1179
+#: models.py:1169
 msgid "Cash drawer entries"
 msgstr "Écritures de caisse"
 
-#: models.py:1309
+#: models.py:1299
 msgid "Card on site"
 msgstr "Carte sur place"
 
-#: models.py:1326
+#: models.py:1316
 msgid "Invoice issuer"
 msgstr "Émetteur de facture"
 
-#: models.py:1327
+#: models.py:1317
 msgid "Invoice issuers"
 msgstr "Émetteurs de facture"
 
@@ -1657,31 +1649,31 @@ msgstr "Le paiement carte a été remboursé dans SumUp."
 msgid "Card readers"
 msgstr "Lecteurs de carte"
 
-#: sumup.py:153
+#: sumup.py:163
 msgid ""
 "SumUp was not asked: the request named something that is not a SumUp id."
 msgstr ""
 "SumUp n’a pas été interrogé : la demande nommait quelque chose qui n’est pas "
 "un identifiant SumUp."
 
-#: sumup.py:213
+#: sumup.py:223
 #, python-brace-format
 msgid "{message} SumUp answered: {reason}"
 msgstr "{message} Réponse de SumUp : {reason}"
 
-#: sumup.py:254 views.py:968
+#: sumup.py:264 views.py:968
 msgid "SumUp is not set up for this organizer yet."
 msgstr "SumUp n’est pas encore configuré pour cet organisateur."
 
-#: sumup.py:279
+#: sumup.py:289
 msgid "SumUp could not be reached. Check the connection and try again."
 msgstr "SumUp n’a pas pu être joint. Vérifiez la connexion et réessayez."
 
-#: sumup.py:292
+#: sumup.py:302
 msgid "SumUp sent an answer this till could not read."
 msgstr "SumUp a renvoyé une réponse que cette caisse n’a pas pu lire."
 
-#: sumup.py:318
+#: sumup.py:328
 msgid ""
 "The card reader is offline. Check that it is switched on and connected, then "
 "try again."
@@ -1689,7 +1681,7 @@ msgstr ""
 "Le lecteur de carte est hors ligne. Vérifiez qu’il est allumé et connecté, "
 "puis réessayez."
 
-#: sumup.py:329
+#: sumup.py:339
 msgid ""
 "The card reader is still busy with the previous request. Try again in a "
 "minute."
@@ -1697,39 +1689,39 @@ msgstr ""
 "Le lecteur de carte traite encore la demande précédente. Réessayez dans une "
 "minute."
 
-#: sumup.py:337
+#: sumup.py:347
 msgid "SumUp refused the API key. Check it in the Open POS settings."
 msgstr "SumUp a refusé la clé d’API. Vérifiez-la dans les réglages Open POS."
 
-#: sumup.py:344
+#: sumup.py:354
 msgid "SumUp does not know this reader or transaction."
 msgstr "SumUp ne connaît pas ce lecteur ou cette transaction."
 
-#: sumup.py:351
+#: sumup.py:361
 msgid "SumUp is having trouble. Try again in a moment."
 msgstr "SumUp rencontre un problème. Réessayez dans un instant."
 
-#: sumup.py:365
+#: sumup.py:375
 msgid "SumUp is receiving too many requests. Try again in a moment."
 msgstr "SumUp reçoit trop de demandes. Réessayez dans un instant."
 
-#: sumup.py:374 sumup.py:384
+#: sumup.py:384 sumup.py:394
 msgid "SumUp refused this request."
 msgstr "SumUp a refusé cette demande."
 
-#: sumup.py:405 sumup_views.py:223
+#: sumup.py:415 sumup_views.py:223
 msgid "This is not a SumUp reader."
 msgstr "Ce n’est pas un lecteur SumUp."
 
-#: sumup.py:520
+#: sumup.py:530
 msgid "SumUp accepted the payment but named no transaction."
 msgstr "SumUp a accepté le paiement sans nommer de transaction."
 
 #: sumup_views.py:165
 msgid "We could not save your changes. See below for details."
 msgstr ""
-"Nous n'avons pas pu enregistrer vos modifications. Voir ci-dessous pour plus "
-"de détails."
+"Nous n'avons pas pu enregistrer vos modifications. Vous trouverez ci-dessous "
+"plus de détails."
 
 #: sumup_views.py:174
 msgid "Your changes have been saved."

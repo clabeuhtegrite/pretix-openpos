@@ -101,20 +101,24 @@ it was written for. Read the scope section before deciding it fits.
   cash/card split visible in pretix' own reporting.
 - **Immediate check-in**: the ticket is checked in as it is sold, so the
   customer walks straight in and there is nothing to hand over.
-- **Offline mode.** A network dropout does not stop the till: it keeps selling
-  from the tariff it cached, keeps scanning against a guest list it carries, and
-  queues everything. On reconnection the queue replays in order under the same
-  idempotency keys — a replay never sells twice — and the app reports what needs
-  a human: prices that moved while it was cut off, tickets contested on replay.
-  A queued sale is never refused for something that changed while the till was
-  cut off, either: the money is already in the drawer, so a quota that ran out
-  or a product pulled from the till in the meantime is recorded as a fact to
+- **Offline sales.** A network dropout does not stop the till: it keeps selling
+  from the tariff it cached and queues every sale. On reconnection the queue
+  replays in order under the same idempotency keys — a replay never sells twice
+  — and the app reports what needs a human: prices that moved while it was cut
+  off. A queued sale is never refused for something that changed while the till
+  was cut off, either: the money is already in the drawer, so a quota that ran
+  out or a product pulled from the till in the meantime is recorded as a fact to
   reconcile rather than left stranded in a browser. Those rows are marked
-  `offline` in the journal, which is how you find them afterwards. Scans are
-  sent the way pretix expects an offline scan to be, so its check-in history
-  and export mark them as offline scans — refusals given offline included —
-  and a scan whose request fails mid-way is answered from the guest list and
-  kept rather than lost.
+  `offline` in the journal, which is how you find them afterwards.
+- **No scanning without pretix.** Every ticket at the door is answered by
+  pretix itself. A scan pretix does not answer — no network, pretix restarting,
+  no answer within 8 seconds — is said so on screen, in red, and the ticket is
+  scanned again; sent again under the same nonce, so a first attempt that did
+  reach pretix is recognised rather than refused as already scanned. Up to 0.29
+  the door answered from a guest list it carried and sent the scans afterwards;
+  scans went missing that way, and 0.30 took it out. Scans an earlier version
+  left waiting on a phone are still sent, the way pretix expects an offline scan
+  to be.
 - **Transaction history and cancellation**, scoped to the till in your hands:
   cancelling issues a credit note, records the refund and appends a reversing
   journal entry — the original sale is never touched — and the items go back in
@@ -159,7 +163,10 @@ it was written for. Read the scope section before deciding it fits.
 Being clear about this up front will save you an evaluation:
 
 - **No offline cancellations.** A credit note needs the server, so corrections
-  wait for the network. Selling and scanning do not.
+  wait for the network. Selling does not.
+- **No scanning offline.** A ticket is only ever let in on pretix' answer: with
+  no network the door says so and waits for it, rather than guess from a copy
+  of the guest list (see *No scanning without pretix* above).
 - **No partial refunds** from the till. A sale is cancelled whole, then rung up
   again corrected; refunding two of three beers is a back-office job.
 - **No open refund to a card.** SumUp only refunds against a transaction of its
@@ -260,7 +267,7 @@ If you run pretix in Docker or Kubernetes, [`deploy/Dockerfile`](deploy/Dockerfi
 bakes the plugin into the official image:
 
 ```bash
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.29.0 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.30.0 .
 ```
 
 The PWA bundle is built inside the image, from the tree you are building, so the
@@ -447,11 +454,11 @@ scripts/preflight.sh --fast   # all but the end-to-end run and the image build
 Only Docker is needed for the backend halves of it; nothing has to be installed
 on the machine.
 
-**The frontend suite** covers the till itself — the queue-replay rules, the
-offline door verdicts, integer-cent arithmetic, the change due on an order
-corrected against a credit, and every screen a cashier can press: what is
-greyed out at the quota, what cannot be confirmed short, what the door does
-with a T-shirt on an all-products list. It runs on jsdom under a coverage floor
+**The frontend suite** covers the till itself — the queue-replay rules, what
+the door says when pretix does not answer, integer-cent arithmetic, the change
+due on an order corrected against a credit, and every screen a cashier can
+press: what is greyed out at the quota, what cannot be confirmed short, what the
+door does with a T-shirt on an all-products list. It runs on jsdom under a coverage floor
 set in `frontend/vite.config.ts`, so a component nobody tests shows up as the
 zero it is and fails the run.
 
@@ -465,7 +472,7 @@ SQLite with pretix' own test settings. It has its own coverage floor, in
 `pyproject.toml`. It needs pretix installed:
 
 ```bash
-pip install "pretix==2026.8.*" && pip install --no-deps -e . && pip install pytest pytest-django pytest-cov
+pip install "pretix==2026.9.*" && pip install --no-deps -e . && pip install pytest pytest-django pytest-cov
 pytest --cov
 ```
 

@@ -1,6 +1,6 @@
 # Fonctionnement de pretix-openpos
 
-Documentation de fonctionnement du plugin, version 0.26.0. Elle couvre trois
+Documentation de fonctionnement du plugin, version 0.30.0. Elle couvre trois
 choses, dans cet ordre : ce que le plugin ajoute à pretix, comment le mettre en
 service, et ce qui se passe exactement quand un bénévole encaisse.
 
@@ -375,14 +375,12 @@ un lecteur non plus — les deux règles sont vérifiées à l'enregistrement, p
 suggérées. La liste déroulante est remplie depuis le compte SumUp de
 l'organisateur ; le §5quinquies décrit ce qui se passe ensuite.
 
-**Une caisse ne reçoit pas la liste des billets.** La liste embarquée de la
-porte (`offline/`, §5ter) porte le secret de chaque billet, et un secret est un
-billet : qui a la liste peut imprimer de quoi entrer. Un appareil dont le rôle
-est *Caisse* se la voit refuser, en 403 avec le code `door_role_required`, pour
-que l'app jette aussi la copie qu'elle a déjà. Jusqu'à la 0.24.2, la caisse du
-bar, qui ne scanne rien, la téléchargeait toutes les cinq minutes et la gardait
-dans son navigateur, où elle restait après le désappairage. Une *Porte*, ou un
-appareil non attribué, la reçoit comme avant.
+**Aucun appareil ne reçoit la liste des billets.** Jusqu'à la 0.29, la porte
+téléchargeait une liste embarquée (`offline/`) pour scanner sans réseau : le
+secret de chaque billet, et un secret est un billet. Depuis la 0.30, la porte ne
+répond plus à un billet sans pretix (§5ter) : l'endpoint n'existe plus, quel que
+soit le rôle de l'appareil, et l'app efface au démarrage la copie qu'une version
+d'avant avait gardée.
 
 La même page dit, sous le nom de chaque appareil, **quand il a parlé au
 serveur pour la dernière fois** — « Dernier contact il y a 3 minutes » et
@@ -545,16 +543,23 @@ afficher et calculer.
 ou au-dessus**. Plus loin, c'est ce que la base a gardé des versions plus
 récentes qui l'interdit :
 
-- **Une autre base pretix : non.** Changer de `-pretix<base>`, c'est aussi
-  ramener pretix lui-même en arrière, et rien ne garantit que ses migrations se
-  laissent enjamber à rebours. Une mise à jour qui a changé de base ne se défait
-  donc pas avec une image, mais en restaurant la base d'avant elle — ventes
-  faites depuis comprises. C'est une raison de ne pas en faire une la veille
-  d'une soirée. La dernière en date est 0.28.0, la première construite sur
-  pretix 2026.8 (canal `pretix2026.8`) : pretix y applique au démarrage cinq
-  migrations à lui (`0307` à `0311`), dont une colonne obligatoire sur les
-  questions que la 2026.7 ne sait pas remplir. Revenir de 0.28.0 à 0.27.x,
-  c'est donc restaurer la base.
+- **Une autre base pretix : non, sauf à l'avoir vérifié.** Changer de
+  `-pretix<base>`, c'est aussi ramener pretix lui-même en arrière, et rien ne
+  garantit que ses migrations se laissent enjamber à rebours. Une mise à jour
+  qui a changé de base ne se défait donc pas avec une image, mais en restaurant
+  la base d'avant elle — ventes faites depuis comprises. C'est une raison de ne
+  pas en faire une la veille d'une soirée. 0.28.0, la première construite sur
+  pretix 2026.8 (canal `pretix2026.8`), est dans ce cas : pretix y applique au
+  démarrage cinq migrations à lui (`0307` à `0311`), dont une colonne
+  obligatoire sur les questions que la 2026.7 ne sait pas remplir. Revenir de
+  0.28.0 à 0.27.x, c'est donc restaurer la base. 0.30.0, sur pretix 2026.9
+  (canal `pretix2026.9`), fait exception : pretix n'y apporte qu'une migration,
+  `sendmail.0013`, qui ne touche à aucune colonne — elle active le plugin
+  d'e-mails programmés sur les événements qui en ont encore à envoyer, puisque
+  la 2026.9 n'envoie plus ceux d'un plugin désactivé. Revenir de 0.30.0 à
+  0.29.0 est donc un changement d'image : essayé sur une base migrée par la
+  2026.9.0 puis rouverte par la 2026.8.1, qui n'a rien à appliquer et démarre
+  sans erreur. Le plugin d'e-mails reste activé là où la migration l'a mis.
 - **Un correctif de pretix sur la même base : oui, s'il n'a pas de
   migration.** Le canal `pretix2026.7` suit les correctifs de pretix 2026.7 :
   0.27.1 est construite sur la 2026.7.1, les versions d'avant sur la 2026.7.0.
@@ -590,6 +595,10 @@ récentes qui l'interdit :
   visée par l'une de ces règles : sans le greffon, Django ne sait plus effacer la
   règle avec l'équipe, et la base refuse la suppression. Les comptes créés par le
   fournisseur restent, sans pouvoir se connecter jusqu'au retour de 0.29.0.
+- **Sous 0.30.0, la porte scanne de nouveau hors ligne.** L'app d'avant
+  recharge la liste embarquée dès l'appairage et, quand pretix ne répond pas,
+  répond elle-même et garde le scan pour plus tard (§5ter) : ce que 0.30.0 a
+  retiré parce que des scans s'y perdaient.
 
 **Ce qui rend une migration franchissable à rebours.** Qu'elle ne fasse
 qu'ajouter, et que ce qu'elle ajoute puisse rester vide. La version d'avant
@@ -673,8 +682,8 @@ Sous *Organisateur → Devices → Créer* :
 - pretix affiche un QR d'appairage et le code en texte.
 
 Pourquoi pas tout l'organisateur : pour chaque événement auquel il a accès, un
-device atteint la liste embarquée de la porte, avec le secret de chaque billet,
-et la recherche par nom, avec les noms et les e-mails des acheteurs. Son token
+device atteint la recherche par nom, avec les noms et les e-mails des
+acheteurs. Son token
 vit dans le navigateur d'une tablette posée sur un comptoir, et il faut partir
 du principe qu'il fuitera (§2.3) : chaque événement de plus est une liste
 d'invités de plus qu'il ouvre, et « tout l'organisateur » y ajoute les soirées
@@ -1362,10 +1371,11 @@ personne au back-office avait peut-être choisi de ne pas faire.
 
 ## 5ter. Le mode hors ligne
 
-Une coupure réseau pendant un événement ne doit pas arrêter la caisse. Tout
-continue : on vend, on encaisse, on scanne. Ce qui change, c'est que le serveur
-l'apprend plus tard — et la difficulté n'est pas de continuer à fonctionner,
-c'est que la reprise soit vérifiable.
+Une coupure réseau pendant un événement ne doit pas arrêter la caisse : on vend,
+on encaisse. Ce qui change, c'est que le serveur l'apprend plus tard — et la
+difficulté n'est pas de continuer à fonctionner, c'est que la reprise soit
+vérifiable. La porte, elle, ne scanne pas sans pretix : un billet n'entre que
+sur sa réponse (plus bas, « La porte ne scanne pas sans pretix »).
 
 ### Comment la caisse sait qu'elle est coupée
 
@@ -1384,19 +1394,39 @@ aller vérifier.
 | Vendre | Oui, au tarif embarqué ; la vente part en file d'attente |
 | Rendre la monnaie | Oui, calculé localement |
 | Encaisser sur le lecteur de carte | Non : le lecteur est piloté par le serveur (§5quinquies). Choisir *Carte* ne pose rien sur le lecteur, le panneau le dit et *Espèces* reste à un geste ; au retour du réseau, *Réessayer* pose le panier |
-| Scanner un billet | Oui, contre la **liste embarquée** (`openpos/offline/`), chargée dès l'appairage pour la liste de la porte — pas seulement à l'ouverture du scan — et rafraîchie toutes les 5 min tant qu'il y a du réseau. **Seulement sur un appareil qui a la porte** (rôle porte, ou sans rôle) : une *Caisse* ne la charge jamais, et efface celle qu'elle avait (§2.7) |
+| Scanner un billet | Non : chaque billet attend la réponse de pretix, et sans elle la porte affiche « Pas de réponse » en rouge. Jusqu'à la 0.29, elle répondait elle-même depuis une liste embarquée |
 | Redémarrer la caisse | Oui : catalogue et configuration du dernier chargement sont conservés par événement, et l'app elle-même vient de la copie gardée par le service worker — sans réseau, mais aussi quand le serveur répond par une erreur 5xx ou pas du tout en 4 s (§2.6). Une caisse rouverte pendant une panne du serveur affichait auparavant la page d'erreur du proxy, et ne pouvait plus vendre |
 | Historique, annulation, effectif | Non — ils demandent le serveur, et l'écran le dit |
 
-Un scan tenté en ligne qui n'aboutit pas — réseau coupé pendant le scan, pretix
-qui redémarre, pas de réponse en 8 s, un proxy qui abandonne la requête (408),
-un serveur qui demande de ralentir (429) — est répondu de la même façon, contre la
-liste embarquée, et gardé sous le `nonce` avec lequel il était parti : si la
-requête était bien arrivée, pretix reconnaît le rejeu au lieu de compter la
-personne deux fois. Il finissait sur un message d'erreur au bout de 30 s, sans
-être gardé nulle part, alors que la personne était déjà entrée. Le verdict dit
-« Hors ligne · gardé sur l'appareil » chaque fois que c'est le téléphone qui a
-répondu.
+### La porte ne scanne pas sans pretix
+
+Un scan auquel pretix ne répond pas — réseau coupé pendant le scan, pretix qui
+redémarre, pas de réponse en 8 s, un proxy qui abandonne la requête (408), un
+serveur qui demande de ralentir (429) — n'est pas répondu par le téléphone. Le
+verdict dit « Pas de réponse » en rouge, avec le son d'un refus : pretix n'a pas
+répondu, le billet n'est pas vérifié, et il se rescanne. Rien n'est gardé sur
+l'appareil, rien n'est compté. Tant que l'app se croit coupée, la ligne « Pas de
+connexion : aucun billet ne peut être vérifié avant son retour » le dit sous
+l'image ; chaque scan part quand même, puisque c'est la réponse de pretix qui
+dit si le réseau est revenu.
+
+Le billet rescanné repart sous le `nonce` de la tentative restée sans réponse :
+si la première requête était arrivée et que seule la réponse s'est perdue,
+pretix reconnaît le scan qu'il a déjà et répond oui, au lieu de « Déjà scanné »
+pour quelqu'un qu'il vient de faire entrer. Ce `nonce` ne vaut que pour ce billet
+sur cette liste, et il est oublié dès que pretix a répondu pour le billet.
+
+**Pourquoi.** Jusqu'à la 0.29, la porte répondait elle-même quand pretix ne
+répondait pas, depuis une liste embarquée — le nom et le secret de chaque
+billet de sa liste, chargée dès l'appairage et rafraîchie toutes les 5 min —, et
+gardait le scan pour l'envoyer au retour du réseau. Des scans se sont perdus en
+chemin, et la 0.30 a retiré ce mode : un billet n'entre que sur la réponse de
+pretix. L'endpoint `offline/` n'existe plus, et l'app efface au démarrage la
+liste et les entrées qu'une version d'avant gardait. Les scans qu'une version
+d'avant avait mis en file sur un téléphone partent toujours, comme décrit
+ci-dessous : une mise à jour ne les perd pas.
+
+### Ce qu'une vente hors ligne porte
 
 Une vente encaissée pendant la coupure porte **le prix que la caisse avait en
 mémoire**. C'est le seul endroit de tout le plugin où un prix vient du client, et
@@ -1432,13 +1462,14 @@ seulement si personne n'est en train d'encaisser. Trois règles gouvernent tout 
    pleine la garde dans la file, arrête la reprise et le dit (« La mémoire de
    cet appareil est pleine… »), plutôt que de la perdre entre les deux.
 
-Un scan part comme pretix attend qu'un scan hors ligne parte : **forcé**, avec
-son heure d'origine. pretix l'enregistre quoi qu'il répondrait maintenant — la
-personne est entrée sur la réponse donnée à ce moment-là — et le **marque comme
-scan hors ligne** : icône de nuage et heure de réception dans l'historique des
-check-ins, colonne dans l'export « Journal d'enregistrement ». Un billet passé
-entre-temps à une autre porte y figure comme un passage forcé, pas comme le refus
-de quelqu'un qui est déjà dans la salle. Un **refus** donné hors ligne part
+Un scan mis en file par une version d'avant la 0.30 part comme pretix attend
+qu'un scan hors ligne parte : **forcé**, avec son heure d'origine. pretix
+l'enregistre quoi qu'il répondrait maintenant — la personne est entrée sur la
+réponse donnée à ce moment-là — et le **marque comme scan hors ligne** : icône
+de nuage et heure de réception dans l'historique des check-ins, colonne dans
+l'export « Journal d'enregistrement ». Un billet passé entre-temps à une autre
+porte y figure comme un passage forcé, pas comme le refus de quelqu'un qui est
+déjà dans la salle. Un **refus** donné hors ligne part
 aussi, vers `failed_checkins`, l'endpoint de pretix pour ça (celui de
 pretixSCAN) : il apparaît comme « Échec en mode hors connexion », rattaché au
 billet quand le code en désigne un. En ligne, pretix écrit lui-même chaque refus ;
@@ -1448,22 +1479,9 @@ La reprise part dès que le réseau revient, puis est retentée toutes les 15 s
 tant que quelque chose attend. Une requête qui échoue aussitôt suivie d'une qui
 passe ne se voit pas comme un retour du réseau : vérifié contre un vrai pretix,
 des scans restaient ainsi sur le téléphone, réseau revenu, jusqu'à la
-réouverture de l'app. Pour la même raison, la liste embarquée n'est pas
-rechargée plus d'une fois par minute sur un réseau qui va et vient — ni à
-chaque aller-retour entre le scanner et la grille : l'heure du dernier
-chargement est gardée sur l'appareil, et le rafraîchissement des 5 min se
-compte depuis lui, quel que soit l'écran qui l'a fait. Un téléphone de porte
-qui vendait un billet et revenait au scan rechargeait toute la liste à chaque
-fois. Un 429 dit combien attendre (`Retry-After`) : les reprises automatiques
+réouverture de l'app. Un 429 dit combien attendre (`Retry-After`) : les reprises automatiques
 attendent ce temps-là, un quart de minute s'il n'a rien dit ; *Envoyer
 maintenant* part quand même, puisque c'est quelqu'un qui le demande.
-
-**Qui garde la liste, et quand elle s'efface.** La liste embarquée, c'est le
-nom et le secret de chaque billet de l'événement. Elle n'est chargée que par un
-appareil qui a la porte, et elle est effacée dès qu'il ne l'a plus : au
-désappairage, au changement d'événement, quand le back-office lui donne le rôle
-caisse, et quand le serveur répond à sa demande `403` avec le code
-`door_role_required` (l'appareil n'est pas une porte).
 
 Chaque vente rejouée porte, à côté de son heure d'origine (`recorded_at`),
 l'heure de l'appareil au moment où elle part (`sent_at`). Les deux viennent de
@@ -1519,9 +1537,10 @@ qu'il faut lire :
   pas l'apprendre. Personne ne peut corriger ça depuis la caisse ; le taire
   serait pire.
 - **Entrées contestées** — « Untel est entré hors ligne, mais le billet a été
-  refusé à l'envoi : billet inconnu ». Forcé, un scan n'est plus refusé que pour
-  ce qu'un passage forcé ne franchit pas. La personne est dans la salle de toute
-  façon ; c'est le prix d'un scan hors ligne, et l'organisateur doit le savoir.
+  refusé à l'envoi : billet inconnu », pour un scan qu'une version d'avant la
+  0.30 avait gardé. Forcé, un scan n'est plus refusé que pour ce qu'un passage
+  forcé ne franchit pas. La personne est dans la salle de toute façon ; c'est le
+  prix d'un scan hors ligne, et l'organisateur doit le savoir.
 
 ### Ce que ça enregistre côté serveur
 
@@ -1529,8 +1548,9 @@ Une vente rejouée est une vente normale, à trois détails près : la ligne de
 journal porte `offline = True`, son `datetime` est **l'heure réelle de la vente**
 (pas celle de la reprise), et le paiement de la commande porte cette même heure.
 La commande, elle, est bien créée à la reprise — c'est la vérité, et le journal
-garde l'autre moitié. Un scan rejoué porte lui aussi son horodatage d'origine,
-et la marque hors ligne de pretix.
+garde l'autre moitié. Un scan rejoué depuis la file d'une version d'avant la
+0.30 porte lui aussi son horodatage d'origine, et la marque hors ligne de
+pretix.
 
 **Et elle n'est pas refusée parce que le catalogue a bougé.** L'argent est dans
 le tiroir et le billet dans une main : refuser à ce moment n'annule pas la vente,
@@ -1600,32 +1620,10 @@ refusée (`terminal_required`).
   envoie son état (`status/`, §8) dit au serveur combien de ventes elle garde
   et depuis quand, et le back-office l'affiche là où l'on compte l'argent
   (§5septies).
-- **Le scan hors ligne ne voit que sa liste embarquée.** Un billet vendu en ligne
-  pendant la coupure y est absent : il sera refusé à la porte. Le bandeau hors
-  ligne dit donc de quand date la liste — « vérification sur les 412 billets de
-  la liste de 21:14 », avec le jour si ce n'est pas aujourd'hui — pour qu'on
-  sache que c'est la liste qui ne connaît pas un billet acheté à 21:40, pas le
-  billet qui est faux. Un billet déjà scanné à une autre porte pendant la
-  coupure sera accepté ici, et enregistré par pretix comme un passage forcé. Et
-  la liste embarquée ne répond **que pour sa propre porte** : changer de liste
-  pendant la coupure affiche « pas de liste embarquée » plutôt que de faire
-  entrer les invités de l'autre porte.
-- **Mais cette porte-ci ne fait pas entrer deux fois le même billet.** Tout
-  billet qu'elle a fait entrer — en ligne, ou hors ligne sur sa liste — est noté
-  sur l'appareil, et refusé « déjà scanné » s'il se représente pendant une
-  coupure, tant que la liste embarquée ne le connaît pas encore comme utilisé.
-  Avant, seule la file d'attente en gardait la trace : une fois la file envoyée,
-  une nouvelle coupure et l'écran rouvert, le même billet repassait au vert ; et
-  un billet scanné en ligne n'était noté nulle part. La note s'efface dès que la
-  liste embarquée marque le billet utilisé, au bout de 36 h sinon, et avec la
-  liste (désappairage, changement d'événement, rôle caisse).
-- **Pas de moteur de règles hors ligne.** Les règles de check-in de pretix
-  (horaires, quotas d'entrée) ne s'appliquent pas à un scan hors ligne : la
-  personne est entrée sur la réponse du téléphone, et la reprise l'enregistre
-  comme un passage forcé. Un billet **bloqué**, ou présenté hors de sa
-  **période de validité**, est en revanche refusé hors ligne comme en ligne : la
-  liste embarquée le dit, et l'heure est celle du téléphone au moment du scan.
-  Avant la 0.18.0, il passait.
+- **Pas de scan hors ligne.** Sans réponse de pretix, la porte ne fait entrer
+  personne d'elle-même : elle le dit, et le billet se rescanne. C'est le choix
+  de la 0.30, après des scans perdus par le mode hors ligne d'avant ; ce qu'une
+  porte fait de ses invités pendant une coupure se décide en dehors de l'app.
 - **Pas d'annulation hors ligne.** Un avoir demande le serveur.
 - **Un rejeu peut encore être refusé**, mais seulement pour une raison qui ne
   vient pas de la soirée : une file corrompue en stockage (les lignes ne
@@ -3448,7 +3446,6 @@ Base : `/api/v1`. Authentification : `Authorization: Device <token>`.
 | `GET` | `…/openpos/summary/` | Recette de l'événement (d'une date, dans une série) : total, par produit, consignes, par appareil, par soirée |
 | `GET` | `…/openpos/attendance/?list=<id>` | Présents sur place, sur une liste de contrôle ; scans de l'événement, par appareil (`scans`) |
 | `GET` | `…/openpos/history/` | Journal de l'événement, **de cette caisse seule** (100 dernières, `truncated` si tronqué) |
-| `GET` | `…/openpos/offline/?list=<id>` | Liste embarquée pour scanner sans réseau ; refusée à un appareil *Caisse* (`door_role_required`) |
 | `POST` | `…/openpos/cancel/` | Annule une vente de cette caisse (avoir + remboursement + contrepassation) |
 | `POST` | `…/openpos/terminal/start/` | Met le panier sur le lecteur de cette caisse |
 | `GET` | `…/openpos/terminal/status/?idempotency_key=<clé>` | Où en est ce paiement lecteur : `status`, `amount`, `currency`, `failure`, et `sumup_unreachable` (SumUp n'a pas pu être interrogé ; même forme pour `terminal/start` et `terminal/cancel`) |
@@ -3460,7 +3457,7 @@ Base : `/api/v1`. Authentification : `Authorization: Device <token>`.
 | `POST` | `…/openpos/drawer/close/` | Ferme sur un comptage encore à jour (`count_seq`), ou sans comptage (`uncounted`) une caisse ouverte un jour précédent |
 | `POST` | `/organizers/<org>/checkinrpc/redeem/` | Pointage (endpoint pretix natif) |
 | `GET` | `/organizers/<org>/checkinrpc/search/` | Recherche de participant (natif) ; chaque `search` d'au moins trois caractères hors espaces, sinon 403 |
-| `POST` | `…/checkinlists/<id>/failed_checkins/` | Refus donné hors ligne, envoyé à la reprise (natif) |
+| `POST` | `…/checkinlists/<id>/failed_checkins/` | Refus donné hors ligne par une version d'avant la 0.30, envoyé à la reprise (natif) |
 
 Tout appel sur un événement où le plugin n'est pas activé est refusé en 403, quel
 que soit l'accès du device : c'est ce qui empêche une app périmée de vendre sur
@@ -3796,7 +3793,6 @@ le tarif d'hier.
 | 400 `no_drawer` | Écriture `drawer/` depuis un appareil sans caisse espèces | Relit l'état : le bouton de la caisse disparaît |
 | 400 `reason_required` | Entrée ou sortie d'argent sans motif | Affiche le message |
 | 400 `idempotency_key` | `cancel/` avec une clé qui désigne l'écriture de quelqu'un d'autre : une vente, l'annulation d'une autre caisse ou du back-office | Ne devrait pas arriver : une clé neuve par annulation |
-| 403 `door_role_required` | `offline/` demandé par un appareil dont le rôle est *Caisse* | Jette la liste embarquée qu'elle a gardée, et ne la redemande pas |
 | 403 sur `checkinrpc/search/` | Terme de recherche de moins de trois caractères hors espaces : « Request denied by device security profile. » | Ne devrait pas arriver : la recherche attend le troisième caractère |
 | 401 / 403 | Device révoqué, ou plugin désactivé sur l'événement | Affiche le motif, avec *Réessayer* et *Dépairer* ; l'appairage n'est jamais effacé tout seul |
 
@@ -3853,7 +3849,6 @@ Ce qu'elle couvre, fichier par fichier :
 |---|---|
 | `test_checkout.py` | Le serveur seul décide du prix, l'idempotence, le total annoncé, le rendu de monnaie, le check-in immédiat limité aux produits d'admission |
 | `test_offline_replay.py` | Ce qu'un rejeu enregistre, et surtout ce qu'il **refuse de refuser** — quota épuisé, produit retiré du canal, déclinaison désactivée |
-| `test_offline_snapshot.py` | Le contenu de la liste embarquée, que la lire coûte le même nombre de requêtes quelle que soit sa taille, et qu'une *Caisse* ne la reçoit pas |
 | `test_cancel.py` | Avoir, remboursement, contre-passation, le rejeu d'une annulation qui avait expiré, une vente déjà annulée retrouvée plutôt que refusée (depuis la caisse ou le back-office, carte comprise), et une clé qui n'est pas la sienne |
 | `test_journal.py` | La chaîne de hachage : falsification détectée, ligne supprimée détectée, ajout seul, versions de charge, ce que le point de reprise voit et ne voit pas |
 | `test_summary.py` | La recette de tout l'événement (une date dans une série, une annulation retombant sur la date de sa vente), par produit et par catégorie, les consignes à part, par appareil et par soirée, le mode test à part, une annulation qui se nette |
@@ -3868,12 +3863,12 @@ Ce qu'elle couvre, fichier par fichier :
 | `test_backoffice.py` | Les écrans, chacun avec sa permission exacte — dont la page de commande de pretix, qu'une vente espèces a déjà mise en 500 |
 | `test_arrivals.py` | La page de l'organisateur : une ligne par soirée (une date de série comprise), l'histogramme et tout ce qu'il ne doit pas compter |
 | `test_event_arrivals.py` | La page d'une soirée : les arrivées font les entrés, les refus par motif font les refusés, un billet ressorti puis rentré n'arrive qu'une fois, minuit, plusieurs nuits, la liste de la caisse, une date de série |
-| `test_security.py` | Ce qu'un token de caisse atteint, et surtout ce qu'il n'atteint pas — dont la liste des invités par une recherche trop courte |
+| `test_security.py` | Ce qu'un token de caisse atteint, et surtout ce qu'il n'atteint pas — dont la liste des invités, ni par une recherche trop courte ni par la liste embarquée d'avant la 0.30 |
 | `test_sumup_reconcile.py` | SumUp et pretix mis d'accord, et la ligne ERROR que chaque échec laisse pour l'alerte |
 
 **La suite frontend** (`frontend/src/*.test.ts`) couvre la logique qui décide où
-va l'argent : les règles de reprise de la file, les verdicts hors ligne à la
-porte, l'arithmétique en centimes, la monnaie à rendre sur une commande corrigée
+va l'argent : les règles de reprise de la file, ce que dit la porte quand pretix
+ne répond pas, l'arithmétique en centimes, la monnaie à rendre sur une commande corrigée
 contre un avoir, la clé d'idempotence d'une annulation, et la conduite du
 lecteur de carte — dont la règle qu'un serveur injoignable ne s'affiche jamais
 comme un refus.
@@ -3931,7 +3926,7 @@ l'installation — donc `npm i --no-save playwright` avant de s'en servir.
 | « Faites entrer » ne s'affiche jamais | Aucune liste de contrôle choisie dans *Open POS → Réglages*, ou aucun produit d'admission dans la vente |
 | Un billet refuse de se scanner | Code-barres non-QR : passer par la recherche par nom ou une douchette clavier |
 | La recherche par nom répond « Request denied by device security profile » | Moins de trois caractères, espaces non comptés : le serveur refuse une recherche qui rendrait toute la liste (§2.3) |
-| Une caisse n'a pas de liste embarquée, ou la porte hors ligne dit n'en avoir aucune | L'appareil est réglé *Caisse* dans *Open POS → Appareils de caisse* : seule une *Porte*, ou un appareil non attribué, reçoit la liste (§2.7) |
+| La porte affiche « Pas de réponse » en rouge | pretix n'a pas répondu au scan en 8 s : réseau coupé, pretix qui redémarre ou débordé. Rescanner le billet, il repart sous le même `nonce` ; la ligne « Pas de connexion » sous l'image dit si l'app se croit coupée (§5ter) |
 | La caméra ne démarre pas | Contexte non sécurisé (HTTP), ou autorisation refusée dans les réglages du navigateur ; si une autre app la tenait, la fermer puis toucher *Réessayer la caméra* |
 | La recette ne correspond pas au tiroir | Vérifier la ligne « mode test » sur l'écran *Ventes* : elle est comptée à part. Sur un appareil rattaché à une caisse espèces, c'est le rapport de fermeture qui se rapproche du tiroir, pas la recette : elle ne compte ni le fond ni les entrées et sorties d'argent |
 | Le tiroir compté dépasse l'attendu | Une caisse du tiroir garde des ventes en espèces pas encore envoyées : c'est dit en orange à côté de l'attendu et sur *Appareils de caisse*. Remettre la tablette en réseau et la laisser les envoyer, puis relire le rapport (§5septies) |

@@ -22,7 +22,6 @@ const { apiMock, sound } = vi.hoisted(() => ({
     summary: vi.fn(),
     attendance: vi.fn(),
     posEvents: vi.fn(),
-    offlineSnapshot: vi.fn(),
     searchAttendees: vi.fn(),
     redeem: vi.fn(),
     initialize: vi.fn(),
@@ -75,10 +74,10 @@ import { describeError } from "./errors";
 import { t, tn } from "./i18n";
 import { formatMoney } from "./money";
 import {
-  addOrphan, clearBasket, loadAdmissions, loadBasket, loadCashier, loadDeviceReport,
-  loadDoorResume, loadFailures, loadOrphans, loadPairing, loadPendingPayment, loadQueue,
-  loadRevocations, loadSnapshot, saveAdmissions, saveBasket, saveDeviceReport, saveDoorList,
-  saveDoorResume, saveFailures, savePairing, savePendingPayment, saveQueue, saveSnapshot,
+  addOrphan, clearBasket, loadBasket, loadCashier, loadDeviceReport, loadDoorResume,
+  loadFailures, loadOrphans, loadPairing, loadPendingPayment, loadQueue, loadRevocations,
+  saveBasket, saveDeviceReport, saveDoorList, saveDoorResume, saveFailures, savePairing,
+  savePendingPayment, saveQueue,
 } from "./storage";
 import { fillStorage } from "./test/setup";
 import { noTakings } from "./test/takings";
@@ -233,10 +232,6 @@ beforeEach(() => {
     list: { id: 7, name: "Porte" }, computed_at: "2026-08-16T22:30:00.000Z",
     inside: 0, entered: 0, exited: 0, expected: 0, not_arrived: 0,
     non_admission_entered: 0, items: [],
-  });
-  apiMock.offlineSnapshot.mockResolvedValue({
-    list: { id: 7, name: "Porte" }, generated: "2026-08-16T20:00:00.000Z",
-    tickets: [], truncated: false,
   });
   apiMock.deviceStatus.mockResolvedValue({ server_time: new Date().toISOString() });
 });
@@ -2040,9 +2035,9 @@ describe("the door", () => {
   });
 });
 
-describe("the guest list carried for a dropout", () => {
-  const twoDoors = () =>
-    config({
+describe("the door's list", () => {
+  it("is the one the door was switched to, when it reopens", async () => {
+    apiMock.config.mockResolvedValue(config({
       checkin: {
         enabled: true, list_id: 7, list_name: "Porte",
         lists: [
@@ -2050,197 +2045,50 @@ describe("the guest list carried for a dropout", () => {
           { id: 8, name: "VIP", all_products: false, include_pending: false },
         ],
       },
-    });
-
-  it("is fetched before the door has ever been opened", async () => {
-    // A phone that lost the wifi before anyone had opened the scanner used
-    // to have no guest list at all, and its door stayed shut for the dropout.
-    show();
-    await ready();
-
-    await waitFor(() => expect(apiMock.offlineSnapshot).toHaveBeenCalledWith(pairing, 7));
-  });
-
-  it("is fetched for the event's first list when sales do not check in", async () => {
-    apiMock.config.mockResolvedValue(config({
-      checkin: {
-        enabled: false, list_id: null, list_name: null,
-        lists: [{ id: 9, name: "Entrée", all_products: true, include_pending: false }],
-      },
     }));
-    show();
-    await ready();
-
-    await waitFor(() => expect(apiMock.offlineSnapshot).toHaveBeenCalledWith(pairing, 9));
-  });
-
-  it("is not fetched at all for an event with no list", async () => {
-    apiMock.config.mockResolvedValue(config({
-      checkin: { enabled: false, list_id: null, list_name: null, lists: [] },
-    }));
-    show();
-    await ready();
-
-    expect(apiMock.offlineSnapshot).not.toHaveBeenCalled();
-  });
-
-  it("is left to the door screen while that is open, which does not pull it again", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    const { user } = show();
-    await ready();
-    await waitFor(() => expect(apiMock.offlineSnapshot).toHaveBeenCalledOnce());
-    apiMock.offlineSnapshot.mockClear();
-
-    // Pulled a moment ago by the app: the door has the same list already.
-    await user.click(screen.getByRole("button", { name: t("checkin.open") }));
-    expect(apiMock.offlineSnapshot).not.toHaveBeenCalled();
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(300_000);
-    });
-
-    // One fetcher at a time: the door's own refresh, not the app's on top of it.
-    expect(apiMock.offlineSnapshot).toHaveBeenCalledOnce();
-    vi.useRealTimers();
-  });
-
-  it("is not pulled again at every step out of the door and back", async () => {
-    // A door selling a ticket at the grid and going straight back used to
-    // download the whole guest list at every round trip.
-    const { user } = show();
-    await ready();
-    await waitFor(() => expect(apiMock.offlineSnapshot).toHaveBeenCalledOnce());
-
-    for (let i = 0; i < 3; i++) {
-      await user.click(screen.getByRole("button", { name: t("checkin.open") }));
-      await user.click(await screen.findByRole("button", { name: "close-scanner" }));
-    }
-
-    expect(apiMock.offlineSnapshot).toHaveBeenCalledOnce();
-  });
-
-  it("follows the door to the list it was switched to, and reopens on it", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    apiMock.config.mockResolvedValue(twoDoors());
     const { user } = show();
     await ready();
     await user.click(screen.getByRole("button", { name: t("checkin.open") }));
     await user.selectOptions(screen.getByLabelText(t("checkin.list")), "8");
-    await waitFor(() => expect(apiMock.offlineSnapshot).toHaveBeenCalledWith(pairing, 8));
-    apiMock.offlineSnapshot.mockClear();
-
-    // The door pulled list 8 a moment ago; the app carries on refreshing that
-    // one rather than going back to the default list.
     await user.click(screen.getByRole("button", { name: "close-scanner" }));
-    expect(apiMock.offlineSnapshot).not.toHaveBeenCalled();
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(300_000);
-    });
-    expect(apiMock.offlineSnapshot).toHaveBeenCalledWith(pairing, 8);
-    expect(apiMock.offlineSnapshot).not.toHaveBeenCalledWith(pairing, 7);
+
     await user.click(screen.getByRole("button", { name: t("checkin.open") }));
 
     expect(screen.getByLabelText(t("checkin.list"))).toHaveProperty("value", "8");
-    vi.useRealTimers();
   });
+});
 
-  it("is never pulled by a bar till, and one it carried from before is dropped", async () => {
-    // Every guest's name and ticket secret, every five minutes, on a till
-    // with no door button.
-    saveSnapshot({
+describe("the guest list an earlier build carried", () => {
+  it("is dropped from the device as soon as this one starts", async () => {
+    // Up to 0.29 a door kept every ticket of its list — secret, name — to
+    // scan against with no network, and the tickets it had let in since.
+    // This build scans nothing without pretix, and keeps none of it.
+    localStorage.setItem("openpos.snapshot.v1", JSON.stringify({
       list: { id: 7, name: "Porte" }, generated: "2026-08-16T20:00:00.000Z",
       tickets: [{ secret: "alice", item: 20, name: "Alice", used: false }], truncated: false,
-    });
-    saveAdmissions("festival", { 7: { alice: Date.now() } });
-    apiMock.config.mockResolvedValue(config({
-      device: { serial: "TILL1", name: "Caisse bar", role: "pos" },
     }));
-    vi.useFakeTimers({ shouldAdvanceTime: true });
+    localStorage.setItem("openpos.snapshotPull.v1", JSON.stringify({ event: "festival", list: 7, at: 1 }));
+    localStorage.setItem("openpos.admitted.v1.festival", JSON.stringify({ 7: { alice: 1 } }));
+    localStorage.setItem("openpos.admitted.v1.gala", JSON.stringify({ 21: { bob: 1 } }));
+
     show();
     await ready();
 
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(3_600_000);
-    });
-
-    expect(apiMock.offlineSnapshot).not.toHaveBeenCalled();
-    expect(loadSnapshot()).toBeNull();
-    expect(loadAdmissions("festival")).toEqual({});
-    vi.useRealTimers();
+    expect(localStorage.getItem("openpos.snapshot.v1")).toBeNull();
+    expect(localStorage.getItem("openpos.snapshotPull.v1")).toBeNull();
+    expect(localStorage.getItem("openpos.admitted.v1.festival")).toBeNull();
+    expect(localStorage.getItem("openpos.admitted.v1.gala")).toBeNull();
   });
 
-  it("is pulled by a door, and by a device nobody has given a role", async () => {
-    apiMock.config.mockResolvedValue(config({
-      device: { serial: "TILL1", name: "Porte", role: "door" },
-    }));
+  it("goes without the rest of what the device holds", async () => {
+    saveDoorList("festival", 8);
+    localStorage.setItem("openpos.admitted.v1.festival", JSON.stringify({ 7: { alice: 1 } }));
+
     show();
-
-    await waitFor(() => expect(apiMock.offlineSnapshot).toHaveBeenCalledWith(pairing, 7));
-  });
-
-  it("is forgotten when the till is unpaired, with who the door let in", async () => {
-    saveAdmissions("festival", { 7: { alice: Date.now() } });
-    const { user } = show();
     await ready();
-    await waitFor(() => expect(loadSnapshot()).not.toBeNull());
-    vi.spyOn(window, "confirm").mockReturnValue(true);
 
-    await user.click(screen.getByRole("button", { name: "settings" }));
-    await user.click(await screen.findByRole("button", { name: new RegExp(t("settings.unpair")) }));
-
-    expect(loadSnapshot()).toBeNull();
-    expect(loadAdmissions("festival")).toEqual({});
-    vi.restoreAllMocks();
-  });
-
-  it("forgets the door's list when the till is switched to another event", async () => {
-    // The lists belong to the event; the other event's door is its own.
-    apiMock.posEvents.mockResolvedValue({
-      results: [
-        { slug: "festival", organizer: "demo", name: "Festival", currency: "EUR", testmode: false, date_from: null },
-        { slug: "gala", organizer: "demo", name: "Gala", currency: "EUR", testmode: false, date_from: null },
-      ],
-    });
-    apiMock.config.mockImplementation(async (p: { event: string }) =>
-      p.event === "gala"
-        ? config({
-            event: { ...config().event, slug: "gala", name: "Gala" },
-            checkin: {
-              enabled: true, list_id: 21, list_name: "Gala",
-              lists: [{ id: 21, name: "Gala", all_products: true, include_pending: false }],
-            },
-          })
-        : twoDoors(),
-    );
-    const { user } = show();
-    await ready();
-    await user.click(screen.getByRole("button", { name: t("checkin.open") }));
-    await user.selectOptions(screen.getByLabelText(t("checkin.list")), "8");
-    await user.click(screen.getByRole("button", { name: "close-scanner" }));
-
-    await user.click(screen.getByRole("button", { name: "settings" }));
-    saveAdmissions("festival", { 8: { alice: Date.now() } });
-    let heldAtSwitch: unknown = "unread";
-    let admittedAtSwitch: unknown = "unread";
-    apiMock.config.mockImplementationOnce(async () => {
-      heldAtSwitch = loadSnapshot();
-      admittedAtSwitch = loadAdmissions("festival");
-      return config({
-        event: { ...config().event, slug: "gala", name: "Gala" },
-        checkin: {
-          enabled: true, list_id: 21, list_name: "Gala",
-          lists: [{ id: 21, name: "Gala", all_products: true, include_pending: false }],
-        },
-      });
-    });
-    await user.selectOptions(await screen.findByLabelText(t("settings.event")), "gala");
-
-    await waitFor(() =>
-      expect(apiMock.offlineSnapshot).toHaveBeenCalledWith({ ...pairing, event: "gala" }, 21),
-    );
-    // The festival's guest list was gone before the gala's was asked for,
-    // and so was the record of who its door let in.
-    expect(heldAtSwitch).toBeNull();
-    expect(admittedAtSwitch).toEqual({});
+    expect(loadPairing()).toEqual(pairing);
+    expect(localStorage.getItem("openpos.doorList.v1.festival")).toBe("8");
   });
 });
 

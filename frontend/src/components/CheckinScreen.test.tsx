@@ -2,10 +2,9 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { redeem, attendance, offlineSnapshot, searchAttendees, scanner, play } = vi.hoisted(() => ({
+const { redeem, attendance, searchAttendees, scanner, play } = vi.hoisted(() => ({
   redeem: vi.fn(),
   attendance: vi.fn(),
-  offlineSnapshot: vi.fn(),
   searchAttendees: vi.fn(),
   play: vi.fn(),
   /** Handles on the scanner's props, so a test can put a code in front of it. */
@@ -21,7 +20,7 @@ vi.mock("../api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api")>();
   return {
     ...actual,
-    api: { ...actual.api, redeem, attendance, offlineSnapshot, searchAttendees },
+    api: { ...actual.api, redeem, attendance, searchAttendees },
   };
 });
 
@@ -58,11 +57,10 @@ vi.mock("./QrScanner", () => ({
 
 import { ApiError } from "../api";
 import { markReachable, markUnreachable } from "../connectivity";
-import { locale, t } from "../i18n";
-import { loadAdmissions, loadQueue, saveDoorScans, saveQueue, saveSnapshot } from "../storage";
-import { fillStorage } from "../test/setup";
+import { t } from "../i18n";
+import { loadQueue, saveDoorScans, saveQueue } from "../storage";
 import type {
-  Attendance, CheckinListInfo, DoorScans, OfflineSnapshot, Pairing, QueuedCheckin, RedeemResult,
+  Attendance, CheckinListInfo, DoorScans, Pairing, QueuedCheckin, RedeemResult,
 } from "../types";
 import CheckinScreen from "./CheckinScreen";
 
@@ -72,8 +70,8 @@ import CheckinScreen from "./CheckinScreen";
  * Every verdict a person is shown comes from pretix' own check-in RPC, so what
  * is tested here is the screen around it: that a ticket left in front of the
  * lens is not answered with a red "already scanned", that a T-shirt is not
- * answered with a green "let them in", and that a network dropout is answered
- * from the guest list the till carries rather than by guessing.
+ * answered with a green "let them in", and that a scan pretix did not answer
+ * is said to be unanswered rather than answered by the phone.
  */
 
 const pairing: Pairing = {
@@ -96,16 +94,6 @@ const inside: Attendance = {
   items: [{ id: 10, name: "Entrée", inside: 120, entered: 120, expected: 200 }],
 };
 
-const snapshot: OfflineSnapshot = {
-  list: { id: 7, name: "Porte" },
-  generated: "2026-08-16T20:00:00.000Z",
-  tickets: [
-    { secret: "alice", item: 10, name: "Alice", used: false },
-    { secret: "bob", item: 10, name: "Bob", used: true },
-  ],
-  truncated: false,
-};
-
 function admitted(overrides: Partial<RedeemResult> = {}): RedeemResult {
   return {
     status: "ok",
@@ -121,7 +109,7 @@ const counted: DoorScans = {
   devices: [],
 };
 
-/** A scan waiting in the queue, made just now. */
+/** A scan an earlier build left waiting in the queue, made just now. */
 function waitingScan(overrides: Partial<QueuedCheckin> = {}): QueuedCheckin {
   return {
     kind: "checkin", id: "n1", at: new Date().toISOString(), event: "festival",
@@ -153,15 +141,6 @@ function show(props: Partial<Parameters<typeof CheckinScreen>[0]> = {}) {
   };
 }
 
-/** The offline line as the screen words it for a list pulled at `generated`. */
-function offlineLineFor(generated: string, n: number): string {
-  const at = new Date(generated);
-  const time = at.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
-  if (at.toDateString() === new Date().toDateString()) return t("offline.scanning", { n, time });
-  const date = at.toLocaleDateString(locale, { day: "numeric", month: "long" });
-  return t("offline.scanningOld", { n, date, time });
-}
-
 /** Put a code in front of the camera and let the answer arrive. */
 async function scan(secret = "ticket-1") {
   await act(async () => {
@@ -174,7 +153,6 @@ beforeEach(() => {
   markReachable();
   redeem.mockResolvedValue(admitted());
   attendance.mockResolvedValue(inside);
-  offlineSnapshot.mockResolvedValue(snapshot);
   searchAttendees.mockResolvedValue({ results: [] });
 });
 
@@ -232,14 +210,6 @@ describe("a scan", () => {
 
     expect(screen.getByText(t("checkin.ok"))).toBeDefined();
     expect(screen.getByText(/Marie Dupont · ABC12/)).toBeDefined();
-  });
-
-  it("does not say offline when pretix answered it", async () => {
-    show();
-
-    await scan();
-
-    expect(screen.queryByText(t("checkin.offline"))).toBeNull();
   });
 
   it("passes on whatever pretix wanted said at the door", async () => {
@@ -565,10 +535,6 @@ describe("a refusal", () => {
 });
 
 describe("when pretix cannot answer a scan", () => {
-  beforeEach(() => {
-    saveSnapshot(snapshot);
-  });
-
   it("waits a few seconds for it, not the thirty a sale gets", async () => {
     // With a queue outside, nobody holds a ticket up to the camera for half a
     // minute of "Checking…": the person is waved in long before.
@@ -579,70 +545,184 @@ describe("when pretix cannot answer a scan", () => {
     expect(redeem).toHaveBeenCalledWith(pairing, expect.objectContaining({ timeoutMs: 8000 }));
   });
 
-  it("answers from the guest list the device carries, and says so", async () => {
-    // It used to end on an error banner with the scan kept nowhere: whoever
-    // was let in meanwhile never reached pretix.
+  it("says it has no answer, instead of answering the ticket itself", async () => {
+    // Up to 0.29 the phone answered from a guest list it carried and queued
+    // the scan for later. Scans went missing that way: the door now says so
+    // and the ticket is scanned again.
     redeem.mockRejectedValue(new ApiError(0, "network"));
     show();
 
     await scan("alice");
 
-    expect(screen.getByText(t("checkin.ok"))).toBeDefined();
-    expect(screen.getByText(t("checkin.offline"))).toBeDefined();
-    expect(screen.queryByText(t("error.offline"))).toBeNull();
+    expect(screen.getByText(t("checkin.noAnswer"))).toBeDefined();
+    expect(screen.getByText(t("checkin.noAnswerHint"))).toBeDefined();
+    expect(screen.getByText(t("error.offline"))).toBeDefined();
+    expect(screen.queryByText(t("checkin.ok"))).toBeNull();
   });
 
-  it("keeps the scan under the nonce it was sent with", async () => {
-    // The request may have reached pretix before its answer was lost: the
-    // same nonce makes the replay a repeat rather than a second entry.
-    redeem.mockRejectedValue(new ApiError(504, "Gateway Timeout"));
+  it("is said in red, like a refusal, since a door reads anything but green as stop", async () => {
+    redeem.mockRejectedValue(new ApiError(0, "network"));
+    const { container } = show();
+
+    await scan("alice");
+
+    expect(container.querySelector(".verdict")?.className).toBe("verdict ko");
+  });
+
+  it("sounds like a refusal", async () => {
+    redeem.mockRejectedValue(new ApiError(0, "network"));
     show();
 
     await scan("alice");
 
-    const [[, sent]] = redeem.mock.calls;
-    expect(loadQueue()).toEqual([
-      expect.objectContaining({ kind: "checkin", id: sent.nonce, secret: "alice", admits: true }),
-    ]);
+    expect(play).toHaveBeenCalledWith("refused");
+    expect(play).not.toHaveBeenCalledWith("ok");
   });
 
-  it("answers a scan the server asked to slow down from the list, and keeps it", async () => {
-    // A 429 is pretix not taking the scan at all, like a restart: the queue
-    // replays it under the same nonce once it will.
-    redeem.mockRejectedValue(new ApiError(429, "Request was throttled."));
+  it.each([
+    ["a server in trouble", new ApiError(504, "Gateway Timeout"), t("error.server", { status: 504 })],
+    ["a server asking to slow down", new ApiError(429, "Request was throttled."), t("error.tooMany")],
+    ["a proxy that stopped waiting", new ApiError(408, "HTTP 408"), t("error.timeout")],
+  ])("says the same for %s, with what went wrong", async (_case, error, cause) => {
+    // None of these processed the scan for sure, and none is a verdict.
+    redeem.mockRejectedValue(error);
     show();
 
     await scan("alice");
 
-    expect(screen.getByText(t("checkin.ok"))).toBeDefined();
-    expect(screen.getByText(t("checkin.offline"))).toBeDefined();
-    const [[, sent]] = redeem.mock.calls;
-    expect(loadQueue()).toEqual([expect.objectContaining({ id: sent.nonce, secret: "alice" })]);
+    expect(screen.getByText(t("checkin.noAnswer"))).toBeDefined();
+    expect(screen.getByText(cause)).toBeDefined();
   });
 
-  it("answers a scan a proxy stopped waiting for from the list, and keeps it", async () => {
-    // A 408 never reached pretix whole: nothing was redeemed, and the queue
-    // settles it under the same nonce.
-    redeem.mockRejectedValue(new ApiError(408, "HTTP 408"));
+  it("keeps nothing on the device for later", async () => {
+    redeem.mockRejectedValue(new ApiError(0, "network"));
+    const onBusyChange = vi.fn();
+    show({ onBusyChange });
+
+    await scan("alice");
+
+    expect(loadQueue()).toEqual([]);
+    expect(onBusyChange).toHaveBeenLastCalledWith(true);
+  });
+
+  it("counts nothing, since pretix has said nothing", async () => {
+    redeem.mockRejectedValue(new ApiError(0, "network"));
     show();
 
     await scan("alice");
 
+    expect(screen.getByText(new RegExp(t("checkin.counter", { ok: 0, ko: 0 })))).toBeDefined();
+  });
+
+  it("holds the camera while it is up, and clears on a tap", async () => {
+    redeem.mockRejectedValue(new ApiError(0, "network"));
+    const { user } = show();
+    await scan("alice");
+    expect(screen.getByTestId("paused").textContent).toBe("true");
+
+    await user.click(screen.getByText(t("checkin.noAnswer")));
+
+    expect(screen.queryByText(t("checkin.noAnswer"))).toBeNull();
+    expect(screen.getByTestId("paused").textContent).toBe("false");
+  });
+
+  it("stays up as long as a refusal, then goes", async () => {
+    redeem.mockRejectedValue(new ApiError(0, "network"));
+    show();
+    await scan("alice");
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(7900);
+    });
+    expect(screen.getByText(t("checkin.noAnswer"))).toBeDefined();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(200);
+    });
+
+    expect(screen.queryByText(t("checkin.noAnswer"))).toBeNull();
+  });
+
+  it("lets the same ticket be scanned again at once", async () => {
+    // The repeat guard is for a ticket left in front of the lens after a
+    // verdict, and there was none.
+    redeem.mockRejectedValueOnce(new ApiError(0, "network"));
+    show();
+    await scan("alice");
+
+    await scan("alice");
+
+    expect(redeem).toHaveBeenCalledTimes(2);
     expect(screen.getByText(t("checkin.ok"))).toBeDefined();
-    expect(screen.getByText(t("checkin.offline"))).toBeDefined();
-    const [[, sent]] = redeem.mock.calls;
-    expect(loadQueue()).toEqual([expect.objectContaining({ id: sent.nonce, secret: "alice" })]);
+    expect(screen.queryByText(t("checkin.noAnswer"))).toBeNull();
+  });
+
+  it("sends that ticket again under the nonce it was first sent with", async () => {
+    // The first request may have reached pretix and only its answer been
+    // lost. Under a fresh nonce pretix would answer "already scanned" for
+    // somebody it has just let in; under the same one it recognises the scan.
+    redeem.mockRejectedValueOnce(new ApiError(0, "network"));
+    show();
+    await scan("alice");
+
+    await scan("alice");
+
+    const [[, first], [, again]] = redeem.mock.calls;
+    expect(again.nonce).toBe(first.nonce);
+  });
+
+  it("goes back to a fresh nonce once pretix has answered for the ticket", async () => {
+    redeem.mockRejectedValueOnce(new ApiError(0, "network"));
+    show();
+    await scan("alice");
+    await scan("alice");
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(7000);
+    });
+
+    await scan("alice");
+
+    const [[, first], [, again], [, later]] = redeem.mock.calls;
+    expect(again.nonce).toBe(first.nonce);
+    expect(later.nonce).not.toBe(first.nonce);
+  });
+
+  it("does not lend that nonce to another ticket", async () => {
+    redeem.mockRejectedValueOnce(new ApiError(0, "network"));
+    show();
+    await scan("alice");
+
+    await scan("bob");
+
+    const [[, first], [, other]] = redeem.mock.calls;
+    expect(other.nonce).not.toBe(first.nonce);
+  });
+
+  it("nor to the same ticket scanned on another list", async () => {
+    // A nonce stands for one attempt at one door; pretix looks it up on the
+    // list it is sent to.
+    redeem.mockRejectedValueOnce(new ApiError(0, "network"));
+    const { user } = show();
+    await scan("alice");
+    await user.click(screen.getByText(t("checkin.noAnswer")));
+    await user.selectOptions(screen.getByLabelText(t("checkin.list")), "8");
+
+    await scan("alice");
+
+    const [[, first], [, other]] = redeem.mock.calls;
+    expect(other.lists).toEqual([8]);
+    expect(other.nonce).not.toBe(first.nonce);
   });
 
   it("still stops on pretix refusing the device itself", async () => {
-    // "No" rather than "not now": answering it from the guest list would hide
-    // a phone that has been revoked.
+    // "No" rather than "not now": a phone that has been revoked must not
+    // read as a network that comes and goes.
     redeem.mockRejectedValueOnce(new ApiError(403, "Device revoked"));
     show();
 
     await scan("alice");
 
     expect(screen.getByText("Device revoked")).toBeDefined();
+    expect(screen.queryByText(t("checkin.noAnswer"))).toBeNull();
     expect(loadQueue()).toEqual([]);
   });
 
@@ -742,327 +822,37 @@ describe("the head count", () => {
 });
 
 describe("with no network", () => {
-  beforeEach(() => {
-    saveSnapshot(snapshot);
+  it("says under the picture that no ticket can be checked", () => {
+    show();
+    expect(screen.queryByText(t("checkin.offlineNotice"))).toBeNull();
+
+    act(() => markUnreachable());
+
+    expect(screen.getByText(t("checkin.offlineNotice"))).toBeDefined();
   });
 
-  it("answers from the guest list the till carries", async () => {
+  it("still asks pretix, which is the only judge of whether it can be reached", async () => {
+    // The app's idea of the network comes from the last request; a scan that
+    // gets through is how it learns the network is back.
     show();
     act(() => markUnreachable());
 
     await scan("alice");
 
-    expect(redeem).not.toHaveBeenCalled();
-    expect(screen.getByText(t("checkin.ok"))).toBeDefined();
-  });
-
-  it("does not let a ticket in twice once its first scan was sent and the door reopened", async () => {
-    // The queue was the only record of who this door let in, and the queue
-    // empties the moment it is sent: a door that lost the network again and
-    // was reopened answered the same ticket green a second time.
-    const first = show();
-    act(() => markUnreachable());
-    await scan("alice");
-    expect(screen.getByText(t("checkin.ok"))).toBeDefined();
-    saveQueue([]);
-    first.unmount();
-
-    show();
-    await scan("alice");
-
-    expect(screen.getByText(t("reason.already_redeemed"))).toBeDefined();
-    expect(loadQueue()).toEqual([
-      expect.objectContaining({ secret: "alice", refused: "already_redeemed" }),
-    ]);
-  });
-
-  it("does not let in again offline a ticket it let in online a moment ago", async () => {
-    // pretix has the entry; the guest list on the device will not until its
-    // next pull, and that is exactly the window a dropout falls in.
-    const first = show();
-    await scan("alice");
     expect(redeem).toHaveBeenCalledOnce();
-    first.unmount();
-
-    show();
-    act(() => markUnreachable());
-    await scan("alice");
-
-    expect(screen.getByText(t("reason.already_redeemed"))).toBeDefined();
-  });
-
-  it("does not count a refusal as the ticket having been used", async () => {
-    redeem.mockResolvedValue({ status: "error", reason: "invalid" });
-    const first = show();
-    await scan("alice");
-    first.unmount();
-
-    show();
-    act(() => markUnreachable());
-    await scan("alice");
-
     expect(screen.getByText(t("checkin.ok"))).toBeDefined();
   });
 
-  it("forgets what it let in once the guest list it holds has it as used", async () => {
-    const first = show();
-    await scan("alice");
-    expect(loadAdmissions("festival")).toEqual({ 7: { alice: expect.any(Number) } });
-    first.unmount();
-    saveSnapshot({
-      ...snapshot,
-      tickets: snapshot.tickets.map((ticket) => ({ ...ticket, used: true })),
-    });
-
-    show();
-
-    expect(loadAdmissions("festival")).toEqual({});
-  });
-
-  it("says how many tickets it is scanning against, and when the list is from", async () => {
-    // "liste de 21:14": the one thing that explains why a ticket bought ten
-    // minutes ago is refused — it is the list, not the ticket.
-    const pulled = new Date();
-    pulled.setMinutes(pulled.getMinutes() - 12);
-    saveSnapshot({ ...snapshot, generated: pulled.toISOString() });
-    show();
-
-    act(() => markUnreachable());
-
-    const time = pulled.toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
-    expect(screen.getByText(t("offline.scanning", { n: 2, time }))).toBeDefined();
-  });
-
-  it("says the day too for a list from another day", async () => {
-    show();
-
-    act(() => markUnreachable());
-
-    const pulled = new Date(snapshot.generated);
-    const date = pulled.toLocaleDateString(locale, { day: "numeric", month: "long" });
-    expect(screen.getByText(offlineLineFor(snapshot.generated, 2))).toBeDefined();
-    expect(offlineLineFor(snapshot.generated, 2)).toContain(date);
-  });
-
-  it("still says how many when it cannot tell when the list is from", async () => {
-    saveSnapshot({ ...snapshot, generated: "not a date" });
-    show();
-
-    act(() => markUnreachable());
-
-    expect(screen.getByText(t("offline.scanningUndated", { n: 2 }))).toBeDefined();
-  });
-
-  it("queues what it admitted, so pretix hears about it later", async () => {
+  it("answers no ticket itself", async () => {
+    redeem.mockRejectedValue(new ApiError(0, "network"));
     show();
     act(() => markUnreachable());
 
     await scan("alice");
 
-    const { loadQueue } = await import("../storage");
-    expect(loadQueue()).toEqual([
-      expect.objectContaining({ kind: "checkin", secret: "alice", name: "Alice", list: 7 }),
-    ]);
-  });
-
-  it("tells the app it has queued something, so the badge and the drain know", async () => {
-    // A door that only ever scans queues entries the app never hears about:
-    // the badge reads zero after a whole evening, and when the network comes
-    // back the automatic drain bails out because as far as it knows there is
-    // nothing to send. The entries then sit in the browser until somebody
-    // happens to relaunch the app, and pretix never learns who came in.
-    const onQueued = vi.fn();
-    show({ onQueued });
-    act(() => markUnreachable());
-
-    await scan("alice");
-
-    expect(onQueued).toHaveBeenCalled();
-  });
-
-  it("keeps a refusal too, so pretix hears of the ticket it turned away", async () => {
-    // Online, pretix writes down every scan it refuses. Offline, nothing did:
-    // a ticket bought after the last copy of the guest list was turned away
-    // and left no trace — exactly what somebody looking for lost scans needs.
-    const onQueued = vi.fn();
-    show({ onQueued });
-    act(() => markUnreachable());
-
-    await scan("nobody-we-know");
-
-    expect(onQueued).toHaveBeenCalled();
-    expect(loadQueue()).toEqual([
-      expect.objectContaining({ kind: "checkin", secret: "nobody-we-know", refused: "invalid" }),
-    ]);
-  });
-
-  it("keeps a scan it could not check at all, in words pretix will show", async () => {
-    const { user } = show();
-    await user.selectOptions(screen.getByLabelText(t("checkin.list")), "8");
-    act(() => markUnreachable());
-
-    await scan("alice");
-
-    expect(loadQueue()).toEqual([
-      expect.objectContaining({ list: 8, refused: "error", explanation: t("checkin.unchecked") }),
-    ]);
-  });
-
-  it("remembers when what it let through admits nobody", async () => {
-    saveSnapshot({
-      ...snapshot,
-      tickets: [...snapshot.tickets, { secret: "shirt", item: 99, name: "", used: false }],
-    });
-    show();
-    act(() => markUnreachable());
-
-    await scan("shirt");
-
-    expect(loadQueue()).toEqual([expect.objectContaining({ secret: "shirt", admits: false })]);
-  });
-
-  it("says on the verdict that the phone answered it", async () => {
-    show();
-    act(() => markUnreachable());
-
-    await scan("alice");
-
-    expect(screen.getByText(t("checkin.offline"))).toBeDefined();
-  });
-
-  it("says so when the phone cannot keep the scan, rather than answer it", async () => {
-    // A verdict nobody will ever hear about is worse than none: the ticket is
-    // checked another way.
-    show();
-    act(() => markUnreachable());
-    fillStorage();
-
-    await scan("alice");
-
-    expect(screen.getByText(t("checkin.queueFailed"))).toBeDefined();
+    expect(screen.getByText(t("checkin.noAnswer"))).toBeDefined();
     expect(screen.queryByText(t("checkin.ok"))).toBeNull();
-  });
-
-  it("does not take a scan it could not keep for the ticket being used", async () => {
-    show();
-    act(() => markUnreachable());
-    fillStorage();
-    await scan("alice");
-
-    await scan("alice");
-
-    expect(screen.queryByText(t("reason.already_redeemed"))).toBeNull();
-    expect(screen.getByText(t("checkin.queueFailed"))).toBeDefined();
-  });
-
-  it("refuses a ticket the guest list has never heard of", async () => {
-    // The alternative is admitting anything presented to a camera.
-    show();
-    act(() => markUnreachable());
-
-    await scan("nobody");
-
-    expect(screen.getByText(t("reason.invalid"))).toBeDefined();
-  });
-
-  it("refuses one the snapshot already says is in", async () => {
-    show();
-    act(() => markUnreachable());
-
-    await scan("bob");
-
-    expect(screen.getByText(t("reason.already_redeemed"))).toBeDefined();
-  });
-
-  it("refuses a second scan of a ticket admitted during the dropout", async () => {
-    show();
-    act(() => markUnreachable());
-    await scan("alice");
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(9000);
-    });
-    await scan("alice");
-
-    expect(screen.getByText(t("reason.already_redeemed"))).toBeDefined();
-  });
-
-  it("remembers what it queued across a reload", async () => {
-    saveQueue([{
-      kind: "checkin", id: "n1", at: "2026-08-16T22:00:00.000Z", event: "festival",
-      list: 7, secret: "alice", name: "Alice",
-    }]);
-    show();
-    act(() => markUnreachable());
-
-    await scan("alice");
-
-    expect(screen.getByText(t("reason.already_redeemed"))).toBeDefined();
-  });
-
-  it("does not take a refusal kept from before a reload for the ticket being used", async () => {
-    saveQueue([waitingScan({ secret: "alice", refused: "invalid", admits: undefined })]);
-    show();
-    act(() => markUnreachable());
-
-    await scan("alice");
-
-    expect(screen.getByText(t("checkin.ok"))).toBeDefined();
-  });
-
-  it("says it has no guest list when the door was switched during the dropout", async () => {
-    // The other door's list would admit the wrong people.
-    const { user } = show();
-    await user.selectOptions(screen.getByLabelText(t("checkin.list")), "8");
-    act(() => markUnreachable());
-
-    await scan("alice");
-
-    expect(screen.getByText(t("offline.noSnapshot"))).toBeDefined();
-    expect(screen.getByText(t("reason.offline_no_snapshot"))).toBeDefined();
-  });
-
-  it("does not go on asking the server for a fresh guest list", async () => {
-    show();
-    await waitFor(() => expect(offlineSnapshot).toHaveBeenCalledOnce());
-
-    act(() => markUnreachable());
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(300_000);
-    });
-
-    expect(offlineSnapshot).toHaveBeenCalledOnce();
-  });
-});
-
-describe("the guest list carried for a dropout", () => {
-  it("is pulled as soon as the door opens", async () => {
-    show();
-
-    await waitFor(() => expect(offlineSnapshot).toHaveBeenCalledWith(pairing, 7));
-  });
-
-  it("is refreshed while there is a network to refresh it from", async () => {
-    // Tickets are still being sold, online and at the other tills, all evening.
-    show();
-    await waitFor(() => expect(offlineSnapshot).toHaveBeenCalledOnce());
-
-    await act(async () => {
-      await vi.advanceTimersByTimeAsync(300_000);
-    });
-
-    expect(offlineSnapshot).toHaveBeenCalledTimes(2);
-  });
-
-  it("keeps the one it has when a refresh fails", async () => {
-    saveSnapshot(snapshot);
-    offlineSnapshot.mockRejectedValue(new Error("boom"));
-    show();
-    await waitFor(() => expect(offlineSnapshot).toHaveBeenCalled());
-
-    act(() => markUnreachable());
-
-    expect(screen.getByText(offlineLineFor(snapshot.generated, 2))).toBeDefined();
+    expect(loadQueue()).toEqual([]);
   });
 });
 
@@ -1276,7 +1066,7 @@ describe("the scanner's counter", () => {
     expect(screen.getByText(new RegExp(t("checkin.counter", { ok: 42, ko: 2 })))).toBeDefined();
   });
 
-  it("counts what waits in the queue, and says it is still to be sent", async () => {
+  it("counts what an earlier build left in the queue, and says it is still to be sent", async () => {
     saveQueue([waitingScan()]);
     show();
 
@@ -1295,18 +1085,6 @@ describe("the scanner's counter", () => {
       await screen.findByText(new RegExp(t("checkin.counter", { ok: 42, ko: 2 }))),
     ).toBeDefined();
     expect(screen.getByText(t("checkin.counterEvent", { n: 181 }))).toBeDefined();
-  });
-
-  it("counts a scan answered offline straight away", async () => {
-    saveSnapshot(snapshot);
-    show();
-    await screen.findByText(new RegExp(t("checkin.counter", { ok: 41, ko: 2 })));
-    act(() => markUnreachable());
-
-    await scan("alice");
-
-    expect(screen.getByText(new RegExp(t("checkin.counter", { ok: 42, ko: 2 })))).toBeDefined();
-    expect(screen.getByText(new RegExp(t("checkin.counterWaiting", { n: 1 })))).toBeDefined();
   });
 
   it("does not drop while a drain's scans are on their way into the server's figure", async () => {
@@ -1442,8 +1220,7 @@ describe("leaving", () => {
   });
 
   it("tells the app which list it was switched to", async () => {
-    // So the guest list for a dropout goes on being carried for this door
-    // once the screen is closed, and the door reopens on it.
+    // So the door reopens on it.
     const onListChange = vi.fn();
     const { user } = show({ onListChange });
 

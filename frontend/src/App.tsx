@@ -26,11 +26,11 @@ import {
 } from "./payment";
 import { keepSoundReady, play, setSoundEnabled, soundEnabled } from "./sound";
 import {
-  addOrphan, clearAdmissions, clearBasket, clearDoorLists, clearDoorResume, clearPairing,
-  clearPendingPayment, clearSnapshot, enqueue, isResumable, loadBasket, loadCached, loadCashier,
-  loadDoorList, loadDoorResume, loadFailures, loadPairing, loadPendingPayment, loadQueue,
-  loadUpdateAttempt, queueRevocation, requestPersistence, saveBasket, saveCached, saveCashier,
-  saveDoorList, savePairing, savePendingPayment,
+  addOrphan, clearBasket, clearDoorLists, clearDoorResume, clearPairing, clearPendingPayment,
+  enqueue, forgetGuestList, isResumable, loadBasket, loadCached, loadCashier, loadDoorList,
+  loadDoorResume, loadFailures, loadPairing, loadPendingPayment, loadQueue, loadUpdateAttempt,
+  queueRevocation, requestPersistence, saveBasket, saveCached, saveCashier, saveDoorList,
+  savePairing, savePendingPayment,
 } from "./storage";
 import { useConnectivity } from "./connectivity";
 import { drainQueue } from "./sync";
@@ -46,7 +46,6 @@ import { useBackClose } from "./useBackClose";
 import { useDeviceStatus } from "./useDeviceStatus";
 import { markDeviceReported, useDeviceReport } from "./useDeviceReport";
 import { useDeviceRevoke } from "./useDeviceRevoke";
-import { useOfflineSnapshot } from "./useOfflineSnapshot";
 import { useOrphanPayments } from "./useOrphanPayments";
 import { useTerminal } from "./useTerminal";
 import { useWakeLock } from "./useWakeLock";
@@ -88,9 +87,8 @@ interface Attempt {
  *
  * The one it was last switched to at the door, as long as the event still has
  * it; else the list sales check into; else the event's first. Decided here
- * rather than in the door screen because it matters before that screen has
- * ever been opened: the guest list carried for a dropout is fetched for it
- * from the moment the till is paired.
+ * rather than in the door screen, which is handed it each time it opens, so
+ * that the door reopens on the list it was left on.
  */
 function doorListFor(config: PosConfig | null, chosen: number | null): number | null {
   if (!config) return null;
@@ -129,18 +127,6 @@ function screensFor(config: PosConfig | null) {
     /** A bar till has no door to open; anything unassigned still does. */
     doorReachable: role !== "pos",
   };
-}
-
-/**
- * Drop what this device carried for a door: the guest list, and the tickets it
- * let in that the list did not know of yet.
- *
- * Every name and ticket secret of an event, on a device that has left it —
- * unpaired, moved to another event, or made a bar till.
- */
-function forgetDoor(): void {
-  clearSnapshot();
-  clearAdmissions();
 }
 
 export default function App() {
@@ -290,6 +276,9 @@ export default function App() {
   // What is queued is money that exists nowhere else yet; ask the browser not
   // to evict it.
   useEffect(requestPersistence, []);
+  // And what an earlier build carried for scanning offline — an event's whole
+  // guest list — is not kept by this one, which scans nothing without pretix.
+  useEffect(forgetGuestList, []);
 
   /**
    * Keep the audio ready, from the first tap to the last.
@@ -365,21 +354,6 @@ export default function App() {
     pairing ? loadDoorList(pairing.event) : null,
   );
   const doorList = doorListFor(config, doorListId);
-  // The guest list for a dropout, fetched from the moment the till is paired
-  // rather than the first time somebody opens the scanner. The door screen
-  // fetches for the list on screen while it is open, and this stands down for
-  // that time, so the two never run side by side. Only on a device that can
-  // open the door at all: a bar till used to download every guest's name and
-  // ticket secret every five minutes, for a door it has no button for.
-  useOfflineSnapshot(pairing, doorList, online && !checkinOpen && doorReachable);
-
-  // ...and a device that has stopped being a door forgets what it carried for
-  // one. Keyed on the role rather than on every config: the refresh brings a
-  // new config every minute, and the answer only matters when it changes.
-  const roleKnown = config !== null;
-  useEffect(() => {
-    if (roleKnown && !doorReachable) forgetDoor();
-  }, [roleKnown, doorReachable]);
 
   // A ref, not the state above: the automatic drain and a tap on "send now" can
   // land in the same tick, and a state flag would not have flipped yet. The
@@ -424,7 +398,7 @@ export default function App() {
     // And again every little while, for as long as it stays that way. A drain
     // that stopped on a failed request is otherwise retried only when the
     // network is seen to come back, and a failure answered at once by a
-    // request that got through — the door's head count, its guest list — is
+    // request that got through — the door's head count, the catalogue — is
     // never seen as a coming back at all: the till went offline and online
     // again between two renders. Tried against a real pretix, scans sat on
     // the phone that way, network back and badge showing, until the app was
@@ -770,8 +744,6 @@ export default function App() {
     if (credit && !window.confirm(t("settings.eventCredit", { order: credit.order }))) return;
     const next = { ...pairing, event: slug };
     savePairing(next);
-    // The guest list is the event being left's: nothing to scan against here.
-    forgetDoor();
     setCart([]);
     setCredit(null);
     // The door there reopens on the list last chosen there, if any.
@@ -791,10 +763,8 @@ export default function App() {
     if (pairing) queueRevocation(pairing.token);
     clearPairing();
     clearBasket();
-    // A device handed back is not one that keeps the event's guest list.
-    forgetDoor();
-    // Nor the keys of cancellations it was waiting on, nor an answer still on
-    // its screen: they are this pairing's, and the next one is a new till
+    // The keys of cancellations it was waiting on go too, and any answer still
+    // on its screen: they are this pairing's, and the next one is a new till
     // whose sale #12 is another sale.
     clearCancellations();
     clearDoorLists();
@@ -1508,11 +1478,9 @@ export default function App() {
           // on the one screen a door never leaves.
           onBusyChange={setDoorBusy}
           notice={updateAvailable && !midSale ? updateBar : undefined}
-          // A scan admitted with no network is money's equivalent at the door:
-          // pretix has not heard of it yet, and only this count gets it sent.
-          onQueued={() => setPending(loadQueue().length)}
-          // And when the count goes down, a drain has just sent some: the
-          // door's counter asks the server again rather than wait a minute.
+          // When the queue goes down, a drain has just sent scans an earlier
+          // build kept: the door's counter asks the server again rather than
+          // wait a minute.
           pending={pending}
           // The door steps out to the grid to sell a ticket; every other device
           // already has the grid underneath and is merely closing an overlay.

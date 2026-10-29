@@ -10,7 +10,7 @@
  *               ?slow=1  ?net=drop|blink  ?skew=7  ?resume=cash|card|paid
  *               ?orphan=paid|held  ?terminal=busy  ?sync=refused|wait  ?move=pending
  *               ?cancel=already|backoffice|lost  ?camera=busy
- *               ?cached=1  ?snapshot=HH:MM|yesterday  ?update=fail
+ *               ?cached=1  ?update=fail
  */
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
@@ -49,8 +49,9 @@ if (q.get("queue")) {
   );
 }
 
-// ?scans=N : N scans faits hors ligne attendent d'être envoyés, le dernier
-// étant un billet refusé. Avec ?redeem=fail, ils y restent.
+// ?scans=N : N scans faits hors ligne par une version d'avant la 0.30 attendent
+// d'être envoyés, le dernier étant un billet refusé. Avec ?redeem=fail, ils y
+// restent.
 if (q.get("scans")) {
   const n = Number(q.get("scans"));
   const queue = JSON.parse(localStorage.getItem("openpos.queue.v1") ?? "[]");
@@ -150,31 +151,12 @@ const conf = fx.config({
   ...(q.get("update") ? { version: "99.0.0" } : {}),
 });
 
-// ?snapshot=HH:MM : la liste embarquée a été tirée aujourd'hui à cette heure ;
-// « yesterday » : hier à 21:14. Ce que la porte dit de son âge hors ligne.
-const pulledAt = (() => {
-  const asked = q.get("snapshot");
-  if (!asked) return fx.offlineSnapshot.generated;
-  const at = new Date();
-  if (asked === "yesterday") {
-    at.setDate(at.getDate() - 1);
-    at.setHours(21, 14, 0, 0);
-  } else {
-    const [h, m] = asked.split(":").map(Number);
-    at.setHours(h, m, 0, 0);
-  }
-  return at.toISOString();
-})();
-const guestList = { ...fx.offlineSnapshot, generated: pulledAt };
-
-// ?cached=1 : l'appareil a déjà été ouvert en ligne — configuration,
-// catalogue et liste embarquée sont sur le disque. Avec ?offline=1, c'est une
-// caisse rouverte pendant une coupure, plutôt qu'un premier lancement sans
-// réseau.
+// ?cached=1 : l'appareil a déjà été ouvert en ligne — configuration et
+// catalogue sont sur le disque. Avec ?offline=1, c'est une caisse rouverte
+// pendant une coupure, plutôt qu'un premier lancement sans réseau.
 if (q.get("cached")) {
   localStorage.setItem(`openpos.config.v1.${fx.pairing.event}`, JSON.stringify(conf));
   localStorage.setItem(`openpos.catalog.v1.${fx.pairing.event}`, JSON.stringify(fx.catalog));
-  localStorage.setItem("openpos.snapshot.v1", JSON.stringify(guestList));
 }
 
 // ?camera=busy : une autre app tient la caméra à l'ouverture du scanner ; elle
@@ -444,7 +426,6 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
       ),
     });
   if (url.includes("/openpos/attendance/")) return json(fx.attendance);
-  if (url.includes("/openpos/offline/")) return json(guestList);
   // ?terminal= pilote le lecteur : waiting (défaut), paid, failed, stalled,
   // reprice (le serveur tarife autrement que la caisse).
   const reader = q.get("terminal") ?? "waiting";

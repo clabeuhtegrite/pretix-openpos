@@ -2618,22 +2618,14 @@ table.takings thead th {
   background: rgba(0, 0, 0, 0.2);
 }
 
+/* Large text in WCAG's sense, bold from 18.66px: white needs 3:1 against the
+   fill rather than 4.5, which the green and the red of a verdict give and no
+   lighter weight would. At 18px regular, a refusal's explanation and the
+   reason a scan went unanswered read at 3.8:1 on the red. */
 .verdict-meta,
 .verdict-note {
-  opacity: 0.9;
-  font-size: 18px;
-}
-
-/* Answered by the guest list on the phone, not by pretix. Said on the verdict
-   itself, whichever way it went: a door that lost the network mid-queue sees
-   why the answer came without "Checking…", and that the scan is still to be
-   sent. */
-.verdict-offline {
-  font-size: 15px;
+  font-size: 19px;
   font-weight: 700;
-  padding: 6px 12px;
-  border-radius: 999px;
-  background: rgba(0, 0, 0, 0.2);
 }
 
 /* ---------- install gate ---------- */

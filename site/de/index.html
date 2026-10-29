@@ -130,12 +130,13 @@
       </div>
 
       <div class="card">
-        <h3>Sie läuft ohne Netz weiter</h3>
+        <h3>Sie verkauft ohne Netz weiter</h3>
         <p>Ein Ausfall hält die Kasse nicht an: Sie verkauft aus dem
-        zwischengespeicherten Katalog weiter und scannt gegen eine mitgeführte
-        Gästeliste, spielt die Warteschlange dann der Reihe nach unter denselben
-        Idempotenzschlüsseln ein — eine Wiederholung verkauft nie doppelt — und meldet,
-        was ein Mensch ansehen muss.</p>
+        zwischengespeicherten Katalog weiter, spielt die Warteschlange dann der Reihe
+        nach unter denselben Idempotenzschlüsseln ein — eine Wiederholung verkauft nie
+        doppelt — und meldet, was ein Mensch ansehen muss. Der Einlass lässt ein
+        Ticket nur auf die Antwort von pretix hin durch: Ohne Netz sagt er das, statt
+        zu raten.</p>
       </div>
 
       <div class="card">
@@ -206,7 +207,9 @@
       eine eigene Transaktion, zurückgegebenes Pfand kommt also aus der Kasse. Einen
       Kartenverkauf zu stornieren ist etwas anderes und läuft vollautomatisch.</li>
       <li><strong>Keine Stornos ohne Netz.</strong> Eine Gutschrift braucht den Server,
-      Korrekturen warten also auf die Verbindung. Verkaufen und Scannen nicht.</li>
+      Korrekturen warten also auf die Verbindung. Verkaufen nicht.</li>
+      <li><strong>Kein Scannen ohne Netz.</strong> Ein Ticket kommt nur auf die
+      Antwort von pretix hin durch; ohne Netz sagt der Einlass das und wartet.</li>
       <li><strong>Keine Check-in-Fragen.</strong> Ein Produkt, das am Einlass Antworten
       verlangt, wird mit klarem Grund abgelehnt statt halb eingecheckt. Dafür gibt es
       pretixSCAN.</li>

@@ -11,7 +11,8 @@ import type { DoorScans, QueuedCheckin, QueueEntry, ScanFigures } from "./types"
  * - scans answered online since the figure was asked for, which the next
  *   refresh — a second or so after every scan — will include;
  * - scans still in this device's queue, which the server has not heard of at
- *   all. The queue is on disk, so these survive a reload too.
+ *   all: kept by a build up to 0.29, which answered tickets itself with no
+ *   network. The queue is on disk, so these survive a reload too.
  *
  * Pure, so the arithmetic can be tested without a camera or a network.
  */

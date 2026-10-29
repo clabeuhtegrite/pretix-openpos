@@ -536,28 +536,6 @@ export interface CancelResult {
   by_back_office?: boolean;
 }
 
-/** One ticket of the guest list a till carries for a network dropout. */
-export interface OfflineTicket {
-  secret: string;
-  item: number;
-  name: string;
-  /** Already admitted when the snapshot was taken. */
-  used: boolean;
-  /** Blocked in pretix, which refuses it at every door. Absent when not. */
-  blocked?: boolean;
-  /** Valid only from, or until, this moment. Absent when the ticket has no such limit. */
-  valid_from?: string;
-  valid_until?: string;
-}
-
-export interface OfflineSnapshot {
-  list: { id: number; name: string };
-  generated: string;
-  tickets: OfflineTicket[];
-  /** The event is larger than a till can carry; this list is partial. */
-  truncated: boolean;
-}
-
 /** A sale rung up with no network, waiting to reach the server. */
 export interface QueuedSale {
   kind: "sale";
@@ -597,9 +575,12 @@ export interface QueuedSale {
 /**
  * A scan answered at the door with no network, waiting to reach pretix.
  *
- * Refusals too, since online pretix writes every refused scan down itself: a
- * door that was offline used to leave no trace of the tickets it turned away,
- * which is exactly what somebody looking for lost scans afterwards needs.
+ * Only builds up to 0.29 made these: since 0.30 the door answers nothing
+ * itself, and what an earlier build left on a device is still sent, so that
+ * an update does not lose the scans it was waiting to send. Refusals too,
+ * since online pretix writes every refused scan down itself: a door that was
+ * offline used to leave no trace of the tickets it turned away, which is
+ * exactly what somebody looking for lost scans afterwards needs.
  */
 export interface QueuedCheckin {
   kind: "checkin";

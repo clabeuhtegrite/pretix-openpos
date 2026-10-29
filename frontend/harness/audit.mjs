@@ -32,10 +32,10 @@ const SCENES = [
   { name: "porte", q: "role=door", steps: [] },
   { name: "porte, scans en attente", q: "role=door&scans=3&redeem=fail", steps: [{ wait: 600 }] },
   {
-    name: "porte, réponse hors ligne",
+    name: "porte, pas de réponse",
     q: "role=door&redeem=fail",
     steps: [
-      { text: "Chercher un nom" },
+      { click: ".scanner-actions button:has-text('Chercher un nom')" },
       { fill: [".search-panel input", "Cam"] },
       { wait: 600 },
       { click: ".search-hit" },
@@ -48,7 +48,7 @@ const SCENES = [
     q: "role=door&slow=1",
     steps: [
       { wait: 10000 },
-      { text: "Chercher un nom" },
+      { click: ".scanner-actions button:has-text('Chercher un nom')" },
       { fill: [".search-panel input", "Cam"] },
       { wait: 3000 },
       { click: ".search-hit" },
