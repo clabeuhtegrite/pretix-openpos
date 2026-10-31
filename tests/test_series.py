@@ -17,7 +17,8 @@ from decimal import Decimal
 
 import pytest
 from django.utils.timezone import now
-from pretix.base.models import Event, Item, Order, Quota, SubEvent
+from pretix.base.models import Event, Item, ItemVariation, Order, Quota, SubEvent
+from pretix.base.models.items import SubEventItem, SubEventItemVariation
 
 from .conftest import Till, earlier_tonight, later_tonight, sell
 
@@ -244,3 +245,57 @@ def test_a_plain_event_carries_no_date_anywhere(till, ticket, event):
 
     assert "subevent" not in PosSale.objects.get(seq=body["journal_seq"]).positions[0]
     assert Order.objects.get(code=body["order"]["code"]).positions.first().subevent_id is None
+
+
+def catalogue_names(till):
+    body = till.get("catalog").json()
+    return {entry["name"] for category in body["categories"] for entry in category["items"]}
+
+
+@pytest.mark.django_db
+def test_a_product_switched_off_for_tonight_is_not_offered(tonight):
+    # "Disable product for this date", in the date's own settings: the way to
+    # take one product off one evening of a season without touching the others.
+    event, date, item, till = tonight
+    SubEventItem.objects.create(subevent=date, item=item, disabled=True)
+
+    assert "Entrée" not in catalogue_names(till)
+    response = sell(till, [{"item": item.pk, "count": 1}])
+    assert response.status_code == 400
+    assert response.json()["code"] == "item_not_sold"
+
+
+@pytest.mark.django_db
+def test_a_product_switched_off_for_another_date_is_still_offered_tonight(tonight):
+    event, date, item, till = tonight
+    other = a_date(event, "Samedi prochain", now() + timedelta(days=7))
+    SubEventItem.objects.create(subevent=other, item=item, disabled=True)
+
+    assert "Entrée" in catalogue_names(till)
+
+
+@pytest.mark.django_db
+def test_a_product_whose_sale_period_for_tonight_is_over_is_not_offered(tonight):
+    event, date, item, till = tonight
+    SubEventItem.objects.create(
+        subevent=date, item=item, available_until=now() - timedelta(minutes=1)
+    )
+
+    assert "Entrée" not in catalogue_names(till)
+
+
+@pytest.mark.django_db
+def test_an_option_switched_off_for_tonight_is_not_offered(tonight):
+    event, date, item, till = tonight
+    seated = ItemVariation.objects.create(item=item, value="Assis")
+    standing = ItemVariation.objects.create(item=item, value="Debout")
+    quota = Quota.objects.get(event=event, subevent=date)
+    quota.variations.add(seated, standing)
+    SubEventItemVariation.objects.create(subevent=date, variation=seated, disabled=True)
+
+    body = till.get("catalog").json()
+    entry = body["categories"][0]["items"][0]
+
+    assert [option["name"] for option in entry["variations"]] == ["Debout"]
+    response = sell(till, [{"item": item.pk, "variation": seated.pk, "count": 1}])
+    assert response.status_code == 400

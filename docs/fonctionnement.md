@@ -69,6 +69,28 @@ catalogue remonte à la caisse au départ. Les cases ne servent qu'aux produits
 qu'on restreint — pour en garder un hors du guichet, ou pour en créer un qui
 n'existe *que* là.
 
+**Ce que la grille propose**, c'est ce que la boutique de pretix mettrait en
+vente sur ce canal, à l'instant : un produit activé, coché Open POS, dans sa
+période de vente, pas masqué sans bon, vendu seul ; dans une série, pas
+désactivé pour la date du soir ni hors de la période de vente de cette date ;
+et **les mêmes règles sur chaque déclinaison**. La vente en direct et le
+lecteur de carte refusent sur la même réponse, tirée de la même fonction
+(`on_sale_now`, dans [catalog.py](../pretix_openpos/api/catalog.py)) : la
+grille ne propose rien que le paiement refuserait, et un produit retiré de la
+vente dans pretix quitte la grille au rafraîchissement suivant (§6.2, une
+minute au plus, caisse au repos).
+
+Le filtre de pretix (`filter_available`) ne suffit pas à lui seul, et la
+caisse s'y arrêtait : il garde un produit hors période réglé « Show product
+with info on why it's unavailable », pour que la boutique l'affiche grisé avec
+la raison, et la caisse le vendait comme si de rien n'était ; il ne connaît pas
+les réglages par date d'une série ; et il ne regarde pas les déclinaisons, dont
+la caisse ne lisait que l'interrupteur. Une déclinaison retirée du canal Open
+POS, passée sa date de fin ou masquée sans bon restait sur la grille, et se
+vendait. Deux choses restent volontairement : un produit qui **exige un bon**
+(pretix le montre avec une note ; au guichet, c'est le bénévole qui vérifie,
+§5ter) et un produit **sans quota**, montré « Épuisé » plutôt que caché (§10).
+
 Propriétés notables :
 
 - `default_created = True` — le canal est créé pour chaque organisateur, la case
@@ -1564,7 +1586,7 @@ pu montrer plutôt que sur le seul catalogue du jour :
 | Quota épuisé | refusée (rien n'a été encaissé) | enregistrée |
 | Période de vente terminée (« disponible jusqu'au ») | refusée | enregistrée |
 | Produit désactivé (après la soirée, typiquement) | refusée | enregistrée |
-| Déclinaison désactivée | refusée | enregistrée |
+| Déclinaison désactivée, retirée du canal Open POS ou hors de sa période de vente | refusée | enregistrée |
 | Produit retiré du canal Open POS | refusée | **refusée** (`item_not_sold`) |
 | Produit ou déclinaison qui n'a jamais existé | refusée | refusée |
 | Tarif modifié | prix serveur appliqué | prix encaissé conservé, écart signalé |
@@ -3920,6 +3942,7 @@ l'installation — donc `npm i --no-save playwright` avant de s'en servir.
 | L'image refuse de démarrer sur le cluster | Image arm64 sur un nœud amd64 : rebâtir avec `--platform linux/amd64` |
 | Aucun produit dans le catalogue | Canal **Open POS** non coché sur les produits, ou produits sans quota disponible |
 | Les photos de produits ne s'affichent pas | Le produit n'a pas d'image dans pretix — ou les médias sont servis depuis un autre domaine (S3, CDN) : la coquille annonce `img-src 'self' data:`, et une image d'ailleurs est bloquée. La case reste vide, la vente n'est pas gênée |
+| Un produit retiré de la vente reste sur la grille | La caisse ne relit le catalogue qu'au repos : panier vide, ni paiement ni écran de fin en cours (§6.2). *Réglages → Recharger le catalogue* le relit tout de suite. S'il reste après ça, pretix le vend encore sur le canal Open POS : le désactiver (*Active*), ou décocher Open POS sur le produit ou sur la déclinaison |
 | Un produit reste « Épuisé » alors qu'aucune limite n'est atteinte | Il n'est rattaché à aucun quota : pretix ne peut pas le vendre, et la caisse le montre comme épuisé plutôt que de le laisser au panier pour être refusé au paiement. Créer un quota (illimité au besoin) et l'y rattacher |
 | « Une erreur est survenue » avec un 401 ou 403 au lancement | Device révoqué ou supprimé, plugin désactivé sur l'événement — ou un CDN / pare-feu qui conteste la requête. pretix motive toujours ses refus ; une réponse sans motif (une page, pas du JSON) s'affiche « Accès refusé par le serveur (HTTP 403) — peut-être un pare-feu devant pretix… », et c'est presque toujours le second cas. *Réessayer* d'abord ; *Dépairer* seulement si le device a bien été révoqué |
 | L'événement n'apparaît pas au moment de l'appairage ou dans *Réglages → Événement* | Plugin non activé sur l'événement (l'app le nomme alors, sous le champ), ou device sans accès à l'événement (*Appareils → cet appareil*). Que la boutique soit en ligne ne compte pas |

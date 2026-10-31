@@ -410,7 +410,7 @@ class TerminalActions:
         custom_item = custom_sale_item(event)
         deposit = deposit_item(event)
         subevent = selling_subevent(event)
-        sellable = sellable_items(event, channel, settled=False)
+        sellable = sellable_items(event, channel, settled=False, subevent=subevent)
         # Refused here too, and this is the one that matters: the checkout
         # records a basket the reader has already charged rather than refusing
         # it, so a forbidden line that got as far as a cardholder would be

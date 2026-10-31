@@ -268,6 +268,19 @@ def test_a_product_that_is_not_on_sale_here_is_refused(till, event, ticket, read
     assert sumup.started == []
 
 
+@pytest.mark.django_db
+def test_an_option_that_is_not_on_sale_here_is_refused(till, shirt, organizer, reader_till, sumup):
+    # Before any card comes near it: the checkout records what the reader was
+    # paid for, so this is the one refusal that counts.
+    item, small, _large = shirt
+    small.all_sales_channels = False
+    small.save()
+    small.limit_sales_channels.set([organizer.sales_channels.get(identifier="web")])
+
+    assert start(till, [{"item": item.pk, "variation": small.pk, "count": 1}]).status_code == 400
+    assert sumup.started == []
+
+
 # -- waiting for the cardholder --------------------------------------------
 
 

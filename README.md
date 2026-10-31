@@ -267,7 +267,7 @@ If you run pretix in Docker or Kubernetes, [`deploy/Dockerfile`](deploy/Dockerfi
 bakes the plugin into the official image:
 
 ```bash
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.30.0 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.30.1 .
 ```
 
 The PWA bundle is built inside the image, from the tree you are building, so the
@@ -347,7 +347,12 @@ and checks the URL the login button would send a browser to
    with. To split the two catalogues, set a product's *Availability* to specific
    channels and pick from there — including products that exist *only* on
    **Open POS**. Every product needs a quota, unlimited if need be: one attached
-   to none shows as sold out at the till, as it would in the shop.
+   to none shows as sold out at the till, as it would in the shop. The till
+   offers what pretix's own shop would put on sale on that channel at that
+   moment, option by option — channel boxes, sale period and voucher-only
+   visibility apply to each option too, and on a series so does "Disable product
+   for this date" — so whatever you take off sale in pretix leaves the grid
+   within a minute, and is refused if a basket still names it.
 3. **Price the products in pretix**, on the products themselves. The till
    charges that price and no other. To charge more at the door than in advance,
    make it a separate product on the **Open POS** channel — "Door entry", say —
