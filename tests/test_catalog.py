@@ -5,9 +5,11 @@ The catalogue is the one thing the app caches and goes on selling from when the
 network is gone, so what it contains — and what it deliberately does not — is
 part of the contract.
 """
+from datetime import timedelta
 from decimal import Decimal
 
 import pytest
+from django.utils.timezone import now
 from pretix.base.models import Item, Quota
 
 
@@ -208,3 +210,106 @@ def test_an_option_left_out_of_every_quota_is_shown_as_sold_out(till, shirt):
 
     assert variations["S"]["available"] == 50
     assert variations["L"]["available"] == 0
+
+
+def options(till, name="T-shirt"):
+    return {v["name"] for v in catalogue(till)[name]["variations"]}
+
+
+def webshop_only(variation, organizer):
+    variation.all_sales_channels = False
+    variation.save()
+    variation.limit_sales_channels.set([organizer.sales_channels.get(identifier="web")])
+
+
+@pytest.mark.django_db
+def test_an_option_taken_off_the_till_channel_is_not_offered(till, shirt, organizer):
+    # pretix has the channel boxes on every option as well as on the product,
+    # in the option's own availability settings. Unticking Open POS there is
+    # how one size stops being sold at the counter while the webshop goes on
+    # selling it — and the till went on selling it too.
+    item, small, _large = shirt
+    webshop_only(small, organizer)
+
+    assert options(till) == {"L"}
+
+
+@pytest.mark.django_db
+def test_an_option_past_its_sale_period_is_not_offered(till, shirt):
+    item, small, _large = shirt
+    small.available_until = now() - timedelta(minutes=1)
+    small.save()
+
+    assert options(till) == {"L"}
+
+
+@pytest.mark.django_db
+def test_an_option_not_yet_on_sale_is_not_offered(till, shirt):
+    item, small, _large = shirt
+    small.available_from = now() + timedelta(hours=1)
+    small.save()
+
+    assert options(till) == {"L"}
+
+
+@pytest.mark.django_db
+def test_an_option_shown_only_with_a_voucher_is_not_offered(till, shirt):
+    item, small, _large = shirt
+    small.hide_without_voucher = True
+    small.save()
+
+    assert options(till) == {"L"}
+
+
+@pytest.mark.django_db
+def test_a_product_whose_every_option_left_the_channel_disappears_with_them(
+    till, shirt, organizer
+):
+    item, small, large = shirt
+    webshop_only(small, organizer)
+    webshop_only(large, organizer)
+
+    assert "T-shirt" not in catalogue(till)
+
+
+@pytest.mark.django_db
+@pytest.mark.parametrize(
+    "field, hours", [("available_until", -1), ("available_from", 1)], ids=["over", "not-begun"]
+)
+def test_a_product_outside_its_sale_period_is_not_offered_even_if_pretix_shows_it(
+    till, beer, field, hours
+):
+    # "Show product with info on why it's unavailable": pretix' own filter
+    # keeps such a product, for its shop to show greyed out with the reason
+    # next to it. The till took the filter's word for it and sold it.
+    setattr(beer, field, now() + timedelta(hours=hours))
+    setattr(beer, f"{field}_mode", Item.UNAVAIL_MODE_INFO)
+    beer.save()
+
+    assert "Bière" not in catalogue(till)
+
+
+@pytest.mark.django_db
+def test_a_product_that_needs_a_voucher_is_still_offered(till, beer):
+    # pretix shows it, with a note that it takes a voucher. At a counter the
+    # volunteer is the one who checks, and the till has always sold it.
+    beer.require_voucher = True
+    beer.save()
+
+    assert "Bière" in catalogue(till)
+
+
+@pytest.mark.django_db
+def test_a_product_on_every_channel_is_listed_once_whatever_its_channel_list_holds(
+    till, event, organizer, channel
+):
+    # Left over from when it was limited, or written through the API: rows in
+    # the channel list of a product that is on every channel anyway. The join
+    # behind pretix' filter handed the product back once per row.
+    item = Item.objects.create(event=event, name="Café", default_price=1)
+    item.limit_sales_channels.set([organizer.sales_channels.get(identifier="web"), channel])
+
+    body = till.get("catalog").json()
+    names = [entry["name"] for category in body["categories"] for entry in category["items"]]
+
+    assert names.count("Café") == 1

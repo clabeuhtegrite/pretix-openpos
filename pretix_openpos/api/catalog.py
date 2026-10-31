@@ -8,10 +8,12 @@ refused — shared by the catalogue, the card reader and the checkout.
 """
 from decimal import Decimal
 
-from django.db.models import Q
+from django.db.models import Exists, OuterRef, Prefetch, Q
+from django.utils.timezone import now
 from django.utils.translation import gettext_lazy as _
 from i18nfield.strings import LazyI18nString
-from pretix.base.models import Quota
+from pretix.base.models import ItemVariation, Quota
+from pretix.base.models.items import SubEventItem, SubEventItemVariation
 from rest_framework.exceptions import ValidationError
 
 from ..channels import POS_CHANNEL, PosSalesChannelType
@@ -77,6 +79,88 @@ def for_date(quotas, subevent):
     if subevent is None:
         return quotas
     return [quota for quota in quotas if quota.subevent_id == subevent.pk]
+
+
+def _within_sale_period(moment):
+    """On sale at ``moment`` by its own "available from" and "available until"."""
+    return (
+        (Q(available_from__isnull=True) | Q(available_from__lte=moment))
+        & (Q(available_until__isnull=True) | Q(available_until__gte=moment))
+    )
+
+
+def _off_for_date(moment):
+    """What a date of a series says to take a product, or an option, off that date."""
+    return Q(disabled=True) | Q(available_from__gt=moment) | Q(available_until__lt=moment)
+
+
+def offered_variations(channel, subevent, moment):
+    """
+    The options of a product that are on sale on the till's channel at ``moment``.
+
+    The rules pretix' own shop applies to an option, and they are the same
+    ones it applies to a product: switched on, ticked for the channel, within
+    its sale period, not hidden until a voucher is entered, and on a series
+    not switched off for the date. The till used to ask the first alone, so an
+    option taken off Open POS, or past its "available until", stayed on the
+    grid and was sold.
+    """
+    variations = ItemVariation.objects.filter(
+        Q(all_sales_channels=True) | Q(limit_sales_channels=channel),
+        _within_sale_period(moment),
+        active=True,
+        hide_without_voucher=False,
+    )
+    if subevent is not None:
+        variations = variations.filter(
+            ~Exists(
+                SubEventItemVariation.objects.filter(
+                    _off_for_date(moment), variation_id=OuterRef("pk"), subevent=subevent
+                )
+            )
+        )
+    # distinct, because an option kept on every channel can still carry rows
+    # in its channel list, and the join would hand it back once per row.
+    return variations.distinct().prefetch_related("quotas")
+
+
+def on_sale_now(event, channel, subevent=None):
+    """
+    The products on sale on the till's channel right now, each with its options.
+
+    pretix' ``filter_available`` is where its own shop starts, and where the
+    till used to stop. Three ways of taking a product off sale get past it,
+    and the shop catches each of them afterwards, so the till has to as well:
+
+    - a sale period that is over, or not begun, on a product set to "Show
+      product with info on why it's unavailable": the filter keeps it for the
+      shop to grey out, and the till offered it as if nothing had happened;
+    - on a series, "Disable product for this date", and the date's own sale
+      period;
+    - every one of those rules, one level down, on the options of a product —
+      see :func:`offered_variations`, whose answer rides along on each product
+      as ``offered_variations``.
+
+    A product that needs a voucher stays: pretix shows it, with a note saying
+    so, and a till has always sold it (docs/fonctionnement.md §5ter).
+    """
+    moment = now()
+    items = event.items.all().filter_available(channel=channel).filter(_within_sale_period(moment))
+    if subevent is not None:
+        items = items.filter(
+            ~Exists(
+                SubEventItem.objects.filter(
+                    _off_for_date(moment), item_id=OuterRef("pk"), subevent=subevent
+                )
+            )
+        )
+    return items.prefetch_related(
+        Prefetch(
+            "variations",
+            queryset=offered_variations(channel, subevent, moment),
+            to_attr="offered_variations",
+        )
+    )
 
 
 def quota_availability(quotas, cache):
@@ -243,7 +327,11 @@ def resolve_line(
     variation = None
     if line["variation"] is not None:
         variation = next((v for v in variations if v.pk == line["variation"]), None)
-        if variation is None or (not variation.active and not settled):
+        # Live, the option has to be one the grid could show right now — the
+        # same answer, from the same query (see on_sale_now). A sale already
+        # paid for is only asked that the option exists: switched off or past
+        # its sale period since is what an evening does to a catalogue.
+        if variation is None or (not settled and variation not in item.offered_variations):
             raise ValidationError(
                 {"positions": [_("Unknown option for product {name}.").format(name=str(item.name))]}
             )
@@ -359,7 +447,7 @@ def refuse_oversized(positions):
         )
 
 
-def sellable_items(event, channel, *, settled, pinned=False):
+def sellable_items(event, channel, *, settled, pinned=False, subevent=None):
     """
     What may be sold — and, for a sale already paid for, what may be recorded.
 
@@ -378,10 +466,15 @@ def sellable_items(event, channel, *, settled, pinned=False):
     have been offline — and is refused. A basket the card reader has been paid
     for (``pinned``) was priced here, from this very list, when the reader was
     asked; it is recorded whatever has happened to the catalogue since.
+
+    ``subevent`` is the date being sold, on a series: a product switched off
+    for that date is not on sale live, exactly as the catalogue leaves it out.
     """
     items = event.items.all()
     if not settled:
-        items = items.filter_available(channel=channel)
+        # Exactly what the catalogue offers, options included: the grid and
+        # the checkout read one function, so neither can drift from the other.
+        items = on_sale_now(event, channel, subevent)
     elif not pinned:
         # pretix' own filter_available, less the conditions that change in
         # the course of an evening: switched on, available from, available

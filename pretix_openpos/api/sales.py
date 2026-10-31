@@ -407,7 +407,9 @@ class CheckoutActions:
             settled=settled,
         )
 
-        sellable = sellable_items(event, channel, settled=settled, pinned=terminal is not None)
+        sellable = sellable_items(
+            event, channel, settled=settled, pinned=terminal is not None, subevent=subevent
+        )
         # The same answer the catalogue was drawn from, asked again here
         # because that is the only place it binds. A live line from one of
         # these categories is refused; a line whose money has already changed

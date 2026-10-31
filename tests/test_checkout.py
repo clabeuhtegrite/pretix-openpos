@@ -4,10 +4,12 @@ Ringing up a sale.
 The two properties everything else hangs off: the till never decides what
 something costs, and a request that is sent twice sells one set of tickets.
 """
+from datetime import timedelta
 from decimal import Decimal
 
 import pytest
-from pretix.base.models import Checkin, Order
+from django.utils.timezone import now
+from pretix.base.models import Checkin, Item, Order
 
 from pretix_openpos.models import PosSale
 from pretix_openpos.payment import CARD, CASH
@@ -147,6 +149,34 @@ def test_a_product_that_is_not_on_the_till_channel_is_refused(till, event, ticke
     response = sell(till, [{"item": ticket.pk, "count": 1}])
 
     assert response.status_code == 400
+    assert not Order.objects.filter(event=event).exists()
+
+
+@pytest.mark.django_db
+def test_an_option_taken_off_the_till_channel_is_refused(till, event, shirt, organizer):
+    # What the grid no longer shows is not something a basket can still name:
+    # a till that loaded its catalogue before the change, or a tampered one.
+    item, small, _large = shirt
+    small.all_sales_channels = False
+    small.save()
+    small.limit_sales_channels.set([organizer.sales_channels.get(identifier="web")])
+
+    response = sell(till, [{"item": item.pk, "variation": small.pk, "count": 1}])
+
+    assert response.status_code == 400
+    assert not Order.objects.filter(event=event).exists()
+
+
+@pytest.mark.django_db
+def test_a_product_past_its_sale_period_is_refused_even_if_pretix_shows_it(till, event, beer):
+    beer.available_until = now() - timedelta(minutes=1)
+    beer.available_until_mode = Item.UNAVAIL_MODE_INFO
+    beer.save()
+
+    response = sell(till, [{"item": beer.pk, "count": 1}])
+
+    assert response.status_code == 400
+    assert response.json()["code"] == "item_not_sold"
     assert not Order.objects.filter(event=event).exists()
 
 

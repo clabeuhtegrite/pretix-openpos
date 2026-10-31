@@ -22,7 +22,8 @@ from ..drawers import is_stale, open_session_of
 from ..models import PosCategory, PosDevice, PosSale
 from .cancellation import CancelActions
 from .catalog import (
-    checkin_list_for, custom_sale_item, deposit_item, for_date, get_pos_channel, quota_availability, resolve_price,
+    checkin_list_for, custom_sale_item, deposit_item, for_date, get_pos_channel, on_sale_now, quota_availability,
+    resolve_price,
 )
 from .contact import note_contact, plugin_enabled, reachable_events, utc_timestamp
 from .door import DoorActions
@@ -298,12 +299,18 @@ class OpenPosViewSet(
         quota_cache = {}
         custom = custom_sale_item(event)
 
+        # The same function the checkout refuses a live line with, so the grid
+        # never offers what the payment would turn away — nor keeps showing
+        # what the organiser has just taken off sale.
         items = (
-            event.items.all()
-            .filter_available(channel=channel)
+            on_sale_now(event, channel, subevent)
             .select_related("category")
-            .prefetch_related("variations", "quotas", "variations__quotas")
+            .prefetch_related("variations", "quotas")
             .order_by("category__position", "category_id", "position", "pk")
+            # An item on every channel can still carry rows in its channel
+            # list, and the join behind filter_available hands it back once
+            # per row: a tile twice on the grid.
+            .distinct()
         )
 
         categories = {}
@@ -331,9 +338,7 @@ class OpenPosViewSet(
                 # A product with variations is never sold on its own.
                 entry["price"] = None
                 entry["available"] = None
-                for variation in variations:
-                    if not variation.active:
-                        continue
+                for variation in item.offered_variations:
                     entry["variations"].append(
                         {
                             "id": variation.pk,

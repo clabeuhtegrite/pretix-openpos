@@ -195,6 +195,21 @@ def test_an_option_switched_off_during_the_dropout_is_still_recorded(till, shirt
 
 
 @pytest.mark.django_db
+def test_an_option_whose_sale_period_ended_during_the_dropout_is_still_recorded(till, shirt):
+    # Live, the grid stopped offering it the moment its "available until"
+    # passed. A sale rung up before that and replayed after is still a sale.
+    item, small, _large = shirt
+    small.available_until = now() - timedelta(minutes=1)
+    small.save()
+
+    body = offline_sale(
+        till, [{"item": item.pk, "variation": small.pk, "count": 1, "price": "15.00"}]
+    ).json()
+
+    assert body["order"]["total"] == "15.00"
+
+
+@pytest.mark.django_db
 def test_an_option_that_never_existed_is_still_refused(till, shirt):
     item, _small, large = shirt
 
