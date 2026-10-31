@@ -3,7 +3,7 @@ import { markReachable, markUnreachable } from "./connectivity";
 import type {
   Attendance, AttendeeMatch, CancelResult, Catalog, DeviceDescription, DeviceStatus,
   DrawerAnswer, DrawerState, History, InitializeResponse, Pairing, PosConfig, PosEventList,
-  RedeemResult, SaleResult, SummaryResponse, TerminalPayment,
+  ReaderAnswer, RedeemResult, SaleResult, SummaryResponse, TerminalPayment,
 } from "./types";
 
 const BASE = "/api/v1";
@@ -507,6 +507,22 @@ export const api = {
       method: "POST",
       body: { idempotency_key: idempotencyKey },
       token: p.token,
+    });
+  },
+
+  /**
+   * How this till's card reader is: on or off, battery, network, busy.
+   *
+   * Asked of SumUp by the server, which gives it a few seconds and no more.
+   * A background request: it is there to be read, no sale waits on it, and a
+   * failure of its own must not take the till offline — the probe and the
+   * next sale say that better.
+   */
+  terminalReader(p: Pairing, signal?: AbortSignal): Promise<ReaderAnswer> {
+    return request(`/organizers/${p.organizer}/events/${p.event}/openpos/terminal/reader/`, {
+      token: p.token,
+      signal,
+      background: true,
     });
   },
 

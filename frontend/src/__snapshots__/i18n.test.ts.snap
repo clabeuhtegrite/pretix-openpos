@@ -5,6 +5,7 @@ exports[`the French catalogue > leaves no string untranslated by copying the Eng
   "app.title",
   "checkin.open",
   "history.badgeTestmode",
+  "reader.firmware",
   "sale.total",
   "summary.total",
 ]

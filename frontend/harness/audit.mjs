@@ -59,6 +59,11 @@ const SCENES = [
   },
   { name: "effectif par appareil", q: "role=door", steps: [{ click: ".attendance-button" }, { wait: 300 }] },
   { name: "réglages", q: "role=pos", steps: [{ click: '[aria-label="settings"]' }] },
+  // Le lecteur dans les Réglages : les quatre pastilles qui ont une couleur.
+  { name: "réglages, lecteur prêt", q: "role=pos&card=terminal&reader=low", steps: [{ click: '[aria-label="settings"]' }, { wait: 300 }] },
+  { name: "réglages, lecteur occupé", q: "role=pos&card=terminal&reader=busy", steps: [{ click: '[aria-label="settings"]' }, { wait: 300 }] },
+  { name: "réglages, lecteur hors ligne", q: "role=pos&card=terminal&reader=offline", steps: [{ click: '[aria-label="settings"]' }, { wait: 300 }] },
+  { name: "réglages, lecteur inconnu", q: "role=pos&card=terminal&reader=unknown", steps: [{ click: '[aria-label="settings"]' }, { wait: 300 }] },
   { name: "hors ligne", q: "role=pos&offline=1&queue=3", steps: [] },
 ];
 

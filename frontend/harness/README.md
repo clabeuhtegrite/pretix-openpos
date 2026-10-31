@@ -23,6 +23,7 @@ Paramètres d'URL, cumulables :
 |---|---|
 | `role=pos` / `role=door` | le rôle attribué à l'appareil |
 | `card=terminal` | un lecteur SumUp est attribué à cette caisse |
+| `reader=lte` / `low` / `busy` / `updating` / `offline` / `unknown` / `unset` / `fail` | ce que le lecteur dit de lui-même dans les Réglages, avec `card=terminal` (défaut : prêt, en Wi-Fi) : prêt en 4G ; batterie à 12 % ; une carte attendue ; en mise à jour ; hors ligne depuis vingt minutes ; SumUp n’a rien dit ; SumUp pas configuré dans le back-office ; le serveur ne répond pas |
 | `terminal=paid` / `failed` / `stalled` / `reprice` / `busy` | ce que fait le lecteur (défaut : il attend la carte) ; *Annuler le paiement* met deux secondes et demie à répondre, comme le vrai serveur qui arrête le lecteur puis relit SumUp ; avec `stalled`, le serveur ne répond plus et, quinze secondes plus tard, le panneau propose la sortie (Réessayer ou espèces) ; `busy` : le lecteur tient un autre paiement |
 | `net=drop` / `net=blink` | le réseau tombe une seconde et demie après l’ouverture de la caisse (« Carte » ne démarre alors pas le lecteur) ; avec `blink`, il revient huit secondes plus tard |
 | `resume=cash` / `card` / `paid` | la caisse s’est arrêtée au milieu d’un paiement et le reprend : une vente en espèces partie (renvoyée sous la même clé, l’écran de fin le dit), un panier sur le lecteur (le serveur est interrogé), une vente carte déjà payée qui s’enregistrait |

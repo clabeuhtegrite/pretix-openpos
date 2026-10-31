@@ -1253,6 +1253,105 @@ button {
   outline-offset: -1px;
 }
 
+/* The card reader, in the settings of a till that has one: one verdict in a
+   pill, coloured like every other verdict in the app, and the figures under it
+   in the ordinary dim ink. */
+.reader-status {
+  margin-bottom: 20px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--border);
+}
+
+.reader-status-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.reader-status-head h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.reader-status-head .btn {
+  width: auto;
+  flex: none;
+  min-height: 44px;
+  padding: 0 14px;
+}
+
+.reader-verdict {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  font-weight: 700;
+}
+
+.reader-verdict::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+/* Ink and outline only: on their washes, the light palette's green and amber
+   fall short of 4.5:1 at this size. The red keeps its wash, with the ink made
+   for it — it is the one that has to stop somebody. */
+.reader-verdict.is-ready {
+  color: var(--success-text);
+}
+
+.reader-verdict.is-busy,
+.reader-verdict.is-updating {
+  color: var(--warning-text);
+}
+
+/* On the red wash, the ink made for it, as on the error banner. */
+.reader-verdict.is-offline {
+  color: var(--danger-on-tint);
+  border-color: var(--danger-text);
+  background: var(--tint-danger);
+}
+
+.reader-verdict.is-offline::before {
+  background: var(--danger-text);
+}
+
+.reader-verdict.is-unknown {
+  color: var(--text-dim);
+  background: var(--surface-2);
+}
+
+.reader-help,
+.reader-meta {
+  margin-top: 8px;
+  color: var(--text-dim);
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.reader-meta {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Each figure kept whole; the separators between them, outside, are where
+   the line breaks. */
+.reader-meta span {
+  white-space: nowrap;
+}
+
+/* A battery about to run out is the one figure here somebody has to act on. */
+.reader-meta .is-low {
+  color: var(--warning-text);
+  font-weight: 700;
+}
+
 /* Used as a full-page root (pairing, fatal error), so it has to establish its
    own height rather than rely on a flex parent that is not there. */
 .centered {
