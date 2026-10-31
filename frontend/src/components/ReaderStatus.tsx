@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 
 import { api } from "../api";
 import { moment } from "../drawer";
@@ -54,6 +54,15 @@ function verdictOf(reader: ReaderState): Verdict {
 function Details({ reader, verdict }: { reader: ReaderState; verdict: Verdict }) {
   const low = reader.battery !== null && reader.battery < LOW_BATTERY;
   const network = reader.connection ? (NETWORKS[reader.connection] ?? reader.connection) : null;
+  const figures = [
+    reader.battery !== null && (
+      <span className={low ? "is-low" : undefined}>
+        {t(low ? "reader.batteryLow" : "reader.battery", { n: reader.battery })}
+      </span>
+    ),
+    network && <span>{network}</span>,
+    reader.firmware && <span>{t("reader.firmware", { version: reader.firmware })}</span>,
+  ].filter(Boolean);
   return (
     <>
       {verdict === "offline" && (
@@ -66,17 +75,16 @@ function Details({ reader, verdict }: { reader: ReaderState; verdict: Verdict })
       )}
       {verdict === "updating" && <div className="reader-help">{t("reader.updatingHelp")}</div>}
       {verdict === "busy" && <div className="reader-help">{t("reader.busyHelp")}</div>}
-      {/* Each figure in a span of its own: on a phone the line wraps, and a
-          label at the end of one line with its value on the next reads as
-          two things. */}
+      {/* Each figure kept whole, and the line free to wrap between them: on
+          a phone it does, and "Firmware" at the end of one line with its
+          number on the next reads as two things. */}
       <div className="reader-meta">
-        {reader.battery !== null && (
-          <span className={low ? "is-low" : undefined}>
-            {t(low ? "reader.batteryLow" : "reader.battery", { n: reader.battery })}
-          </span>
-        )}
-        {network && <span>{network}</span>}
-        {reader.firmware && <span>{t("reader.firmware", { version: reader.firmware })}</span>}
+        {figures.map((figure, index) => (
+          <Fragment key={index}>
+            {index > 0 && " · "}
+            {figure}
+          </Fragment>
+        ))}
       </div>
     </>
   );

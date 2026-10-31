@@ -1340,15 +1340,10 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
-/* Each figure kept whole, its separator with it: on a phone the line wraps,
-   and "Firmware" at the end of one line with its number on the next reads as
-   two things. */
+/* Each figure kept whole; the separators between them, outside, are where
+   the line breaks. */
 .reader-meta span {
   white-space: nowrap;
-}
-
-.reader-meta span + span::before {
-  content: " · ";
 }
 
 /* A battery about to run out is the one figure here somebody has to act on. */
