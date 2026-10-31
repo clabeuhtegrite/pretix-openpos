@@ -2400,6 +2400,27 @@ serait la pire des deux erreurs. L'appel est borné à cinq secondes pour la mê
 raison : ne pas savoir, vite, est la réponse la plus utile pendant qu'une page
 se charge.
 
+**Les Réglages de la caisse le disent aussi**, depuis la 0.31.0, pour le seul
+lecteur qu'elle pilote : un bloc *Lecteur de carte*, sous l'événement, avec une
+pastille **Prêt**, **Paiement en cours**, **Mise à jour en cours** ou **Hors
+ligne**, et dessous la batterie, le réseau et le firmware. Le réseau est dit
+comme on le dit : **4G** pour `lte` (un Solo sur sa propre carte SIM plutôt que
+sur le Wi-Fi de la salle), 3G, 2G, Wi-Fi. Hors ligne, la caisse dit de vérifier
+qu'il est allumé et connecté, et à quelle heure SumUp l'a entendu pour la
+dernière fois ; une batterie sous 20 % s'affiche en orange avec *à brancher* ;
+un lecteur occupé sans client renvoie à *Effacer son écran*. La règle de
+l'écran du back-office tient ici aussi : un lecteur dont SumUp ne dit rien est
+**État inconnu**, jamais *Hors ligne*, et si SumUp n'est pas configuré pour
+l'organisateur, la caisse le dit, puisqu'aucun paiement carte ne passera.
+
+Le serveur demande à SumUp à l'ouverture des Réglages et à chaque appui sur
+*Actualiser*, jamais sur une minuterie, et lui laisse le temps d'une relève de
+paiement (`POLL_TIMEOUT`, trois secondes pour se connecter et cinq pour
+répondre) plutôt que les cinq et cinq de la page du back-office : la réponse
+occupe un des rares workers de pretix pendant qu'elle attend. L'app ne compte
+pas l'échec de cette question comme une coupure : rien n'y attend, et c'est la
+sonde ou la vente suivante qui disent si le réseau est tombé.
+
 Un lecteur bloqué en attente de carte reçoit un bouton **Effacer son écran**,
 qui termine l'encaissement resté dessus. Tant qu'il n'est pas effacé, le lecteur
 refuse le paiement suivant comme occupé, ce qui se lit à la porte comme « le
@@ -3169,7 +3190,8 @@ ligne est là parce que son absence coûte cher une fois la porte ouverte.
 **Le lecteur de carte**
 
 7. *Open POS → Lecteurs de carte* : le lecteur est **Appairé** et, dans la
-   colonne *En ce moment*, **Prêt**. « Inconnu » veut dire que le lecteur est
+   colonne *En ce moment*, **Prêt** — ce que disent aussi les *Réglages* de la
+   caisse qui le pilote. « Inconnu » veut dire que le lecteur est
    trop ancien pour répondre à cette question et non qu'il est éteint ; « Hors
    ligne » veut dire qu'il l'est vraiment ; « Mise à jour en cours » veut dire
    attendre qu'il ait fini.
@@ -3232,6 +3254,9 @@ caisse ne dépend de SumUp que pour la carte.
 *Réglages* (⚙) contient :
 
 - le **choix de l'événement**, si le device en voit plusieurs ;
+- sur une caisse à qui un lecteur est attribué, l'**état du lecteur** :
+  prêt, paiement en cours, mise à jour ou hors ligne, avec sa batterie et son
+  réseau (4G ou Wi-Fi), et *Actualiser* pour redemander (§5quinquies) ;
 - le **nom du caissier**, mémorisé sur l'appareil, joint à chaque vente ;
 - l'**apparence** : *Système*, *Clair* ou *Sombre*. Par défaut la caisse suit la
   tablette. Le sombre n'éblouit pas dans une salle peu éclairée, le clair reste
@@ -3472,6 +3497,7 @@ Base : `/api/v1`. Authentification : `Authorization: Device <token>`.
 | `POST` | `…/openpos/terminal/start/` | Met le panier sur le lecteur de cette caisse |
 | `GET` | `…/openpos/terminal/status/?idempotency_key=<clé>` | Où en est ce paiement lecteur : `status`, `amount`, `currency`, `failure`, et `sumup_unreachable` (SumUp n'a pas pu être interrogé ; même forme pour `terminal/start` et `terminal/cancel`) |
 | `POST` | `…/openpos/terminal/cancel/` | Retire le panier du lecteur |
+| `GET` | `…/openpos/terminal/reader/` | Ce que le lecteur de cette caisse dit de lui-même, demandé à SumUp sur le moment : `reader` (`status`, `state`, `battery`, `connection`, `firmware`, `last_activity`), ou `null` avec `reason` (`not_configured`, `no_answer`) |
 | `GET` | `…/openpos/drawer/` | La caisse espèces de cet appareil : ouverte ou non, fond, entrées et sorties, dernier comptage, et ce qu'elle doit contenir maintenant (`expected`, avec `cash_sales`, `cash_returned`, `cash_in`, `cash_out`) |
 | `POST` | `…/openpos/drawer/open/` | Ouvre la caisse sur le fond compté (`amount`, `denominations` facultatif) |
 | `POST` | `…/openpos/drawer/movement/` | Entrée (`in`) ou sortie (`out`) d'argent, avec son motif |
@@ -3501,7 +3527,7 @@ appareils sont comptés, pas un jeton d'équipe ni une session du back-office. L
 compte est tenu dans le cache de pretix : sans Redis ni memcached, rien n'est
 compté et rien n'est refusé.
 
-Les trois endpoints `terminal/` n'existent que pour une caisse à qui un lecteur
+Les quatre endpoints `terminal/` n'existent que pour une caisse à qui un lecteur
 est attribué ; les autres reçoivent `no_terminal`. De même, les écritures
 `drawer/` n'existent que pour un appareil rattaché à une caisse espèces ; les
 autres reçoivent `no_drawer`, et `GET drawer/` leur répond `"drawer": null`.

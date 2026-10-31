@@ -70,6 +70,9 @@ class OpenPosSecurityProfile(AllowListSecurityProfile):
         ("POST", "api-v1:openpos-terminal-start"),
         ("GET", "api-v1:openpos-terminal-status"),
         ("POST", "api-v1:openpos-terminal-cancel"),
+        # What that reader says about itself — on, charged, which network —
+        # for the till's settings. A read, about this till's reader only.
+        ("GET", "api-v1:openpos-terminal-reader"),
         ("GET", "api-v1:openpos-summary"),
         ("GET", "api-v1:openpos-attendance"),
         # Correcting a sale made on this same till. The endpoint itself refuses

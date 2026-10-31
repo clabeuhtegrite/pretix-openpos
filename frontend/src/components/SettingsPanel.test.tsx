@@ -2,14 +2,15 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { posEvents, summary } = vi.hoisted(() => ({
+const { posEvents, summary, terminalReader } = vi.hoisted(() => ({
   posEvents: vi.fn(),
   summary: vi.fn(),
+  terminalReader: vi.fn(),
 }));
 
 vi.mock("../api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../api")>();
-  return { ...actual, api: { ...actual.api, posEvents, summary } };
+  return { ...actual, api: { ...actual.api, posEvents, summary, terminalReader } };
 });
 
 import { t, tn } from "../i18n";
@@ -80,6 +81,14 @@ function show(props: Partial<Parameters<typeof SettingsPanel>[0]> = {}) {
 beforeEach(() => {
   posEvents.mockResolvedValue({ results: events });
   summary.mockResolvedValue(takings);
+  terminalReader.mockReset();
+  terminalReader.mockResolvedValue({
+    reader: {
+      status: "ONLINE", state: "IDLE", battery: 64, connection: "lte",
+      firmware: "3.3.41.0", last_activity: null,
+    },
+    reason: "",
+  });
 });
 
 describe("the cashier", () => {
@@ -96,6 +105,27 @@ describe("the cashier", () => {
 
     expect(onCashierChange).toHaveBeenCalledWith("B");
   });
+});
+
+describe("the card reader", () => {
+  it("shows how the reader is on a till that drives one", async () => {
+    show({ cardMode: "terminal" });
+
+    expect(await screen.findByText(t("reader.ready"))).toBeTruthy();
+    expect(screen.getByText("4G")).toBeTruthy();
+    expect(terminalReader).toHaveBeenCalledWith(pairing, expect.any(AbortSignal));
+  });
+
+  it.each(["declared", undefined] as const)(
+    "shows nothing about a reader, and asks nothing, on a till with none (%s)",
+    async (cardMode) => {
+      show({ cardMode });
+      await screen.findByText(t("summary.allTills"));
+
+      expect(screen.queryByText(t("reader.title"))).toBeNull();
+      expect(terminalReader).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("the appearance", () => {

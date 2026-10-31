@@ -349,6 +349,38 @@ export interface TerminalPayment {
   sumup_unreachable?: boolean;
 }
 
+/**
+ * What the till's own card reader says about itself, asked of SumUp by the
+ * server when the settings open.
+ *
+ * SumUp's words, as SumUp sends them: the settings turn them into the till's.
+ */
+export interface ReaderState {
+  /** `"ONLINE"` or `"OFFLINE"`. Offline, the rest is what it said last. */
+  status: string;
+  /** `"IDLE"`, `"WAITING_FOR_CARD"`, `"UPDATING_FIRMWARE"`… or `""`. */
+  state: string;
+  /** Percent, rounded; null when SumUp did not say. */
+  battery: number | null;
+  /** `"Wi-Fi"`, `"lte"` (4G), `"umts"` (3G)… or `""`. */
+  connection: string;
+  firmware: string;
+  /** When the reader was last heard from, in ISO 8601 UTC. */
+  last_activity: string | null;
+}
+
+/**
+ * The answer of `terminal/reader`: the reader's state, or why there is none.
+ *
+ * `not_configured`: the organizer has no SumUp account set up, so no card
+ * payment will go through either. `no_answer`: SumUp was asked and could not
+ * say — unknown, which is not offline.
+ */
+export interface ReaderAnswer {
+  reader: ReaderState | null;
+  reason: "" | "not_configured" | "no_answer";
+}
+
 export interface SaleResult {
   order: { code: string; total: string };
   journal_seq: number;

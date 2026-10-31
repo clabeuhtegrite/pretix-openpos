@@ -69,7 +69,10 @@ it was written for. Read the scope section before deciding it fits.
   up in pretix on its own: the order cancelled and refunded, the sale out of
   the takings. SumUp's callback is never believed — it only makes the server go
   and ask over an authenticated connection — so an installation SumUp cannot
-  reach works identically, a second or two slower.
+  reach works identically, a second or two slower. The settings of a till with
+  a reader show how that reader is — ready, taking a payment, updating itself
+  or offline, with its battery and its network, 4G or Wi-Fi — and a reader
+  SumUp says nothing about reads "unknown", never "offline".
 - A dedicated **`openpos` sales channel**, so a product can be limited to the
   door, kept off it, or made to exist *only* on site.
 - **One price per product**, pretix' own. The till has no price list of its
@@ -267,7 +270,7 @@ If you run pretix in Docker or Kubernetes, [`deploy/Dockerfile`](deploy/Dockerfi
 bakes the plugin into the official image:
 
 ```bash
-docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.30.1 .
+docker build --platform linux/amd64 -f deploy/Dockerfile -t registry/pretix-openpos:0.31.0 .
 ```
 
 The PWA bundle is built inside the image, from the tree you are building, so the

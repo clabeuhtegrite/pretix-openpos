@@ -136,6 +136,28 @@ export const MESSAGES = {
     "settings.soundOff": "Off",
     "settings.soundHelp":
       "A short click on each product, and two low notes when a ticket is refused at the door. iPhones cannot vibrate in a browser, so sound is the only way to hear a refusal without looking up. It plays even with the ringer switch off.",
+    "reader.title": "Card reader",
+    "reader.refresh": "Refresh",
+    "reader.asking": "Asking…",
+    "reader.ready": "Ready",
+    "reader.busy": "Taking a payment",
+    "reader.busyHelp":
+      "A customer is paying. Stuck with nobody paying? In the back office, Card readers → “Clear its screen”.",
+    "reader.updating": "Updating itself",
+    "reader.updatingHelp": "It takes no payment until the update has finished.",
+    "reader.offline": "Offline",
+    "reader.offlineHelp":
+      "Check that it is switched on and connected, on Wi-Fi or 4G. Card payments are refused until it is back.",
+    "reader.lastSeen": "Last heard from: {time}.",
+    "reader.unknown": "Unknown",
+    "reader.noAnswer":
+      "SumUp did not say in time. That is not “offline”: the reader may well be working, and a card payment will tell.",
+    "reader.notConfigured":
+      "SumUp is not set up in the back office (Open POS → Card readers): no card payment will go through.",
+    "reader.failed": "The server could not be asked.",
+    "reader.battery": "Battery {n}%",
+    "reader.batteryLow": "Battery {n}%, plug it in",
+    "reader.firmware": "Firmware {version}",
     "update.reload": "New version — reload",
     "update.reloading": "Loading the new version…",
     "clock.ahead":
@@ -589,6 +611,28 @@ export const MESSAGES = {
     "settings.soundOff": "Coupé",
     "settings.soundHelp":
       "Un clic court à chaque produit, et deux notes graves quand un billet est refusé à la porte. Les iPhone ne peuvent pas vibrer dans un navigateur : le son est le seul moyen d’entendre un refus sans lever les yeux. Il sonne même si le téléphone est en silencieux.",
+    "reader.title": "Lecteur de carte",
+    "reader.refresh": "Actualiser",
+    "reader.asking": "Interrogation…",
+    "reader.ready": "Prêt",
+    "reader.busy": "Paiement en cours",
+    "reader.busyHelp":
+      "Un client est en train de payer. Bloqué sans personne\u00a0? Dans le back-office, Lecteurs de carte → «\u00a0Effacer son écran\u00a0».",
+    "reader.updating": "Mise à jour en cours",
+    "reader.updatingHelp": "Il ne prend aucun paiement avant la fin de la mise à jour.",
+    "reader.offline": "Hors ligne",
+    "reader.offlineHelp":
+      "Vérifiez qu’il est allumé et connecté, en Wi-Fi ou en 4G. Les paiements carte sont refusés d’ici là.",
+    "reader.lastSeen": "Dernier signe\u00a0: {time}.",
+    "reader.unknown": "État inconnu",
+    "reader.noAnswer":
+      "SumUp n’a pas répondu à temps. Ce n’est pas «\u00a0hors ligne\u00a0»\u00a0: le lecteur peut très bien marcher, un paiement carte le dira.",
+    "reader.notConfigured":
+      "SumUp n’est pas configuré dans le back-office (Open POS → Lecteurs de carte)\u00a0: aucun paiement carte ne passera.",
+    "reader.failed": "Le serveur n’a pas pu être interrogé.",
+    "reader.battery": "Batterie {n}\u00a0%",
+    "reader.batteryLow": "Batterie {n}\u00a0%, à brancher",
+    "reader.firmware": "Firmware {version}",
     "update.reload": "Nouvelle version — recharger",
     "update.reloading": "Chargement de la nouvelle version…",
     "clock.ahead":

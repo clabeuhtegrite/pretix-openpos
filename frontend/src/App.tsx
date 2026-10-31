@@ -1526,6 +1526,7 @@ export default function App() {
         <SettingsPanel
           pairing={pairing}
           currency={config.event.currency}
+          cardMode={config.device.card ?? "declared"}
           cashier={cashier}
           theme={theme}
           onThemeChange={(next) => {

@@ -6,14 +6,20 @@ import { loadQueue } from "../storage";
 import { t, tn } from "../i18n";
 import { formatMoney, toCents } from "../money";
 import { THEMES, type Theme } from "../theme";
-import type { Pairing, PosEventList, SummaryResponse } from "../types";
+import type { CardMode, Pairing, PosEventList, SummaryResponse } from "../types";
 import { useBackClose } from "../useBackClose";
 import { UnavailableEvents } from "./EventChoice";
+import ReaderStatus from "./ReaderStatus";
 import TakingsPanel, { scopeLabel, TakingsLine } from "./TakingsPanel";
 
 interface Props {
   pairing: Pairing;
   currency: string;
+  /**
+   * How this device takes a card. With a reader assigned (`"terminal"`), the
+   * panel says how that reader is; every other device has none to show.
+   */
+  cardMode?: CardMode;
   cashier: string;
   theme: Theme;
   onThemeChange: (theme: Theme) => void;
@@ -114,8 +120,8 @@ function EventField({
 }
 
 export default function SettingsPanel({
-  pairing, currency, cashier, theme, onThemeChange, sound, onSoundChange, onCashierChange,
-  onRefresh, refreshing = false, refreshFailed = false, onUnpair,
+  pairing, currency, cardMode = "declared", cashier, theme, onThemeChange, sound, onSoundChange,
+  onCashierChange, onRefresh, refreshing = false, refreshFailed = false, onUnpair,
   onClose, onEventChange,
 }: Props) {
   const [summary, setSummary] = useState<SummaryResponse | null>(null);
@@ -189,6 +195,11 @@ export default function SettingsPanel({
             onChange={onEventChange}
           />
         )}
+
+        {/* High up, under the event: it is the one block here that is news
+            rather than a setting, and the question it answers — is the card
+            machine on, charged, connected — is asked with a queue waiting. */}
+        {cardMode === "terminal" && <ReaderStatus pairing={pairing} />}
 
         <div className="field">
           <label htmlFor="cashier">{t("settings.cashier")}</label>

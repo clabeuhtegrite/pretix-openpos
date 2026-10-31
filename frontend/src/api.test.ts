@@ -510,6 +510,30 @@ describe("the endpoints", () => {
     expect(connectivity.isOnline()).toBe(false);
   });
 
+  it("asks how the till's card reader is, signed as the device", async () => {
+    const answer = { reader: null, reason: "no_answer" };
+    respondWith(answer);
+
+    expect(await api.terminalReader(pairing)).toEqual(answer);
+
+    const [url, options] = callArgs();
+    expect(url).toBe("/api/v1/organizers/demo/events/festival/openpos/terminal/reader/");
+    expect(options.method).toBe("GET");
+    expect(options.headers).toMatchObject({ Authorization: "Device tok" });
+  });
+
+  it("does not take the till offline when only the reader's state could not be had", async () => {
+    // Read in the settings, with no sale waiting on it.
+    fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));
+
+    await expect(api.terminalReader(pairing)).rejects.toThrow(ApiError);
+    expect(connectivity.isOnline()).toBe(true);
+
+    respondWith({ detail: "boom" }, 500);
+    await expect(api.terminalReader(pairing)).rejects.toThrow(ApiError);
+    expect(connectivity.isOnline()).toBe(true);
+  });
+
   it("reads the catalogue", async () => {
     await api.catalog(pairing);
 

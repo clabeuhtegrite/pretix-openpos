@@ -4,17 +4,19 @@ The card reader a till drives.
 What became of a reader payment is asked of SumUp here and nowhere else, for a
 till polling while it waits and for SumUp's own callback alike, and
 :class:`TerminalActions` holds the three actions that put a basket on the
-reader, follow it, and take it back off. How a till may take a card at all is
+reader, follow it, and take it back off, and a fourth that asks the reader how
+it is, for the till's settings. How a till may take a card at all is
 :func:`card_mode`.
 """
 import logging
-from datetime import timedelta
+from datetime import timedelta, timezone as dt_timezone
 from decimal import Decimal
 
 from django.core.cache import cache
 from django.db import IntegrityError
 from django.db.models import Q
-from django.utils.timezone import now
+from django.utils.dateparse import parse_datetime
+from django.utils.timezone import is_naive, make_aware, now
 from django.utils.translation import gettext_lazy as _
 from pretix.base.models import Device
 from rest_framework import status
@@ -31,6 +33,7 @@ from .catalog import (
     custom_sale_item, deposit_item, for_date, get_pos_channel, quota_availability, refuse_oversized, resolve_line,
     sellable_items,
 )
+from .contact import utc_timestamp
 from .evenings import selling_subevent
 
 logger = logging.getLogger(__name__)
@@ -39,6 +42,15 @@ logger = logging.getLogger(__name__)
 CARD_DECLARED = "declared"
 #: A reader is assigned to this device and is the only way to pay by card on it.
 CARD_TERMINAL = "terminal"
+
+#: Why a till's settings show no state for its reader: SumUp is not set up for
+#: the organizer, so nothing can be asked — and no card payment will go through
+#: either, which only the back office can fix.
+READER_NOT_CONFIGURED = "not_configured"
+#: Why a till's settings show no state for its reader: SumUp was asked and gave
+#: no usable answer in time. Unknown, which is not offline: see
+#: :meth:`TerminalActions.terminal_reader`.
+READER_NO_ANSWER = "no_answer"
 
 #: How long a reader is treated as held by a payment nobody has answered.
 #:
@@ -259,6 +271,47 @@ def card_mode(pos_device) -> str:
     vendor's own app on their phone and tells the till it happened.
     """
     return CARD_TERMINAL if pos_device.drives_terminal else CARD_DECLARED
+
+
+def reader_state(live):
+    """
+    What SumUp said about a reader, in the shape the till reads.
+
+    SumUp's own words for the status, the state and the network, which the till
+    turns into its own, as the back office's template does with the same
+    words. The battery rounded, since nobody reads it to the decimal. And the
+    last activity as a moment in the form every browser parses, or nothing
+    when what SumUp sent is not one: offline, it is when the reader was last
+    heard from, which is the one thing worth reading then.
+    """
+    battery = live.get("battery_level")
+    if isinstance(battery, bool) or not isinstance(battery, (int, float)):
+        battery = None
+    return {
+        "status": str(live.get("status") or ""),
+        "state": str(live.get("state") or ""),
+        "battery": None if battery is None else round(battery),
+        "connection": str(live.get("connection_type") or ""),
+        "firmware": str(live.get("firmware_version") or ""),
+        "last_activity": _moment(live.get("last_activity")),
+    }
+
+
+def _moment(value):
+    """An ISO 8601 moment from SumUp, as ``utc_timestamp`` writes one; else ``None``."""
+    if not isinstance(value, str):
+        return None
+    try:
+        moment = parse_datetime(value)
+    except ValueError:
+        # Shaped like a date and still not one: a thirteenth month.
+        return None
+    if moment is None:
+        return None
+    if is_naive(moment):
+        # SumUp writes its moments in UTC; one without the Z is read that way.
+        moment = make_aware(moment, dt_timezone.utc)
+    return utc_timestamp(moment)
 
 
 class TerminalActions:
@@ -563,6 +616,39 @@ class TerminalActions:
                  "code": "no_payment"}
             )
         return Response(self._terminal_payload(poll_terminal_payment(payment, account)))
+
+    @action(detail=False, methods=["get"], url_path="terminal/reader", url_name="terminal-reader")
+    def terminal_reader(self, request, **kwargs):
+        """
+        What this till's card reader says about itself, for the till's settings.
+
+        The question the back office's card readers page asks of every reader
+        on the account — on or off, charged or not, on which network, busy or
+        updating itself — asked here of the one reader this till drives, from
+        the counter it sits on, where somebody wants the answer without going
+        to find a laptop. Asked when the settings open and when the cashier
+        asks again, never on a timer, and bounded like a poll: a SumUp that
+        takes its time costs this answer a few seconds, not a worker for the
+        full timeout.
+
+        ``reader`` is ``None`` whenever there is no state to show, and
+        ``reason`` says why: :data:`READER_NOT_CONFIGURED`, or
+        :data:`READER_NO_ANSWER` when SumUp was asked and could not say. That
+        one is "unknown", never "offline", for the reason the back office
+        gives: a Solo needs firmware 3.3.39.0 to be asked and only 3.3.24.3
+        to take a payment, so a reader that does not answer may well be on,
+        charged and working, and sending somebody to look for a machine that
+        is there and working is the worse of the two mistakes.
+        """
+        _device, pos_device, account = self._terminal_context(request, waiting=True)
+        if not account.configured:
+            return Response({"reader": None, "reason": READER_NOT_CONFIGURED})
+        # The poll's bound rather than the back office's: reader_status brings
+        # its own, which would override the polling account's.
+        live = account.reader_status(pos_device.sumup_reader_id, timeout=POLL_TIMEOUT)
+        if live is None:
+            return Response({"reader": None, "reason": READER_NO_ANSWER})
+        return Response({"reader": reader_state(live), "reason": ""})
 
     @action(detail=False, methods=["post"], url_path="terminal/cancel", url_name="terminal-cancel")
     def terminal_cancel(self, request, **kwargs):

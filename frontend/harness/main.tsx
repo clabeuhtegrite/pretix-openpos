@@ -11,6 +11,7 @@
  *               ?orphan=paid|held  ?terminal=busy  ?sync=refused|wait  ?move=pending
  *               ?cancel=already|backoffice|lost  ?camera=busy
  *               ?cached=1  ?update=fail
+ *               ?reader=ready|lte|low|busy|updating|offline|unknown|unset|fail
  */
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
@@ -461,6 +462,29 @@ window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     if (reader === "failed")
       return json({ status: "failed", amount: "0.00", currency: "EUR", failure: "card_declined" });
     return json({ status: "pending", amount: readerAmount, currency: "EUR", failure: "" });
+  }
+  // ?reader= : ce que le lecteur dit de lui-même dans les Réglages (avec
+  // ?card=terminal). ready (défaut) : prêt, en Wi-Fi ; lte : prêt, en 4G ;
+  // low : prêt, batterie à 12 % ; busy : une carte est attendue ; updating :
+  // il se met à jour ; offline : hors ligne depuis vingt minutes ; unknown :
+  // SumUp n'a rien dit ; unset : SumUp n'est pas configuré ; fail : le
+  // serveur ne répond pas.
+  if (url.includes("/openpos/terminal/reader/")) {
+    const said = q.get("reader") ?? "ready";
+    if (said === "fail") return json({ detail: "boom" }, 502);
+    if (said === "unknown") return json({ reader: null, reason: "no_answer" });
+    if (said === "unset") return json({ reader: null, reason: "not_configured" });
+    return json({
+      reader: {
+        status: said === "offline" ? "OFFLINE" : "ONLINE",
+        state: said === "busy" ? "WAITING_FOR_CARD" : said === "updating" ? "UPDATING_FIRMWARE" : "IDLE",
+        battery: said === "low" ? 12 : said === "offline" ? 31 : 78,
+        connection: said === "lte" ? "lte" : "Wi-Fi",
+        firmware: "3.3.41.0",
+        last_activity: new Date(Date.now() - (said === "offline" ? 20 : 1) * 60_000).toISOString(),
+      },
+      reason: "",
+    });
   }
   // Comme en vrai : le serveur demande l'arrêt au lecteur puis relit SumUp,
   // ce qui prend deux à trois secondes, et l'arrêt étant asynchrone chez
