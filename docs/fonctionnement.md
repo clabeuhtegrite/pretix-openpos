@@ -588,7 +588,10 @@ récentes qui l'interdit :
   Revenir à une image d'avant un correctif ramène donc pretix au correctif
   précédent. La 2026.7.1 n'ajoute aucune migration, ce retour-là est sans
   risque ; un correctif qui en ajouterait une se traite comme un changement de
-  base.
+  base. Même chose sur le canal `pretix2026.9` : 0.31.1 est construite sur la
+  2026.9.3, 0.30.0 à 0.31.0 sur la 2026.9.0, et les 2026.9.1 à 2026.9.3
+  n'ajoutent aucune migration (sources publiées sur PyPI comparées le
+  2026-11-24) : revenir de 0.31.1 à 0.31.0 est sans risque.
 - **Sous 0.21.0, le journal a l'air falsifié.** Depuis 0.21.0, chaque ligne du
   journal est hachée en version 5, qui ajoute l'ouverture de caisse à la charge
   hachée (§6.4). Une version plus ancienne ne connaît pas cette forme : elle
